@@ -54,6 +54,7 @@ def create_task(payload: TaskCreateRequest, db: Session = Depends(get_db)) -> Ta
         prompt=payload.prompt,
         model=payload.model,
         metadata=payload.metadata,
+        claude_agent_options=payload.claude_agent_options,
         priority=payload.priority,
         agent_mode=payload.agent_mode,
         unattended=payload.unattended,

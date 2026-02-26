@@ -33,6 +33,24 @@ def test_create_task_default_flags():
     assert task.queue_expire_at > task.created_at
 
 
+def test_create_task_saves_claude_agent_options_dict():
+    db = make_db()
+    queue = TaskQueueService()
+    options = {"max_turns": 2, "permission_mode": "plan"}
+    task = queue.create_task(
+        db,
+        prompt="hello",
+        model=None,
+        metadata=None,
+        priority=1,
+        agent_mode=True,
+        unattended=True,
+        max_attempts=None,
+        claude_agent_options=options,
+    )
+    assert task.payload.get("claude_agent_options") == options
+
+
 def test_abandon_expired_queued():
     db = make_db()
     queue = TaskQueueService()

@@ -85,12 +85,16 @@ class WorkerManager:
         try:
             prompt = str(task.payload.get("prompt", ""))
             model = str(task.payload.get("model", self.settings.anthropic_model))
+            claude_agent_options = task.payload.get("claude_agent_options")
+            if not isinstance(claude_agent_options, dict):
+                claude_agent_options = {}
             if not prompt.strip():
                 raise RuntimeError("task prompt is empty")
             result = self.client.run_agent_task(
                 prompt=prompt,
                 model=model,
                 metadata=task.metadata_json,
+                claude_agent_options=claude_agent_options,
                 agent_mode=task.agent_mode,
                 unattended=task.unattended,
             )

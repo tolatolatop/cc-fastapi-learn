@@ -8,6 +8,15 @@ from claude_agent_sdk.types import AssistantMessage, ResultMessage, TextBlock
 from cc_fastapi.core.config import get_settings
 
 
+def validate_claude_agent_options(options: dict[str, Any] | None) -> dict[str, Any]:
+    """Extension hook: currently pass-through without strict validation."""
+    if options is None:
+        return {}
+    if not isinstance(options, dict):
+        return {}
+    return options
+
+
 class ClaudeClient:
     def __init__(self) -> None:
         self.settings = get_settings()
@@ -18,6 +27,7 @@ class ClaudeClient:
         prompt: str,
         model: str,
         metadata: dict[str, Any] | None,
+        claude_agent_options: dict[str, Any] | None = None,
         agent_mode: bool = True,
         unattended: bool = True,
     ) -> dict[str, Any]:
@@ -28,6 +38,7 @@ class ClaudeClient:
                 prompt=prompt,
                 model=model,
                 metadata=metadata,
+                claude_agent_options=claude_agent_options,
                 agent_mode=agent_mode,
                 unattended=unattended,
             )
@@ -39,6 +50,7 @@ class ClaudeClient:
         prompt: str,
         model: str,
         metadata: dict[str, Any] | None,
+        claude_agent_options: dict[str, Any] | None,
         agent_mode: bool,
         unattended: bool,
     ) -> dict[str, Any]:
@@ -60,16 +72,26 @@ class ClaudeClient:
             if item.strip()
         ]
 
+        options_kwargs: dict[str, Any] = {
+            "model": model,
+            "permission_mode": self.settings.claude_permission_mode,
+            "max_turns": self.settings.claude_max_turns,
+            "cwd": os.path.abspath(self.settings.claude_cwd),
+            "system_prompt": system_note,
+            "env": env,
+            "allowed_tools": allowed_tools,
+            "disallowed_tools": disallowed_tools,
+            "setting_sources": ["user", "project"],
+        }
+        user_options = validate_claude_agent_options(claude_agent_options)
+        if "env" in user_options and isinstance(user_options["env"], dict):
+            merged_env = {**env, **user_options["env"]}
+            merged_env["ANTHROPIC_API_KEY"] = self.settings.anthropic_api_key
+            user_options = {**user_options, "env": merged_env}
+        options_kwargs.update(user_options)
+
         options = ClaudeAgentOptions(
-            model=model,
-            permission_mode=self.settings.claude_permission_mode,  # type: ignore[arg-type]
-            max_turns=self.settings.claude_max_turns,
-            cwd=os.path.abspath(self.settings.claude_cwd),
-            system_prompt=system_note,
-            env=env,
-            allowed_tools=allowed_tools,
-            disallowed_tools=disallowed_tools,
-            setting_sources=["user", "project"],
+            **options_kwargs
         )
 
         output_chunks: list[str] = []

@@ -10,6 +10,7 @@ class TaskCreateRequest(BaseModel):
     prompt: str = Field(min_length=1)
     model: str | None = None
     metadata: dict[str, Any] | None = None
+    claude_agent_options: dict[str, Any] | None = None
     priority: int = 0
     agent_mode: bool = True
     unattended: bool = True

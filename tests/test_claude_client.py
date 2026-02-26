@@ -39,6 +39,7 @@ def test_claude_client_uses_agent_options(monkeypatch):
         prompt="do work",
         model="claude-test",
         metadata={"job": "abc"},
+        claude_agent_options={"max_turns": 3, "permission_mode": "plan"},
         agent_mode=True,
         unattended=True,
     )
@@ -46,8 +47,8 @@ def test_claude_client_uses_agent_options(monkeypatch):
     options = captured["options"]
     assert captured["prompt"] == "do work"
     assert getattr(options, "model") == "claude-test"
-    assert getattr(options, "permission_mode") == "bypassPermissions"
-    assert getattr(options, "max_turns") == 7
+    assert getattr(options, "permission_mode") == "plan"
+    assert getattr(options, "max_turns") == 3
     assert getattr(options, "allowed_tools") == ["Read", "Edit"]
     assert getattr(options, "disallowed_tools") == ["Bash"]
     assert result["output_text"] == "hello from sdk\nfinal result"

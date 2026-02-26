@@ -23,12 +23,17 @@ class TaskQueueService:
         agent_mode: bool,
         unattended: bool,
         max_attempts: int | None,
+        claude_agent_options: dict[str, Any] | None = None,
     ) -> AgentTask:
         now = utc_now()
         task = AgentTask(
             status=TaskStatus.QUEUED,
             priority=priority,
-            payload={"prompt": prompt, "model": model or self.settings.anthropic_model},
+            payload={
+                "prompt": prompt,
+                "model": model or self.settings.anthropic_model,
+                "claude_agent_options": claude_agent_options or {},
+            },
             metadata_json=metadata or {},
             agent_mode=agent_mode,
             unattended=unattended,
