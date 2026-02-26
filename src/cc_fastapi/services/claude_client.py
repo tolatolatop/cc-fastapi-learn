@@ -49,8 +49,16 @@ class ClaudeClient:
         )
 
         env = {"ANTHROPIC_API_KEY": self.settings.anthropic_api_key}
-        allowed_tools = [item.strip() for item in self.settings.claude_allowed_tools.split(",") if item.strip()]
-        disallowed_tools = [item.strip() for item in self.settings.claude_disallowed_tools.split(",") if item.strip()]
+        allowed_tools = [
+            item.strip()
+            for item in self.settings.claude_allowed_tools.split(",")
+            if item.strip()
+        ]
+        disallowed_tools = [
+            item.strip()
+            for item in self.settings.claude_disallowed_tools.split(",")
+            if item.strip()
+        ]
 
         options = ClaudeAgentOptions(
             model=model,
@@ -61,6 +69,7 @@ class ClaudeClient:
             env=env,
             allowed_tools=allowed_tools,
             disallowed_tools=disallowed_tools,
+            setting_sources=["user", "project"],
         )
 
         output_chunks: list[str] = []
@@ -89,11 +98,12 @@ class ClaudeClient:
             "model": model,
             "agent_mode": agent_mode,
             "unattended": unattended,
-            "output_text": "\n".join(chunk.strip() for chunk in output_chunks if chunk.strip()).strip(),
+            "output_text": "\n".join(
+                chunk.strip() for chunk in output_chunks if chunk.strip()
+            ).strip(),
             "stop_reason": stop_reason,
             "usage": usage,
             "duration_ms": duration_ms,
             "session_id": session_id,
             "total_cost_usd": total_cost_usd,
         }
-
