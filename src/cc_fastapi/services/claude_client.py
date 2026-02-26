@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 from collections.abc import AsyncIterator
 from typing import Any
@@ -15,6 +16,23 @@ def validate_claude_agent_options(options: dict[str, Any] | None) -> dict[str, A
     if not isinstance(options, dict):
         return {}
     return options
+
+
+def _normalize_tools(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+        except Exception:
+            pass
+        return [item.strip() for item in raw.split(",") if item.strip()]
+    return []
 
 
 class ClaudeClient:
@@ -72,16 +90,8 @@ class ClaudeClient:
             env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = self.settings.anthropic_default_sonnet_model
         if self.settings.anthropic_default_haiku_model:
             env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = self.settings.anthropic_default_haiku_model
-        allowed_tools = [
-            item.strip()
-            for item in self.settings.claude_allowed_tools.split(",")
-            if item.strip()
-        ]
-        disallowed_tools = [
-            item.strip()
-            for item in self.settings.claude_disallowed_tools.split(",")
-            if item.strip()
-        ]
+        allowed_tools = _normalize_tools(self.settings.claude_allowed_tools)
+        disallowed_tools = _normalize_tools(self.settings.claude_disallowed_tools)
 
         options_kwargs: dict[str, Any] = {
             "model": model,
@@ -100,6 +110,8 @@ class ClaudeClient:
             merged_env["ANTHROPIC_API_KEY"] = self.settings.anthropic_api_key
             user_options = {**user_options, "env": merged_env}
         options_kwargs.update(user_options)
+        options_kwargs["allowed_tools"] = _normalize_tools(options_kwargs.get("allowed_tools"))
+        options_kwargs["disallowed_tools"] = _normalize_tools(options_kwargs.get("disallowed_tools"))
 
         options = ClaudeAgentOptions(
             **options_kwargs

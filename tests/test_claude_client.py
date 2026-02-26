@@ -15,8 +15,8 @@ def test_claude_client_uses_agent_options(monkeypatch):
     monkeypatch.setenv("CLAUDE_PERMISSION_MODE", "bypassPermissions")
     monkeypatch.setenv("CLAUDE_MAX_TURNS", "7")
     monkeypatch.setenv("CLAUDE_CWD", ".")
-    monkeypatch.setenv("CLAUDE_ALLOWED_TOOLS", "Read,Edit")
-    monkeypatch.setenv("CLAUDE_DISALLOWED_TOOLS", "Bash")
+    monkeypatch.setenv("CLAUDE_ALLOWED_TOOLS", '["Read","Edit"]')
+    monkeypatch.setenv("CLAUDE_DISALLOWED_TOOLS", '["Bash"]')
     get_settings.cache_clear()
 
     captured: dict[str, object] = {}
