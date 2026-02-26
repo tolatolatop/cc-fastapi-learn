@@ -8,6 +8,7 @@ services:
       - "18000:8000"
     environment:
       DATABASE_URL: "sqlite:///./data/cc_fastapi.db"
+      POSTGRES_EXTERNAL_URL: "${POSTGRES_EXTERNAL_URL:-}"
       LOG_LEVEL: "INFO"
       WORKER_CONCURRENCY: "1"
       POLL_INTERVAL_MS: "1000"

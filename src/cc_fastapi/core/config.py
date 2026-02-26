@@ -9,6 +9,7 @@ class Settings(BaseSettings):
 
     app_name: str = "Claude Agent Queue API"
     database_url: str = Field(default="sqlite:///./cc_fastapi.db", alias="DATABASE_URL")
+    postgres_external_url: str = Field(default="", alias="POSTGRES_EXTERNAL_URL")
     queues_config_path: str = Field(default="config/queues.yaml", alias="QUEUES_CONFIG_PATH")
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
     anthropic_base_url: str = Field(default="", alias="ANTHROPIC_BASE_URL")
@@ -29,6 +30,13 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     api_token: str = Field(default="", alias="API_TOKEN")
     max_attempts: int = Field(default=3, alias="MAX_ATTEMPTS")
+
+    @property
+    def resolved_database_url(self) -> str:
+        external = self.postgres_external_url.strip()
+        if external:
+            return external
+        return self.database_url
 
 
 @lru_cache(maxsize=1)
