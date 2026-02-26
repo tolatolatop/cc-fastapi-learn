@@ -16,6 +16,11 @@ def validate_claude_agent_options(options: dict[str, Any] | None) -> dict[str, A
         return {}
     if not isinstance(options, dict):
         return {}
+    cwd_value = options.get("cwd")
+    if isinstance(cwd_value, (str, os.PathLike)):
+        cwd_str = os.fspath(cwd_value).strip()
+        if cwd_str and Path(cwd_str).is_absolute():
+            raise ValueError("claude_agent_options.cwd must be a relative path")
     return options
 
 

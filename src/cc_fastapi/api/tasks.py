@@ -13,6 +13,7 @@ from cc_fastapi.schemas.tasks import (
     TaskLogItemResponse,
     TaskLogListResponse,
 )
+from cc_fastapi.services.claude_client import validate_claude_agent_options
 from cc_fastapi.services.queue import QueueNotFoundError, TaskQueueService
 
 
@@ -51,13 +52,18 @@ def _to_task_item(task) -> TaskItemResponse:
 @router.post("", response_model=TaskCreateResponse, dependencies=[Depends(require_token)])
 def create_task(payload: TaskCreateRequest, db: Session = Depends(get_db)) -> TaskCreateResponse:
     try:
+        validated_options = validate_claude_agent_options(payload.claude_agent_options)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    try:
         task = queue.create_task(
             db,
             prompt=payload.prompt,
             model=payload.model,
             queue_name=payload.queue_name,
             metadata=payload.metadata,
-            claude_agent_options=payload.claude_agent_options,
+            claude_agent_options=validated_options,
             priority=payload.priority,
             agent_mode=payload.agent_mode,
             unattended=payload.unattended,

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from claude_agent_sdk.types import AssistantMessage, ResultMessage, TextBlock
 
 from cc_fastapi.core.config import get_settings
@@ -90,6 +91,7 @@ def test_claude_client_creates_missing_cwd(monkeypatch, tmp_path):
 
     monkeypatch.setattr(claude_client_module, "query", fake_query)
 
+    monkeypatch.chdir(tmp_path)
     target_cwd = tmp_path / "nested" / "workdir"
     assert not target_cwd.exists()
 
@@ -98,7 +100,7 @@ def test_claude_client_creates_missing_cwd(monkeypatch, tmp_path):
         prompt="make cwd",
         model="claude-test",
         metadata=None,
-        claude_agent_options={"cwd": str(target_cwd)},
+        claude_agent_options={"cwd": "nested/workdir"},
         agent_mode=True,
         unattended=True,
     )
@@ -106,4 +108,20 @@ def test_claude_client_creates_missing_cwd(monkeypatch, tmp_path):
     assert target_cwd.exists()
     options = captured["options"]
     assert Path(getattr(options, "cwd")).resolve() == target_cwd.resolve()
+
+
+def test_claude_client_rejects_absolute_cwd(monkeypatch, tmp_path):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    get_settings.cache_clear()
+    client = ClaudeClient()
+
+    with pytest.raises(ValueError, match="relative path"):
+        client.run_agent_task(
+            prompt="bad cwd",
+            model="claude-test",
+            metadata=None,
+            claude_agent_options={"cwd": str((tmp_path / "abs").resolve())},
+            agent_mode=True,
+            unattended=True,
+        )
 

@@ -97,3 +97,16 @@ def test_create_task_with_missing_queue_returns_400():
     assert response.status_code == 400
     assert "queue not found" in response.json()["detail"]
 
+
+def test_create_task_with_absolute_cwd_returns_400():
+    client = build_client()
+    response = client.post(
+        "/v1/agent-tasks",
+        json={
+            "prompt": "queue",
+            "claude_agent_options": {"cwd": "/tmp/absolute-path-not-allowed"},
+        },
+    )
+    assert response.status_code == 400
+    assert "cwd must be a relative path" in response.json()["detail"]
+
