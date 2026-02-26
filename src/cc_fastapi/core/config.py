@@ -10,6 +10,11 @@ class Settings(BaseSettings):
     app_name: str = "Claude Agent Queue API"
     database_url: str = Field(default="sqlite:///./cc_fastapi.db", alias="DATABASE_URL")
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
+    anthropic_base_url: str = Field(default="", alias="ANTHROPIC_BASE_URL")
+    api_timeout_ms: int = Field(default=3000000, alias="API_TIMEOUT_MS")
+    anthropic_default_opus_model: str = Field(default="", alias="ANTHROPIC_DEFAULT_OPUS_MODEL")
+    anthropic_default_sonnet_model: str = Field(default="", alias="ANTHROPIC_DEFAULT_SONNET_MODEL")
+    anthropic_default_haiku_model: str = Field(default="", alias="ANTHROPIC_DEFAULT_HAIKU_MODEL")
     anthropic_model: str = Field(default="claude-sonnet-4-20250514", alias="ANTHROPIC_MODEL")
     claude_permission_mode: str = Field(default="bypassPermissions", alias="CLAUDE_PERMISSION_MODE")
     claude_max_turns: int = Field(default=16, alias="CLAUDE_MAX_TURNS")

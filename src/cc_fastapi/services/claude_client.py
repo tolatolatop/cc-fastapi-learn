@@ -60,7 +60,18 @@ class ClaudeClient:
             f"metadata={metadata or {}}."
         )
 
-        env = {"ANTHROPIC_API_KEY": self.settings.anthropic_api_key}
+        env = {
+            "ANTHROPIC_API_KEY": self.settings.anthropic_api_key,
+            "API_TIMEOUT_MS": str(self.settings.api_timeout_ms),
+        }
+        if self.settings.anthropic_base_url:
+            env["ANTHROPIC_BASE_URL"] = self.settings.anthropic_base_url
+        if self.settings.anthropic_default_opus_model:
+            env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = self.settings.anthropic_default_opus_model
+        if self.settings.anthropic_default_sonnet_model:
+            env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = self.settings.anthropic_default_sonnet_model
+        if self.settings.anthropic_default_haiku_model:
+            env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = self.settings.anthropic_default_haiku_model
         allowed_tools = [
             item.strip()
             for item in self.settings.claude_allowed_tools.split(",")

@@ -7,6 +7,11 @@ from cc_fastapi.services.claude_client import ClaudeClient
 
 def test_claude_client_uses_agent_options(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://aihubmix.com")
+    monkeypatch.setenv("API_TIMEOUT_MS", "3000000")
+    monkeypatch.setenv("ANTHROPIC_DEFAULT_OPUS_MODEL", "claude-sonnet-4-5")
+    monkeypatch.setenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "claude-sonnet-4-5")
+    monkeypatch.setenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", "claude-haiku-4-5")
     monkeypatch.setenv("CLAUDE_PERMISSION_MODE", "bypassPermissions")
     monkeypatch.setenv("CLAUDE_MAX_TURNS", "7")
     monkeypatch.setenv("CLAUDE_CWD", ".")
@@ -51,6 +56,11 @@ def test_claude_client_uses_agent_options(monkeypatch):
     assert getattr(options, "max_turns") == 3
     assert getattr(options, "allowed_tools") == ["Read", "Edit"]
     assert getattr(options, "disallowed_tools") == ["Bash"]
+    assert getattr(options, "env")["ANTHROPIC_BASE_URL"] == "https://aihubmix.com"
+    assert getattr(options, "env")["API_TIMEOUT_MS"] == "3000000"
+    assert getattr(options, "env")["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "claude-sonnet-4-5"
+    assert getattr(options, "env")["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "claude-sonnet-4-5"
+    assert getattr(options, "env")["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "claude-haiku-4-5"
     assert result["output_text"] == "hello from sdk\nfinal result"
     assert result["stop_reason"] == "end_turn"
     assert result["usage"]["input_tokens"] == 10
