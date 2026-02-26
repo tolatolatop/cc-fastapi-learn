@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from cc_fastapi.core.config import get_settings
 from cc_fastapi.core.queue_config import get_queue_config
-from cc_fastapi.db.models import AgentTask, AgentTaskLog, TaskStatus, utc_now
+from cc_fastapi.db.models import AgentTask, AgentTaskContext, AgentTaskLog, TaskStatus, utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +87,9 @@ class TaskQueueService:
 
     def get_task(self, db: Session, task_id: str) -> AgentTask | None:
         return db.get(AgentTask, task_id)
+
+    def get_task_context(self, db: Session, task_id: str) -> AgentTaskContext | None:
+        return db.get(AgentTaskContext, task_id)
 
     def list_tasks(
         self, db: Session, status: TaskStatus | None, offset: int, limit: int
@@ -330,4 +333,20 @@ class TaskQueueService:
                 metadata_json=metadata,
             )
         )
+
+    def upsert_task_context(self, db: Session, task_id: str, messages: list[str]) -> None:
+        context = db.get(AgentTaskContext, task_id)
+        now = utc_now()
+        if context is None:
+            db.add(
+                AgentTaskContext(
+                    task_id=task_id,
+                    messages_json=messages,
+                    updated_at=now,
+                )
+            )
+        else:
+            context.messages_json = messages
+            context.updated_at = now
+        db.commit()
 

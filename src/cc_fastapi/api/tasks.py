@@ -8,6 +8,7 @@ from cc_fastapi.db.models import TaskStatus
 from cc_fastapi.db.session import get_db
 from cc_fastapi.schemas.tasks import (
     TaskCancelResponse,
+    TaskContextResponse,
     TaskCreateRequest,
     TaskCreateResponse,
     TaskItemResponse,
@@ -103,6 +104,22 @@ def get_task(task_id: str, db: Session = Depends(get_db)) -> TaskItemResponse:
         logger.warning("get_task not found", extra={"event_type": "api_get_task_not_found", "task_id": task_id})
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
     return _to_task_item(task)
+
+
+@router.get("/{task_id}/context", response_model=TaskContextResponse, dependencies=[Depends(require_token)])
+def get_task_context(task_id: str, db: Session = Depends(get_db)) -> TaskContextResponse:
+    task = queue.get_task(db, task_id)
+    if not task:
+        logger.warning(
+            "get_task_context not found",
+            extra={"event_type": "api_get_task_context_not_found", "task_id": task_id},
+        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
+
+    context = queue.get_task_context(db, task_id)
+    messages = context.messages_json if context else []
+    updated_at = context.updated_at if context else None
+    return TaskContextResponse(task_id=task_id, messages=messages, updated_at=updated_at)
 
 
 @router.get("", response_model=TaskListResponse, dependencies=[Depends(require_token)])

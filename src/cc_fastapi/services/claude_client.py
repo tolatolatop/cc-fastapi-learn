@@ -4,7 +4,7 @@ import logging
 import os
 from pathlib import Path
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Callable
 
 from claude_agent_sdk import ClaudeAgentOptions, query
 from claude_agent_sdk.types import AssistantMessage, ResultMessage, TextBlock
@@ -80,6 +80,7 @@ class ClaudeClient:
         claude_agent_options: dict[str, Any] | None = None,
         agent_mode: bool = True,
         unattended: bool = True,
+        on_message_update: Callable[[list[str]], None] | None = None,
     ) -> dict[str, Any]:
         if not self.settings.anthropic_api_key:
             raise RuntimeError("ANTHROPIC_API_KEY is missing")
@@ -92,6 +93,7 @@ class ClaudeClient:
                 claude_agent_options=claude_agent_options,
                 agent_mode=agent_mode,
                 unattended=unattended,
+                on_message_update=on_message_update,
             )
         )
 
@@ -104,6 +106,7 @@ class ClaudeClient:
         claude_agent_options: dict[str, Any] | None,
         agent_mode: bool,
         unattended: bool,
+        on_message_update: Callable[[list[str]], None] | None,
     ) -> dict[str, Any]:
         system_note = (
             "You are running in Claude Agent task mode. "
@@ -180,6 +183,7 @@ class ClaudeClient:
                 for block in msg.content:
                     if isinstance(block, TextBlock) and block.text:
                         output_chunks.append(block.text)
+                        self._emit_messages(on_message_update, output_chunks)
             elif isinstance(msg, ResultMessage):
                 usage = msg.usage or {}
                 stop_reason = msg.subtype
@@ -188,6 +192,7 @@ class ClaudeClient:
                 total_cost_usd = msg.total_cost_usd
                 if msg.result:
                     output_chunks.append(msg.result)
+                    self._emit_messages(on_message_update, output_chunks)
         logger.debug(
             "claude sdk stream finished",
             extra={"event_type": "claude_stream_end", "trace_id": session_id, "duration_ms": duration_ms},
@@ -206,3 +211,14 @@ class ClaudeClient:
             "session_id": session_id,
             "total_cost_usd": total_cost_usd,
         }
+
+    def _emit_messages(
+        self, on_message_update: Callable[[list[str]], None] | None, output_chunks: list[str]
+    ) -> None:
+        if on_message_update is None:
+            return
+        try:
+            normalized = [chunk.strip() for chunk in output_chunks if chunk.strip()]
+            on_message_update(normalized)
+        except Exception:
+            logger.exception("on_message_update callback failed", extra={"event_type": "claude_context_callback_failed"})

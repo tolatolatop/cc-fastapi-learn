@@ -147,6 +147,7 @@ class WorkerManager:
                 claude_agent_options=claude_agent_options,
                 agent_mode=task.agent_mode,
                 unattended=task.unattended,
+                on_message_update=lambda messages: self.queue.upsert_task_context(db, task.id, messages),
             )
             self.queue.mark_success(db, task.id, result)
             logger.info(

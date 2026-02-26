@@ -74,6 +74,25 @@ def test_create_get_and_logs():
     assert logs.json()["total"] >= 1
 
 
+def test_get_task_context_returns_empty_when_not_written():
+    client = build_client()
+    create = client.post("/v1/agent-tasks", json={"prompt": "context-empty"})
+    task_id = create.json()["task_id"]
+
+    response = client.get(f"/v1/agent-tasks/{task_id}/context")
+    assert response.status_code == 200
+    assert response.json()["task_id"] == task_id
+    assert response.json()["messages"] == []
+    assert response.json()["updated_at"] is None
+
+
+def test_get_task_context_not_found_returns_404():
+    client = build_client()
+    response = client.get("/v1/agent-tasks/not-exists/context")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "task not found"
+
+
 def test_cancel_task():
     client = build_client()
     create = client.post("/v1/agent-tasks", json={"prompt": "cancel-me"})

@@ -125,3 +125,38 @@ def test_claude_client_rejects_absolute_cwd(monkeypatch, tmp_path):
             unattended=True,
         )
 
+
+def test_claude_client_calls_on_message_update(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    get_settings.cache_clear()
+
+    async def fake_query(*, prompt, options, transport=None):
+        yield AssistantMessage(content=[TextBlock(text="hello")], model="claude-test")
+        yield AssistantMessage(content=[TextBlock(text="world")], model="claude-test")
+        yield ResultMessage(
+            subtype="end_turn",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=1,
+            session_id="session-1",
+            usage={},
+            result="done",
+        )
+
+    monkeypatch.setattr(claude_client_module, "query", fake_query)
+
+    updates: list[list[str]] = []
+    client = ClaudeClient()
+    client.run_agent_task(
+        prompt="stream",
+        model="claude-test",
+        metadata=None,
+        agent_mode=True,
+        unattended=True,
+        on_message_update=lambda messages: updates.append(messages),
+    )
+
+    assert updates
+    assert updates[-1] == ["hello", "world", "done"]
+

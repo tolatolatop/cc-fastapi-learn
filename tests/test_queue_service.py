@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker
 
 from cc_fastapi.core.config import get_settings
 from cc_fastapi.core.queue_config import get_queue_config
-from cc_fastapi.db.models import AgentTask, Base, TaskStatus, utc_now
+from cc_fastapi.db.models import AgentTask, AgentTaskContext, Base, TaskStatus, utc_now
 from cc_fastapi.services.queue import QueueNotFoundError, TaskQueueService
 
 
@@ -85,6 +85,27 @@ def test_create_task_with_explicit_queue_name():
         max_attempts=None,
     )
     assert task.queue_name == "slow"
+
+
+def test_upsert_task_context_updates_latest():
+    db = make_db()
+    queue = TaskQueueService()
+    task = queue.create_task(
+        db,
+        prompt="hello",
+        model=None,
+        queue_name=None,
+        metadata=None,
+        priority=1,
+        agent_mode=True,
+        unattended=True,
+        max_attempts=None,
+    )
+    queue.upsert_task_context(db, task.id, ["first"])
+    queue.upsert_task_context(db, task.id, ["first", "second"])
+    context = db.get(AgentTaskContext, task.id)
+    assert context is not None
+    assert context.messages_json == ["first", "second"]
 
 
 def test_create_task_unknown_queue_raises():

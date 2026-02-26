@@ -66,3 +66,9 @@ class TaskLogListResponse(BaseModel):
     items: list[TaskLogItemResponse]
     total: int
 
+
+class TaskContextResponse(BaseModel):
+    task_id: str
+    messages: list[str]
+    updated_at: datetime | None
+

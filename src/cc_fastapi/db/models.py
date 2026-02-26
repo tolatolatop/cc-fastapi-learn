@@ -55,6 +55,7 @@ class AgentTask(Base):
     running_expire_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     logs: Mapped[list["AgentTaskLog"]] = relationship("AgentTaskLog", back_populates="task")
+    context: Mapped["AgentTaskContext | None"] = relationship("AgentTaskContext", back_populates="task")
 
 
 class AgentTaskLog(Base):
@@ -72,3 +73,18 @@ class AgentTaskLog(Base):
 
     task: Mapped[AgentTask] = relationship("AgentTask", back_populates="logs")
 
+
+class AgentTaskContext(Base):
+    __tablename__ = "agent_task_contexts"
+
+    task_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agent_tasks.id"), primary_key=True, nullable=False, index=True
+    )
+    # Keep the physical column name as latest_message for backward compatibility,
+    # but store a JSON list with full streamed messages.
+    messages_json: Mapped[list[str]] = mapped_column(
+        "latest_message", MySQLJSON().with_variant(JSON, "sqlite"), nullable=False, default=list
+    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    task: Mapped[AgentTask] = relationship("AgentTask", back_populates="context")
