@@ -30,3 +30,5 @@ htmlcov/
 .env.*
 
 *.db
+logs/
+*.log

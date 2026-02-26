@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     queue_ttl_hours: int = Field(default=24, alias="QUEUE_TTL_HOURS")
     running_ttl_hours: int = Field(default=4, alias="RUNNING_TTL_HOURS")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    log_dir: str = Field(default="logs", alias="LOG_DIR")
+    debug_log_enabled: bool = Field(default=True, alias="DEBUG_LOG_ENABLED")
+    debug_log_backup_days: int = Field(default=14, alias="DEBUG_LOG_BACKUP_DAYS")
+    debug_log_filename: str = Field(default="debug.log", alias="DEBUG_LOG_FILENAME")
+    debug_log_utc: bool = Field(default=True, alias="DEBUG_LOG_UTC")
     api_token: str = Field(default="", alias="API_TOKEN")
     max_attempts: int = Field(default=3, alias="MAX_ATTEMPTS")
 

@@ -27,6 +27,14 @@ class WorkerManager:
     def start(self) -> None:
         queue_cfg = get_queue_config()
         started = 0
+        logger.info(
+            "worker manager queue config loaded",
+            extra={
+                "event_type": "worker_queue_config",
+                "trace_id": queue_cfg.default_queue,
+                "reason": ",".join(f"{name}:{cfg.workers}" for name, cfg in queue_cfg.queues.items()),
+            },
+        )
         for queue_name, qdef in queue_cfg.queues.items():
             workers = max(1, int(qdef.workers))
             for idx in range(workers):
@@ -62,12 +70,20 @@ class WorkerManager:
 
     def _loop(self, worker_id: str, queue_name: str) -> None:
         sleep_seconds = max(0.2, self.settings.poll_interval_ms / 1000)
+        logger.debug(
+            "worker loop started",
+            extra={"event_type": "worker_loop_start", "worker_id": worker_id, "queue_name": queue_name},
+        )
         while not self.stop_event.is_set():
             db = SessionLocal()
             try:
                 self._maintenance(db)
                 task = self.queue.claim_next_task(db, worker_id, queue_name)
                 if not task:
+                    logger.debug(
+                        "worker poll no task",
+                        extra={"event_type": "worker_poll_empty", "worker_id": worker_id, "queue_name": queue_name},
+                    )
                     time.sleep(sleep_seconds)
                     continue
                 logger.info(
@@ -87,8 +103,16 @@ class WorkerManager:
                 db.close()
 
     def _maintenance(self, db: Session) -> None:
-        self.queue.abandon_expired_queued(db)
-        self.queue.abandon_expired_running(db)
+        queued_count = self.queue.abandon_expired_queued(db)
+        running_count = self.queue.abandon_expired_running(db)
+        if queued_count or running_count:
+            logger.warning(
+                "worker maintenance abandoned tasks",
+                extra={
+                    "event_type": "worker_maintenance_abandon",
+                    "reason": f"queued={queued_count},running={running_count}",
+                },
+            )
 
     def _run_task(self, db: Session, task_id: str) -> None:
         task = self.queue.get_task(db, task_id)
@@ -97,6 +121,7 @@ class WorkerManager:
         if task.status != TaskStatus.RUNNING:
             return
         try:
+            started_at = time.monotonic()
             prompt = str(task.payload.get("prompt", ""))
             model = str(task.payload.get("model", self.settings.anthropic_model))
             claude_agent_options = task.payload.get("claude_agent_options")
@@ -119,9 +144,18 @@ class WorkerManager:
                     "task_id": task.id,
                     "event_type": "succeeded",
                     "trace_id": result.get("session_id", ""),
+                    "queue_name": getattr(task, "queue_name", "default"),
+                    "duration_ms": int((time.monotonic() - started_at) * 1000),
                 },
             )
         except Exception as exc:
             self.queue.mark_retry_or_failed(db, task.id, str(exc))
-            logger.exception("task failed", extra={"task_id": task.id, "event_type": "failed"})
+            logger.exception(
+                "task failed",
+                extra={
+                    "task_id": task.id,
+                    "event_type": "failed",
+                    "queue_name": getattr(task, "queue_name", "default"),
+                },
+            )
 

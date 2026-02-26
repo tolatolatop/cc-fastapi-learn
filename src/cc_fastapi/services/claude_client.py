@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 from pathlib import Path
 from collections.abc import AsyncIterator
@@ -8,6 +9,8 @@ from typing import Any
 from claude_agent_sdk import ClaudeAgentOptions, query
 from claude_agent_sdk.types import AssistantMessage, ResultMessage, TextBlock
 from cc_fastapi.core.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 def validate_claude_agent_options(options: dict[str, Any] | None) -> dict[str, Any]:
@@ -52,7 +55,15 @@ def _resolve_and_ensure_cwd(value: Any, fallback_cwd: str) -> str:
     cwd_path = Path(raw_value)
     if not cwd_path.is_absolute():
         cwd_path = Path.cwd() / cwd_path
+    created = not cwd_path.exists()
     cwd_path.mkdir(parents=True, exist_ok=True)
+    logger.debug(
+        "resolved claude cwd",
+        extra={
+            "event_type": "claude_cwd_resolved",
+            "reason": "created" if created else "exists",
+        },
+    )
     return str(cwd_path)
 
 
@@ -72,6 +83,7 @@ class ClaudeClient:
     ) -> dict[str, Any]:
         if not self.settings.anthropic_api_key:
             raise RuntimeError("ANTHROPIC_API_KEY is missing")
+        logger.debug("run_agent_task called", extra={"event_type": "claude_run_task_called"})
         return asyncio.run(
             self._run_agent_task_async(
                 prompt=prompt,
@@ -126,6 +138,10 @@ class ClaudeClient:
             "setting_sources": ["user", "project"],
         }
         user_options = validate_claude_agent_options(claude_agent_options)
+        logger.debug(
+            "claude options validated",
+            extra={"event_type": "claude_options_validated", "reason": f"user_keys={sorted(user_options.keys())}"},
+        )
         if "env" in user_options and isinstance(user_options["env"], dict):
             merged_env = {**env, **user_options["env"]}
             merged_env["ANTHROPIC_API_KEY"] = self.settings.anthropic_api_key
@@ -134,6 +150,17 @@ class ClaudeClient:
         options_kwargs["allowed_tools"] = _normalize_tools(options_kwargs.get("allowed_tools"))
         options_kwargs["disallowed_tools"] = _normalize_tools(options_kwargs.get("disallowed_tools"))
         options_kwargs["cwd"] = _resolve_and_ensure_cwd(options_kwargs.get("cwd"), self.settings.claude_cwd)
+        logger.debug(
+            "claude options prepared",
+            extra={
+                "event_type": "claude_options_prepared",
+                "reason": (
+                    f"allowed={len(options_kwargs['allowed_tools'])},"
+                    f"disallowed={len(options_kwargs['disallowed_tools'])},"
+                    f"max_turns={options_kwargs.get('max_turns')}"
+                ),
+            },
+        )
 
         options = ClaudeAgentOptions(
             **options_kwargs
@@ -147,6 +174,7 @@ class ClaudeClient:
         total_cost_usd: float | None = None
 
         stream: AsyncIterator[Any] = query(prompt=prompt, options=options)
+        logger.debug("claude sdk stream started", extra={"event_type": "claude_stream_start"})
         async for msg in stream:
             if isinstance(msg, AssistantMessage):
                 for block in msg.content:
@@ -160,6 +188,10 @@ class ClaudeClient:
                 total_cost_usd = msg.total_cost_usd
                 if msg.result:
                     output_chunks.append(msg.result)
+        logger.debug(
+            "claude sdk stream finished",
+            extra={"event_type": "claude_stream_end", "trace_id": session_id, "duration_ms": duration_ms},
+        )
 
         return {
             "model": model,

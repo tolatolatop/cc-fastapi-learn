@@ -1,5 +1,7 @@
 import json
 import logging
+from logging.handlers import TimedRotatingFileHandler
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any
 
@@ -12,7 +14,17 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
         }
-        for key in ("task_id", "event_type", "worker_id", "trace_id"):
+        for key in (
+            "task_id",
+            "event_type",
+            "worker_id",
+            "trace_id",
+            "queue_name",
+            "duration_ms",
+            "status_from",
+            "status_to",
+            "reason",
+        ):
             value = getattr(record, key, None)
             if value is not None:
                 payload[key] = value
@@ -21,15 +33,38 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=True)
 
 
-def setup_logging(level: str) -> None:
+def setup_logging(
+    level: str,
+    *,
+    log_dir: str = "logs",
+    debug_log_enabled: bool = True,
+    debug_log_backup_days: int = 14,
+    debug_log_filename: str = "debug.log",
+    debug_log_utc: bool = True,
+) -> None:
     root = logging.getLogger()
-    root.setLevel(level.upper())
+    root.setLevel(logging.DEBUG)
     if root.handlers:
         for handler in root.handlers:
             handler.setFormatter(JsonFormatter())
         return
 
-    handler = logging.StreamHandler()
-    handler.setFormatter(JsonFormatter())
-    root.addHandler(handler)
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(getattr(logging, level.upper(), logging.INFO))
+    console_handler.setFormatter(JsonFormatter())
+    root.addHandler(console_handler)
+
+    if debug_log_enabled:
+        log_path = Path(log_dir)
+        log_path.mkdir(parents=True, exist_ok=True)
+        file_handler = TimedRotatingFileHandler(
+            filename=str(log_path / debug_log_filename),
+            when="midnight",
+            backupCount=max(1, debug_log_backup_days),
+            utc=debug_log_utc,
+            encoding="utf-8",
+        )
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(JsonFormatter())
+        root.addHandler(file_handler)
 

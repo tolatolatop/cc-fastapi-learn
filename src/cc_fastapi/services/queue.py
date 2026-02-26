@@ -1,3 +1,4 @@
+import logging
 from datetime import timedelta
 from typing import Any
 
@@ -7,6 +8,8 @@ from sqlalchemy.orm import Session
 from cc_fastapi.core.config import get_settings
 from cc_fastapi.core.queue_config import get_queue_config
 from cc_fastapi.db.models import AgentTask, AgentTaskLog, TaskStatus, utc_now
+
+logger = logging.getLogger(__name__)
 
 
 class QueueNotFoundError(ValueError):
@@ -64,7 +67,19 @@ class TaskQueueService:
         queue_cfg = get_queue_config()
         target = queue_name.strip() if isinstance(queue_name, str) and queue_name.strip() else queue_cfg.default_queue
         if target not in queue_cfg.queues:
+            logger.warning(
+                "queue resolve failed",
+                extra={"event_type": "queue_resolve_failed", "queue_name": target},
+            )
             raise QueueNotFoundError(target)
+        logger.debug(
+            "queue resolved",
+            extra={
+                "event_type": "queue_resolved",
+                "queue_name": target,
+                "reason": "explicit" if queue_name else "default_queue",
+            },
+        )
         return target
 
     def _base_task_query(self) -> Select[tuple[AgentTask]]:
@@ -111,6 +126,10 @@ class TaskQueueService:
             .limit(1)
         )
         if not candidate:
+            logger.debug(
+                "no queued task claimed",
+                extra={"event_type": "queue_claim_empty", "worker_id": worker_id, "queue_name": queue_name},
+            )
             return None
 
         now = utc_now()
@@ -126,6 +145,10 @@ class TaskQueueService:
             )
         )
         if result.rowcount == 0:
+            logger.debug(
+                "queue claim lost race",
+                extra={"event_type": "queue_claim_race", "worker_id": worker_id, "queue_name": queue_name},
+            )
             db.rollback()
             return None
 
@@ -149,11 +172,16 @@ class TaskQueueService:
         task = self.get_task(db, task_id)
         if not task or task.status != TaskStatus.RUNNING:
             return
+        old_status = task.status
         task.status = TaskStatus.SUCCEEDED
         task.result = result_payload
         task.finished_at = utc_now()
         self.log_event(db, task.id, "INFO", "succeeded", "task finished successfully", None)
         db.commit()
+        logger.info(
+            "task status transitioned",
+            extra={"event_type": "status_transition", "task_id": task_id, "status_from": old_status, "status_to": task.status},
+        )
 
     def mark_retry_or_failed(self, db: Session, task_id: str, error_message: str) -> None:
         task = self.get_task(db, task_id)
@@ -162,6 +190,7 @@ class TaskQueueService:
         now = utc_now()
         can_retry = task.attempt < task.max_attempts
         if can_retry:
+            old_status = task.status
             task.status = TaskStatus.QUEUED
             task.error_message = error_message
             task.worker_id = None
@@ -176,7 +205,12 @@ class TaskQueueService:
                 "task failed and re-queued",
                 {"attempt": task.attempt, "max_attempts": task.max_attempts},
             )
+            logger.info(
+                "task status transitioned",
+                extra={"event_type": "status_transition", "task_id": task_id, "status_from": old_status, "status_to": task.status},
+            )
         else:
+            old_status = task.status
             task.status = TaskStatus.FAILED
             task.error_message = error_message
             task.finished_at = now
@@ -187,6 +221,10 @@ class TaskQueueService:
                 "failed",
                 "task failed permanently",
                 {"attempt": task.attempt, "max_attempts": task.max_attempts},
+            )
+            logger.info(
+                "task status transitioned",
+                extra={"event_type": "status_transition", "task_id": task_id, "status_from": old_status, "status_to": task.status},
             )
         db.commit()
 
@@ -202,6 +240,11 @@ class TaskQueueService:
             task.finished_at = now
             self.log_event(db, task.id, "WARNING", "abandoned", "task abandoned due to queue timeout", None)
         db.commit()
+        if tasks:
+            logger.warning(
+                "abandoned queued timeout tasks",
+                extra={"event_type": "queue_timeout_abandon", "reason": f"count={len(tasks)}"},
+            )
         return len(tasks)
 
     def abandon_expired_running(self, db: Session) -> int:
@@ -219,6 +262,11 @@ class TaskQueueService:
             task.finished_at = now
             self.log_event(db, task.id, "ERROR", "timeout", "task abandoned due to running timeout", None)
         db.commit()
+        if tasks:
+            logger.warning(
+                "abandoned running timeout tasks",
+                extra={"event_type": "running_timeout_abandon", "reason": f"count={len(tasks)}"},
+            )
         return len(tasks)
 
     def abandon_running_on_shutdown(self, db: Session) -> int:
@@ -231,6 +279,11 @@ class TaskQueueService:
             task.finished_at = now
             self.log_event(db, task.id, "WARNING", "abandoned", "task abandoned due to service shutdown", None)
         db.commit()
+        if tasks:
+            logger.warning(
+                "abandoned running tasks on shutdown",
+                extra={"event_type": "shutdown_abandon", "reason": f"count={len(tasks)}"},
+            )
         return len(tasks)
 
     def recover_orphan_running_on_startup(self, db: Session) -> int:
@@ -243,6 +296,11 @@ class TaskQueueService:
             task.finished_at = now
             self.log_event(db, task.id, "WARNING", "abandoned", "task abandoned by startup recovery", None)
         db.commit()
+        if tasks:
+            logger.warning(
+                "recovered orphan running tasks",
+                extra={"event_type": "startup_recovery_abandon", "reason": f"count={len(tasks)}"},
+            )
         return len(tasks)
 
     def list_logs(self, db: Session, task_id: str, offset: int, limit: int) -> tuple[list[AgentTaskLog], int]:

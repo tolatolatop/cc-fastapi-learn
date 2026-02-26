@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
@@ -19,6 +21,7 @@ from cc_fastapi.services.queue import QueueNotFoundError, TaskQueueService
 
 router = APIRouter(prefix="/v1/agent-tasks", tags=["agent-tasks"])
 queue = TaskQueueService()
+logger = logging.getLogger(__name__)
 
 
 def require_token(x_api_token: str | None = Header(default=None)) -> None:
@@ -51,9 +54,20 @@ def _to_task_item(task) -> TaskItemResponse:
 
 @router.post("", response_model=TaskCreateResponse, dependencies=[Depends(require_token)])
 def create_task(payload: TaskCreateRequest, db: Session = Depends(get_db)) -> TaskCreateResponse:
+    logger.debug(
+        "create_task request received",
+        extra={
+            "event_type": "api_create_task_request",
+            "queue_name": payload.queue_name or "default",
+        },
+    )
     try:
         validated_options = validate_claude_agent_options(payload.claude_agent_options)
     except ValueError as exc:
+        logger.warning(
+            "create_task request validation failed",
+            extra={"event_type": "api_create_task_validation_failed", "reason": str(exc)},
+        )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     try:
@@ -70,7 +84,15 @@ def create_task(payload: TaskCreateRequest, db: Session = Depends(get_db)) -> Ta
             max_attempts=payload.max_attempts,
         )
     except QueueNotFoundError as exc:
+        logger.warning(
+            "create_task queue resolve failed",
+            extra={"event_type": "api_create_task_queue_not_found", "queue_name": exc.queue_name},
+        )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    logger.info(
+        "task created via api",
+        extra={"event_type": "api_create_task_success", "task_id": task.id, "queue_name": task.queue_name},
+    )
     return TaskCreateResponse(task_id=task.id, status=task.status, queue_name=task.queue_name)
 
 
@@ -78,6 +100,7 @@ def create_task(payload: TaskCreateRequest, db: Session = Depends(get_db)) -> Ta
 def get_task(task_id: str, db: Session = Depends(get_db)) -> TaskItemResponse:
     task = queue.get_task(db, task_id)
     if not task:
+        logger.warning("get_task not found", extra={"event_type": "api_get_task_not_found", "task_id": task_id})
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
     return _to_task_item(task)
 
@@ -89,6 +112,10 @@ def list_tasks(
     limit: int = Query(default=20, ge=1, le=200),
     db: Session = Depends(get_db),
 ) -> TaskListResponse:
+    logger.debug(
+        "list_tasks request",
+        extra={"event_type": "api_list_tasks", "reason": f"offset={offset},limit={limit},status={status_filter}"},
+    )
     items, total = queue.list_tasks(db, status_filter, offset, limit)
     return TaskListResponse(items=[_to_task_item(item) for item in items], total=total)
 
@@ -97,7 +124,9 @@ def list_tasks(
 def cancel_task(task_id: str, db: Session = Depends(get_db)) -> TaskCancelResponse:
     task = queue.cancel_task(db, task_id)
     if not task:
+        logger.warning("cancel_task not found", extra={"event_type": "api_cancel_task_not_found", "task_id": task_id})
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
+    logger.info("task cancelled via api", extra={"event_type": "api_cancel_task", "task_id": task.id})
     return TaskCancelResponse(task_id=task.id, status=task.status)
 
 
@@ -110,8 +139,13 @@ def list_task_logs(
 ) -> TaskLogListResponse:
     task = queue.get_task(db, task_id)
     if not task:
+        logger.warning("list_task_logs not found", extra={"event_type": "api_task_logs_not_found", "task_id": task_id})
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
     items, total = queue.list_logs(db, task_id, offset, limit)
+    logger.debug(
+        "list_task_logs request",
+        extra={"event_type": "api_task_logs", "task_id": task_id, "reason": f"offset={offset},limit={limit},total={total}"},
+    )
     return TaskLogListResponse(
         items=[
             TaskLogItemResponse(
