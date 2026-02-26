@@ -3,7 +3,8 @@ from cc_fastapi.core.config import get_settings
 
 def test_resolved_database_url_falls_back_to_database_url(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "sqlite:///./fallback.db")
-    monkeypatch.delenv("POSTGRES_EXTERNAL_URL", raising=False)
+    # Explicitly override any value loaded from local .env
+    monkeypatch.setenv("POSTGRES_EXTERNAL_URL", "")
     get_settings.cache_clear()
     try:
         settings = get_settings()

@@ -126,10 +126,6 @@ class TaskQueueService:
             .limit(1)
         )
         if not candidate:
-            logger.debug(
-                "no queued task claimed",
-                extra={"event_type": "queue_claim_empty", "worker_id": worker_id, "queue_name": queue_name},
-            )
             return None
 
         now = utc_now()

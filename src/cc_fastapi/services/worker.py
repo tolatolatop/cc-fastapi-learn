@@ -23,6 +23,8 @@ class WorkerManager:
         self.client = ClaudeClient()
         self.stop_event = threading.Event()
         self.threads: list[threading.Thread] = []
+        self._empty_log_last_ts: dict[str, float] = {}
+        self._empty_log_interval_seconds: float = 30.0
 
     def start(self) -> None:
         queue_cfg = get_queue_config()
@@ -80,10 +82,11 @@ class WorkerManager:
                 self._maintenance(db)
                 task = self.queue.claim_next_task(db, worker_id, queue_name)
                 if not task:
-                    logger.debug(
-                        "worker poll no task",
-                        extra={"event_type": "worker_poll_empty", "worker_id": worker_id, "queue_name": queue_name},
-                    )
+                    if self._should_log_empty_poll(worker_id):
+                        logger.debug(
+                            "worker poll no task",
+                            extra={"event_type": "worker_poll_empty", "worker_id": worker_id, "queue_name": queue_name},
+                        )
                     time.sleep(sleep_seconds)
                     continue
                 logger.info(
@@ -101,6 +104,14 @@ class WorkerManager:
                 time.sleep(sleep_seconds)
             finally:
                 db.close()
+
+    def _should_log_empty_poll(self, worker_id: str) -> bool:
+        now = time.monotonic()
+        last_ts = self._empty_log_last_ts.get(worker_id, 0.0)
+        if now - last_ts < self._empty_log_interval_seconds:
+            return False
+        self._empty_log_last_ts[worker_id] = now
+        return True
 
     def _maintenance(self, db: Session) -> None:
         queued_count = self.queue.abandon_expired_queued(db)
