@@ -85,6 +85,8 @@ class WorkerManager:
         try:
             prompt = str(task.payload.get("prompt", ""))
             model = str(task.payload.get("model", self.settings.anthropic_model))
+            if not prompt.strip():
+                raise RuntimeError("task prompt is empty")
             result = self.client.run_agent_task(
                 prompt=prompt,
                 model=model,
@@ -93,7 +95,14 @@ class WorkerManager:
                 unattended=task.unattended,
             )
             self.queue.mark_success(db, task.id, result)
-            logger.info("task succeeded", extra={"task_id": task.id, "event_type": "succeeded"})
+            logger.info(
+                "task succeeded",
+                extra={
+                    "task_id": task.id,
+                    "event_type": "succeeded",
+                    "trace_id": result.get("session_id", ""),
+                },
+            )
         except Exception as exc:
             self.queue.mark_retry_or_failed(db, task.id, str(exc))
             logger.exception("task failed", extra={"task_id": task.id, "event_type": "failed"})
