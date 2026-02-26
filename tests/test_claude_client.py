@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from claude_agent_sdk.types import AssistantMessage, ResultMessage, TextBlock
 
 from cc_fastapi.core.config import get_settings
@@ -64,4 +66,44 @@ def test_claude_client_uses_agent_options(monkeypatch):
     assert result["output_text"] == "hello from sdk\nfinal result"
     assert result["stop_reason"] == "end_turn"
     assert result["usage"]["input_tokens"] == 10
+
+
+def test_claude_client_creates_missing_cwd(monkeypatch, tmp_path):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    get_settings.cache_clear()
+
+    captured: dict[str, object] = {}
+
+    async def fake_query(*, prompt, options, transport=None):
+        captured["options"] = options
+        yield AssistantMessage(content=[TextBlock(text="ok")], model="claude-test")
+        yield ResultMessage(
+            subtype="end_turn",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=1,
+            session_id="session-1",
+            usage={},
+            result="ok",
+        )
+
+    monkeypatch.setattr(claude_client_module, "query", fake_query)
+
+    target_cwd = tmp_path / "nested" / "workdir"
+    assert not target_cwd.exists()
+
+    client = ClaudeClient()
+    client.run_agent_task(
+        prompt="make cwd",
+        model="claude-test",
+        metadata=None,
+        claude_agent_options={"cwd": str(target_cwd)},
+        agent_mode=True,
+        unattended=True,
+    )
+
+    assert target_cwd.exists()
+    options = captured["options"]
+    assert Path(getattr(options, "cwd")).resolve() == target_cwd.resolve()
 

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+from pathlib import Path
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -33,6 +34,21 @@ def _normalize_tools(value: Any) -> list[str]:
             pass
         return [item.strip() for item in raw.split(",") if item.strip()]
     return []
+
+
+def _resolve_and_ensure_cwd(value: Any, fallback_cwd: str) -> str:
+    raw_value: str
+    if isinstance(value, (str, os.PathLike)):
+        raw_value = os.fspath(value).strip()
+    else:
+        raw_value = ""
+    if not raw_value:
+        raw_value = fallback_cwd
+    cwd_path = Path(raw_value)
+    if not cwd_path.is_absolute():
+        cwd_path = Path.cwd() / cwd_path
+    cwd_path.mkdir(parents=True, exist_ok=True)
+    return str(cwd_path)
 
 
 class ClaudeClient:
@@ -112,6 +128,7 @@ class ClaudeClient:
         options_kwargs.update(user_options)
         options_kwargs["allowed_tools"] = _normalize_tools(options_kwargs.get("allowed_tools"))
         options_kwargs["disallowed_tools"] = _normalize_tools(options_kwargs.get("disallowed_tools"))
+        options_kwargs["cwd"] = _resolve_and_ensure_cwd(options_kwargs.get("cwd"), self.settings.claude_cwd)
 
         options = ClaudeAgentOptions(
             **options_kwargs
