@@ -1,0 +1,26 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cc-fastapi-app
+    ports:
+      - "18000:8000"
+    environment:
+      DATABASE_URL: "sqlite:///./data/cc_fastapi.db"
+      LOG_LEVEL: "INFO"
+      WORKER_CONCURRENCY: "1"
+      POLL_INTERVAL_MS: "1000"
+      QUEUE_TTL_HOURS: "24"
+      RUNNING_TTL_HOURS: "4"
+      CLAUDE_PERMISSION_MODE: "bypassPermissions"
+      CLAUDE_MAX_TURNS: "16"
+      CLAUDE_CWD: "."
+      ANTHROPIC_MODEL: "claude-sonnet-4-20250514"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+    volumes:
+      - app_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  app_data:
