@@ -1,17 +1,34 @@
 from datetime import timedelta
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from cc_fastapi.core.config import get_settings
+from cc_fastapi.core.queue_config import get_queue_config
 from cc_fastapi.db.models import AgentTask, Base, TaskStatus, utc_now
-from cc_fastapi.services.queue import TaskQueueService
+from cc_fastapi.services.queue import QueueNotFoundError, TaskQueueService
 
 
 def make_db():
     engine = create_engine("sqlite+pysqlite:///:memory:", connect_args={"check_same_thread": False}, future=True)
     Base.metadata.create_all(bind=engine)
     return sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)()
+
+
+@pytest.fixture(autouse=True)
+def queue_config_file(monkeypatch, tmp_path):
+    cfg = tmp_path / "queues.yaml"
+    cfg.write_text(
+        "default_queue: default\nqueues:\n  default:\n    workers: 1\n  slow:\n    workers: 2\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("QUEUES_CONFIG_PATH", str(cfg))
+    get_settings.cache_clear()
+    get_queue_config.cache_clear()
+    yield
+    get_settings.cache_clear()
+    get_queue_config.cache_clear()
 
 
 def test_create_task_default_flags():
@@ -21,6 +38,7 @@ def test_create_task_default_flags():
         db,
         prompt="hello",
         model=None,
+        queue_name=None,
         metadata=None,
         priority=1,
         agent_mode=True,
@@ -41,6 +59,7 @@ def test_create_task_saves_claude_agent_options_dict():
         db,
         prompt="hello",
         model=None,
+        queue_name=None,
         metadata=None,
         priority=1,
         agent_mode=True,
@@ -51,6 +70,40 @@ def test_create_task_saves_claude_agent_options_dict():
     assert task.payload.get("claude_agent_options") == options
 
 
+def test_create_task_with_explicit_queue_name():
+    db = make_db()
+    queue = TaskQueueService()
+    task = queue.create_task(
+        db,
+        prompt="hello",
+        model=None,
+        queue_name="slow",
+        metadata=None,
+        priority=1,
+        agent_mode=True,
+        unattended=True,
+        max_attempts=None,
+    )
+    assert task.queue_name == "slow"
+
+
+def test_create_task_unknown_queue_raises():
+    db = make_db()
+    queue = TaskQueueService()
+    with pytest.raises(QueueNotFoundError):
+        queue.create_task(
+            db,
+            prompt="hello",
+            model=None,
+            queue_name="missing-queue",
+            metadata=None,
+            priority=1,
+            agent_mode=True,
+            unattended=True,
+            max_attempts=None,
+        )
+
+
 def test_abandon_expired_queued():
     db = make_db()
     queue = TaskQueueService()
@@ -58,6 +111,7 @@ def test_abandon_expired_queued():
         db,
         prompt="to-expire",
         model=None,
+        queue_name=None,
         metadata=None,
         priority=0,
         agent_mode=True,
@@ -81,13 +135,14 @@ def test_abandon_expired_running():
         db,
         prompt="run-expire",
         model=None,
+        queue_name=None,
         metadata=None,
         priority=0,
         agent_mode=True,
         unattended=True,
         max_attempts=1,
     )
-    claimed = queue.claim_next_task(db, "worker-1")
+    claimed = queue.claim_next_task(db, "worker-1", "default")
     assert claimed is not None
 
     running = db.get(AgentTask, task.id)
@@ -110,13 +165,14 @@ def test_shutdown_abandons_running():
         db,
         prompt="running",
         model=None,
+        queue_name=None,
         metadata=None,
         priority=0,
         agent_mode=True,
         unattended=True,
         max_attempts=1,
     )
-    claimed = queue.claim_next_task(db, "worker-1")
+    claimed = queue.claim_next_task(db, "worker-1", "default")
     assert claimed is not None
 
     changed = queue.abandon_running_on_shutdown(db)

@@ -32,6 +32,7 @@ class AgentTask(Base):
     status: Mapped[TaskStatus] = mapped_column(
         Enum(TaskStatus, native_enum=False, length=32), nullable=False, default=TaskStatus.QUEUED
     )
+    queue_name: Mapped[str] = mapped_column(String(64), nullable=False, default="default", index=True)
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     payload: Mapped[dict] = mapped_column(MySQLJSON().with_variant(JSON, "sqlite"), nullable=False, default=dict)
     result: Mapped[dict | None] = mapped_column(MySQLJSON().with_variant(JSON, "sqlite"), nullable=True)

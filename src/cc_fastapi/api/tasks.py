@@ -13,7 +13,7 @@ from cc_fastapi.schemas.tasks import (
     TaskLogItemResponse,
     TaskLogListResponse,
 )
-from cc_fastapi.services.queue import TaskQueueService
+from cc_fastapi.services.queue import QueueNotFoundError, TaskQueueService
 
 
 router = APIRouter(prefix="/v1/agent-tasks", tags=["agent-tasks"])
@@ -32,6 +32,7 @@ def _to_task_item(task) -> TaskItemResponse:
     return TaskItemResponse(
         id=task.id,
         status=task.status,
+        queue_name=getattr(task, "queue_name", "default") or "default",
         priority=task.priority,
         attempt=task.attempt,
         max_attempts=task.max_attempts,
@@ -49,18 +50,22 @@ def _to_task_item(task) -> TaskItemResponse:
 
 @router.post("", response_model=TaskCreateResponse, dependencies=[Depends(require_token)])
 def create_task(payload: TaskCreateRequest, db: Session = Depends(get_db)) -> TaskCreateResponse:
-    task = queue.create_task(
-        db,
-        prompt=payload.prompt,
-        model=payload.model,
-        metadata=payload.metadata,
-        claude_agent_options=payload.claude_agent_options,
-        priority=payload.priority,
-        agent_mode=payload.agent_mode,
-        unattended=payload.unattended,
-        max_attempts=payload.max_attempts,
-    )
-    return TaskCreateResponse(task_id=task.id, status=task.status)
+    try:
+        task = queue.create_task(
+            db,
+            prompt=payload.prompt,
+            model=payload.model,
+            queue_name=payload.queue_name,
+            metadata=payload.metadata,
+            claude_agent_options=payload.claude_agent_options,
+            priority=payload.priority,
+            agent_mode=payload.agent_mode,
+            unattended=payload.unattended,
+            max_attempts=payload.max_attempts,
+        )
+    except QueueNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return TaskCreateResponse(task_id=task.id, status=task.status, queue_name=task.queue_name)
 
 
 @router.get("/{task_id}", response_model=TaskItemResponse, dependencies=[Depends(require_token)])

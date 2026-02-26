@@ -6,6 +6,7 @@ from contextlib import suppress
 from sqlalchemy.orm import Session
 
 from cc_fastapi.core.config import get_settings
+from cc_fastapi.core.queue_config import get_queue_config
 from cc_fastapi.db.session import SessionLocal
 from cc_fastapi.services.claude_client import ClaudeClient
 from cc_fastapi.services.queue import TaskQueueService
@@ -24,13 +25,20 @@ class WorkerManager:
         self.threads: list[threading.Thread] = []
 
     def start(self) -> None:
-        concurrency = max(1, self.settings.worker_concurrency)
-        for idx in range(concurrency):
-            worker_id = f"worker-{idx+1}"
-            thread = threading.Thread(target=self._loop, args=(worker_id,), daemon=True)
-            thread.start()
-            self.threads.append(thread)
-        logger.info("worker manager started", extra={"event_type": "worker_start", "worker_id": f"x{concurrency}"})
+        queue_cfg = get_queue_config()
+        started = 0
+        for queue_name, qdef in queue_cfg.queues.items():
+            workers = max(1, int(qdef.workers))
+            for idx in range(workers):
+                worker_id = f"{queue_name}-worker-{idx+1}"
+                thread = threading.Thread(target=self._loop, args=(worker_id, queue_name), daemon=True)
+                thread.start()
+                self.threads.append(thread)
+                started += 1
+        logger.info(
+            "worker manager started",
+            extra={"event_type": "worker_start", "worker_id": f"x{started}", "trace_id": queue_cfg.default_queue},
+        )
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -52,20 +60,26 @@ class WorkerManager:
         finally:
             db.close()
 
-    def _loop(self, worker_id: str) -> None:
+    def _loop(self, worker_id: str, queue_name: str) -> None:
         sleep_seconds = max(0.2, self.settings.poll_interval_ms / 1000)
         while not self.stop_event.is_set():
             db = SessionLocal()
             try:
                 self._maintenance(db)
-                task = self.queue.claim_next_task(db, worker_id)
+                task = self.queue.claim_next_task(db, worker_id, queue_name)
                 if not task:
                     time.sleep(sleep_seconds)
                     continue
-                logger.info("task running", extra={"task_id": task.id, "event_type": "running", "worker_id": worker_id})
+                logger.info(
+                    "task running",
+                    extra={"task_id": task.id, "event_type": "running", "worker_id": worker_id, "trace_id": queue_name},
+                )
                 self._run_task(db, task.id)
             except Exception:
-                logger.exception("worker loop error", extra={"event_type": "worker_loop_error", "worker_id": worker_id})
+                logger.exception(
+                    "worker loop error",
+                    extra={"event_type": "worker_loop_error", "worker_id": worker_id, "trace_id": queue_name},
+                )
                 with suppress(Exception):
                     db.rollback()
                 time.sleep(sleep_seconds)

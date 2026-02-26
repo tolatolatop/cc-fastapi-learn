@@ -5,7 +5,14 @@ from sqlalchemy import Select, func, select, update
 from sqlalchemy.orm import Session
 
 from cc_fastapi.core.config import get_settings
+from cc_fastapi.core.queue_config import get_queue_config
 from cc_fastapi.db.models import AgentTask, AgentTaskLog, TaskStatus, utc_now
+
+
+class QueueNotFoundError(ValueError):
+    def __init__(self, queue_name: str) -> None:
+        super().__init__(f"queue not found: {queue_name}")
+        self.queue_name = queue_name
 
 
 class TaskQueueService:
@@ -18,6 +25,7 @@ class TaskQueueService:
         *,
         prompt: str,
         model: str | None,
+        queue_name: str | None,
         metadata: dict[str, Any] | None,
         priority: int,
         agent_mode: bool,
@@ -26,8 +34,10 @@ class TaskQueueService:
         claude_agent_options: dict[str, Any] | None = None,
     ) -> AgentTask:
         now = utc_now()
+        target_queue = self.resolve_target_queue(queue_name)
         task = AgentTask(
             status=TaskStatus.QUEUED,
+            queue_name=target_queue,
             priority=priority,
             payload={
                 "prompt": prompt,
@@ -43,10 +53,19 @@ class TaskQueueService:
         )
         db.add(task)
         db.flush()
-        self.log_event(db, task.id, "INFO", "queued", "task queued", {"priority": priority})
+        self.log_event(
+            db, task.id, "INFO", "queued", "task queued", {"priority": priority, "queue_name": target_queue}
+        )
         db.commit()
         db.refresh(task)
         return task
+
+    def resolve_target_queue(self, queue_name: str | None) -> str:
+        queue_cfg = get_queue_config()
+        target = queue_name.strip() if isinstance(queue_name, str) and queue_name.strip() else queue_cfg.default_queue
+        if target not in queue_cfg.queues:
+            raise QueueNotFoundError(target)
+        return target
 
     def _base_task_query(self) -> Select[tuple[AgentTask]]:
         return select(AgentTask)
@@ -80,10 +99,14 @@ class TaskQueueService:
         db.refresh(task)
         return task
 
-    def claim_next_task(self, db: Session, worker_id: str) -> AgentTask | None:
+    def claim_next_task(self, db: Session, worker_id: str, queue_name: str) -> AgentTask | None:
         candidate = db.scalar(
             select(AgentTask.id)
-            .where(AgentTask.status == TaskStatus.QUEUED, AgentTask.queue_expire_at > utc_now())
+            .where(
+                AgentTask.status == TaskStatus.QUEUED,
+                AgentTask.queue_expire_at > utc_now(),
+                AgentTask.queue_name == queue_name,
+            )
             .order_by(AgentTask.priority.desc(), AgentTask.created_at.asc())
             .limit(1)
         )
@@ -110,7 +133,14 @@ class TaskQueueService:
         if not task:
             db.rollback()
             return None
-        self.log_event(db, task.id, "INFO", "running", "task claimed by worker", {"worker_id": worker_id})
+        self.log_event(
+            db,
+            task.id,
+            "INFO",
+            "running",
+            "task claimed by worker",
+            {"worker_id": worker_id, "queue_name": queue_name},
+        )
         db.commit()
         db.refresh(task)
         return task

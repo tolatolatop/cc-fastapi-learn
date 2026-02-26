@@ -12,9 +12,11 @@ RUN pip install --no-cache-dir \
     "sqlalchemy>=2.0.43,<3.0.0" \
     "pydantic-settings>=2.10.1,<3.0.0" \
     "claude-agent-sdk>=0.1.44,<0.2.0" \
+    "pyyaml>=6.0.2,<7.0.0" \
     "pymysql>=1.1.1,<2.0.0"
 
 COPY src ./src
+COPY config ./config
 
 RUN mkdir -p /app/data
 

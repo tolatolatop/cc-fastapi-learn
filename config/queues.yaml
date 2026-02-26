@@ -1,0 +1,8 @@
+default_queue: default
+queues:
+  default:
+    workers: 1
+  slow:
+    workers: 1
+  high_priority:
+    workers: 1

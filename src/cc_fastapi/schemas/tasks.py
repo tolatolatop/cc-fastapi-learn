@@ -9,6 +9,7 @@ from cc_fastapi.db.models import TaskStatus
 class TaskCreateRequest(BaseModel):
     prompt: str = Field(min_length=1)
     model: str | None = None
+    queue_name: str | None = None
     metadata: dict[str, Any] | None = None
     claude_agent_options: dict[str, Any] | None = None
     priority: int = 0
@@ -20,11 +21,13 @@ class TaskCreateRequest(BaseModel):
 class TaskCreateResponse(BaseModel):
     task_id: str
     status: TaskStatus
+    queue_name: str
 
 
 class TaskItemResponse(BaseModel):
     id: str
     status: TaskStatus
+    queue_name: str
     priority: int
     attempt: int
     max_attempts: int
