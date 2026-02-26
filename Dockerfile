@@ -20,4 +20,5 @@ RUN mkdir -p /app/data
 
 EXPOSE 8000
 
+# uvicorn cc_fastapi.main:app --host 0.0.0.0 --port 8000 --app-dir src
 CMD ["uvicorn", "cc_fastapi.main:app", "--host", "0.0.0.0", "--port", "8000", "--app-dir", "src"]
