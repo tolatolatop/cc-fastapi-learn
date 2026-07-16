@@ -224,7 +224,7 @@ select:focus-visible,
 
 .nav-item span {
   flex: 1;
-  font-size: 0.9375rem;
+  font-size: 0.75rem;
   font-weight: 500;
 }
 
