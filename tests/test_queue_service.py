@@ -116,6 +116,7 @@ def test_retry_task_creates_new_task_with_same_configuration():
     assert retried.agent_mode == original.agent_mode
     assert retried.unattended == original.unattended
     assert retried.max_attempts == original.max_attempts
+    assert retried.session_id is None
 
 
 def test_retry_task_returns_none_when_original_does_not_exist():
@@ -144,6 +145,55 @@ def test_upsert_task_context_updates_latest():
     context = db.get(AgentTaskContext, task.id)
     assert context is not None
     assert context.messages_json == ["first", "second"]
+
+
+def test_set_task_session_id_persists_and_logs_once():
+    db = make_db()
+    queue = TaskQueueService()
+    task = queue.create_task(
+        db,
+        prompt="hello",
+        model=None,
+        queue_name=None,
+        metadata=None,
+        priority=1,
+        agent_mode=True,
+        unattended=True,
+        max_attempts=None,
+    )
+
+    queue.set_task_session_id(db, task.id, " session-1 ")
+    queue.set_task_session_id(db, task.id, "session-1")
+
+    db.refresh(task)
+    assert task.session_id == "session-1"
+    logs, _ = queue.list_logs(db, task.id, 0, 100)
+    session_logs = [log for log in logs if log.event_type == "session_started"]
+    assert len(session_logs) == 1
+    assert session_logs[0].metadata_json == {"session_id": "session-1", "attempt": 0}
+
+
+def test_mark_success_persists_result_session_id_as_fallback():
+    db = make_db()
+    queue = TaskQueueService()
+    task = queue.create_task(
+        db,
+        prompt="hello",
+        model=None,
+        queue_name=None,
+        metadata=None,
+        priority=1,
+        agent_mode=True,
+        unattended=True,
+        max_attempts=None,
+    )
+    claimed = queue.claim_next_task(db, "worker-1", "default")
+    assert claimed is not None
+
+    queue.mark_success(db, task.id, {"session_id": "session-from-result"})
+
+    db.refresh(task)
+    assert task.session_id == "session-from-result"
 
 
 def test_create_task_unknown_queue_raises():

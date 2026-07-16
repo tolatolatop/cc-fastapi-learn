@@ -113,6 +113,24 @@ class TaskQueueService:
     def get_task_context(self, db: Session, task_id: str) -> AgentTaskContext | None:
         return db.get(AgentTaskContext, task_id)
 
+    def set_task_session_id(self, db: Session, task_id: str, session_id: str) -> None:
+        normalized_session_id = session_id.strip()
+        if not normalized_session_id:
+            return
+        task = self.get_task(db, task_id)
+        if task is None or task.session_id == normalized_session_id:
+            return
+        task.session_id = normalized_session_id
+        self.log_event(
+            db,
+            task.id,
+            "INFO",
+            "session_started",
+            "agent session started",
+            {"session_id": normalized_session_id, "attempt": task.attempt},
+        )
+        db.commit()
+
     def list_tasks(
         self, db: Session, status: TaskStatus | None, offset: int, limit: int
     ) -> tuple[list[AgentTask], int]:
@@ -196,6 +214,9 @@ class TaskQueueService:
         old_status = task.status
         task.status = TaskStatus.SUCCEEDED
         task.result = result_payload
+        result_session_id = result_payload.get("session_id")
+        if isinstance(result_session_id, str) and result_session_id.strip():
+            task.session_id = result_session_id.strip()
         task.finished_at = utc_now()
         self.log_event(db, task.id, "INFO", "succeeded", "task finished successfully", None)
         db.commit()

@@ -10,6 +10,7 @@ export interface TaskItem {
   priority: number
   attempt: number
   max_attempts: number
+  session_id: string | null
   agent_mode: boolean
   unattended: boolean
   created_at: string

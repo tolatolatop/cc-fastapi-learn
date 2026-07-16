@@ -385,6 +385,7 @@ function DetailDrawer({ task, logs, context, loading, now, onClose, onCancel, on
                   <div><dt>执行进度</dt><dd>{task.attempt} / {task.max_attempts} 次</dd></div>
                   <div><dt>优先级</dt><dd>{task.priority > 0 ? `高 · ${task.priority}` : task.priority < 0 ? `低 · ${task.priority}` : '标准 · 0'}</dd></div>
                   <div className="wide"><dt>模型</dt><dd className="mono-wrap">{task.model || '服务默认模型'}</dd></div>
+                  <div className="wide"><dt>Session ID</dt><dd className="mono-wrap">{task.session_id || '等待 Agent 会话启动'}</dd></div>
                 </dl>
               </section>
 

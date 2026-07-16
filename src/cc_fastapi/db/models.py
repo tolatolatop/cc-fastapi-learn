@@ -48,6 +48,7 @@ class AgentTask(Base):
     attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
     worker_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    session_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     abandoned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     abandoned_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
