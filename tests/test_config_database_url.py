@@ -1,4 +1,4 @@
-from cc_fastapi.core.config import DEFAULT_GITLAB_WEBHOOK_PROMPT_TEMPLATE, get_settings
+from cc_fastapi.core.config import DEFAULT_GITLAB_WEBHOOK_PROMPT_TEMPLATE_PATH, get_settings
 
 
 def test_resolved_database_url_falls_back_to_database_url(monkeypatch):
@@ -24,11 +24,11 @@ def test_resolved_database_url_prefers_postgres_external_url(monkeypatch):
         get_settings.cache_clear()
 
 
-def test_blank_gitlab_webhook_prompt_template_uses_default(monkeypatch):
-    monkeypatch.setenv("GITLAB_WEBHOOK_PROMPT_TEMPLATE", "")
+def test_blank_gitlab_webhook_prompt_template_path_uses_default(monkeypatch):
+    monkeypatch.setenv("GITLAB_WEBHOOK_PROMPT_TEMPLATE_PATH", "")
     get_settings.cache_clear()
     try:
         settings = get_settings()
-        assert settings.resolved_gitlab_webhook_prompt_template == DEFAULT_GITLAB_WEBHOOK_PROMPT_TEMPLATE
+        assert settings.resolved_gitlab_webhook_prompt_template_path == DEFAULT_GITLAB_WEBHOOK_PROMPT_TEMPLATE_PATH
     finally:
         get_settings.cache_clear()

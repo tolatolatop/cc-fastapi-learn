@@ -22,14 +22,16 @@ def webhook_settings(monkeypatch, tmp_path):
     monkeypatch.setenv("QUEUES_CONFIG_PATH", str(cfg))
     monkeypatch.setenv("GITLAB_WEBHOOK_SECRET", "gitlab-secret")
     monkeypatch.setenv("GITLAB_WEBHOOK_QUEUE_NAME", "hooks")
-    monkeypatch.setenv(
-        "GITLAB_WEBHOOK_PROMPT_TEMPLATE",
+    template = tmp_path / "gitlab_webhook_prompt.j2"
+    template.write_text(
         "Review {{ event_type }} for {{ project.path_with_namespace }} on {{ ref }} ({{ commits | length }} commits)",
+        encoding="utf-8",
     )
+    monkeypatch.setenv("GITLAB_WEBHOOK_PROMPT_TEMPLATE_PATH", str(template))
     monkeypatch.setenv("API_TOKEN", "")
     get_settings.cache_clear()
     get_queue_config.cache_clear()
-    yield
+    yield template
     get_settings.cache_clear()
     get_queue_config.cache_clear()
 
@@ -132,15 +134,29 @@ def test_gitlab_webhook_rejects_invalid_token_without_creating_records():
         assert db.scalar(select(func.count()).select_from(WebhookTrigger)) == 0
 
 
-def test_gitlab_webhook_template_error_does_not_create_task(monkeypatch):
-    monkeypatch.setenv("GITLAB_WEBHOOK_PROMPT_TEMPLATE", "{{ missing.value }}")
-    get_settings.cache_clear()
+def test_gitlab_webhook_template_error_does_not_create_task(webhook_settings):
+    webhook_settings.write_text("{{ missing.value }}", encoding="utf-8")
     client, session_factory = build_client()
 
     response = client.post("/v1/webhooks/gitlab", headers=gitlab_headers(), json=gitlab_payload())
 
     assert response.status_code == 400
     assert "failed to render webhook prompt" in response.json()["detail"]
+    with session_factory() as db:
+        assert db.scalar(select(func.count()).select_from(AgentTask)) == 0
+        assert db.scalar(select(func.count()).select_from(WebhookTrigger)) == 0
+
+
+def test_gitlab_webhook_missing_template_file_does_not_create_task(monkeypatch, tmp_path):
+    missing_template = tmp_path / "missing.j2"
+    monkeypatch.setenv("GITLAB_WEBHOOK_PROMPT_TEMPLATE_PATH", str(missing_template))
+    get_settings.cache_clear()
+    client, session_factory = build_client()
+
+    response = client.post("/v1/webhooks/gitlab", headers=gitlab_headers(), json=gitlab_payload())
+
+    assert response.status_code == 400
+    assert "failed to load webhook prompt template" in response.json()["detail"]
     with session_factory() as db:
         assert db.scalar(select(func.count()).select_from(AgentTask)) == 0
         assert db.scalar(select(func.count()).select_from(WebhookTrigger)) == 0

@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any
 
 from jinja2 import StrictUndefined, TemplateError
@@ -23,7 +24,7 @@ class WebhookService:
 
     def render_gitlab_prompt(
         self,
-        template_source: str,
+        template_path: str,
         *,
         payload: dict[str, Any],
         event_type: str,
@@ -45,6 +46,10 @@ class WebhookService:
             "webhook": webhook,
         }
         try:
+            template_source = Path(template_path).read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            raise WebhookTemplateError(f"failed to load webhook prompt template: {template_path}") from exc
+        try:
             prompt = self.template_environment.from_string(template_source).render(context).strip()
         except TemplateError as exc:
             raise WebhookTemplateError(f"failed to render webhook prompt: {exc}") from exc
@@ -61,11 +66,11 @@ class WebhookService:
         event_uuid: str | None,
         webhook_uuid: str | None,
         instance_url: str | None,
-        prompt_template: str,
+        prompt_template_path: str,
         queue_name: str | None,
     ) -> tuple[WebhookTrigger, AgentTask]:
         prompt = self.render_gitlab_prompt(
-            prompt_template,
+            prompt_template_path,
             payload=payload,
             event_type=event_type,
             event_uuid=event_uuid,

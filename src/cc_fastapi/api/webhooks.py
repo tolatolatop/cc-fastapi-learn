@@ -48,7 +48,7 @@ def receive_gitlab_webhook(
             event_uuid=x_gitlab_event_uuid,
             webhook_uuid=x_gitlab_webhook_uuid,
             instance_url=x_gitlab_instance,
-            prompt_template=settings.resolved_gitlab_webhook_prompt_template,
+            prompt_template_path=settings.resolved_gitlab_webhook_prompt_template_path,
             queue_name=settings.gitlab_webhook_queue_name or None,
         )
     except WebhookTemplateError as exc:
