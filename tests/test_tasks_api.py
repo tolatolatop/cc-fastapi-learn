@@ -69,6 +69,7 @@ def test_create_get_and_logs():
     assert detail.json()["prompt"] == "hello"
     assert detail.json()["model"]
     assert detail.json()["metadata"] == {"source": "test"}
+    assert detail.json()["session_id"] is None
     assert detail.json()["agent_mode"] is True
     assert detail.json()["unattended"] is True
 

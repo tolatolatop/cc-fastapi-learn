@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 from typing import Any, Callable
 
 from claude_agent_sdk import ClaudeAgentOptions, query
-from claude_agent_sdk.types import AssistantMessage, ResultMessage, TextBlock
+from claude_agent_sdk.types import AssistantMessage, ResultMessage, SystemMessage, TextBlock
 from cc_fastapi.core.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -81,6 +81,7 @@ class ClaudeClient:
         agent_mode: bool = True,
         unattended: bool = True,
         on_message_update: Callable[[list[str]], None] | None = None,
+        on_session_id: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         if not self.settings.anthropic_api_key:
             raise RuntimeError("ANTHROPIC_API_KEY is missing")
@@ -94,6 +95,7 @@ class ClaudeClient:
                 agent_mode=agent_mode,
                 unattended=unattended,
                 on_message_update=on_message_update,
+                on_session_id=on_session_id,
             )
         )
 
@@ -107,6 +109,7 @@ class ClaudeClient:
         agent_mode: bool,
         unattended: bool,
         on_message_update: Callable[[list[str]], None] | None,
+        on_session_id: Callable[[str], None] | None,
     ) -> dict[str, Any]:
         system_note = (
             "You are running in Claude Agent task mode. "
@@ -179,6 +182,10 @@ class ClaudeClient:
         stream: AsyncIterator[Any] = query(prompt=prompt, options=options)
         logger.debug("claude sdk stream started", extra={"event_type": "claude_stream_start"})
         async for msg in stream:
+            message_session_id = self._extract_session_id(msg)
+            if message_session_id and message_session_id != session_id:
+                session_id = message_session_id
+                self._emit_session_id(on_session_id, session_id)
             if isinstance(msg, AssistantMessage):
                 for block in msg.content:
                     if isinstance(block, TextBlock) and block.text:
@@ -188,7 +195,6 @@ class ClaudeClient:
                 usage = msg.usage or {}
                 stop_reason = msg.subtype
                 duration_ms = msg.duration_ms
-                session_id = msg.session_id
                 total_cost_usd = msg.total_cost_usd
                 if msg.result:
                     output_chunks.append(msg.result)
@@ -222,3 +228,26 @@ class ClaudeClient:
             on_message_update(normalized)
         except Exception:
             logger.exception("on_message_update callback failed", extra={"event_type": "claude_context_callback_failed"})
+
+    def _extract_session_id(self, message: Any) -> str:
+        raw_session_id: Any = None
+        if isinstance(message, SystemMessage):
+            raw_session_id = message.data.get("session_id")
+        if raw_session_id is None:
+            raw_session_id = getattr(message, "session_id", None)
+        if not isinstance(raw_session_id, str):
+            return ""
+        return raw_session_id.strip()
+
+    def _emit_session_id(
+        self, on_session_id: Callable[[str], None] | None, session_id: str
+    ) -> None:
+        if on_session_id is None:
+            return
+        try:
+            on_session_id(session_id)
+        except Exception:
+            logger.exception(
+                "on_session_id callback failed",
+                extra={"event_type": "claude_session_callback_failed", "trace_id": session_id},
+            )

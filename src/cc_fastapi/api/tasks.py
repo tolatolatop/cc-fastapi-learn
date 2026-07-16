@@ -39,6 +39,7 @@ def _to_task_item(task) -> TaskItemResponse:
         priority=task.priority,
         attempt=task.attempt,
         max_attempts=task.max_attempts,
+        session_id=task.session_id,
         agent_mode=task.agent_mode,
         unattended=task.unattended,
         created_at=task.created_at,

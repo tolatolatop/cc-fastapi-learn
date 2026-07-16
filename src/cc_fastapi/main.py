@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from cc_fastapi.api.tasks import router as tasks_router
 from cc_fastapi.api.webhooks import router as webhooks_router
 from cc_fastapi.core.config import get_settings
+from cc_fastapi.db.migrations import apply_schema_migrations
 from cc_fastapi.db.models import Base
 from cc_fastapi.db.session import engine
 from cc_fastapi.logging_setup import setup_logging
@@ -29,6 +30,7 @@ async def lifespan(_: FastAPI):
     )
     logger.info("application startup begin", extra={"event_type": "app_startup"})
     Base.metadata.create_all(bind=engine)
+    apply_schema_migrations(engine)
     recovered = worker_manager.run_startup_recovery()
     logger.info(
         "startup recovery finished",

@@ -34,6 +34,7 @@ class TaskItemResponse(BaseModel):
     priority: int
     attempt: int
     max_attempts: int
+    session_id: str | None
     agent_mode: bool
     unattended: bool
     created_at: datetime

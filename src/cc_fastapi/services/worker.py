@@ -148,6 +148,7 @@ class WorkerManager:
                 agent_mode=task.agent_mode,
                 unattended=task.unattended,
                 on_message_update=lambda messages: self.queue.upsert_task_context(db, task.id, messages),
+                on_session_id=lambda session_id: self.queue.set_task_session_id(db, task.id, session_id),
             )
             self.queue.mark_success(db, task.id, result)
             logger.info(
@@ -170,4 +171,3 @@ class WorkerManager:
                     "queue_name": getattr(task, "queue_name", "default"),
                 },
             )
-

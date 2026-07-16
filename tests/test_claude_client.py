@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from claude_agent_sdk.types import AssistantMessage, ResultMessage, TextBlock
+from claude_agent_sdk.types import AssistantMessage, ResultMessage, SystemMessage, TextBlock
 
 from cc_fastapi.core.config import get_settings
 from cc_fastapi.services import claude_client as claude_client_module
@@ -43,6 +43,7 @@ def test_claude_client_uses_agent_options(monkeypatch):
     monkeypatch.setattr(claude_client_module, "query", fake_query)
 
     client = ClaudeClient()
+    session_ids: list[str] = []
     result = client.run_agent_task(
         prompt="do work",
         model="claude-test",
@@ -50,6 +51,7 @@ def test_claude_client_uses_agent_options(monkeypatch):
         claude_agent_options={"max_turns": 3, "permission_mode": "plan"},
         agent_mode=True,
         unattended=True,
+        on_session_id=session_ids.append,
     )
 
     options = captured["options"]
@@ -67,6 +69,7 @@ def test_claude_client_uses_agent_options(monkeypatch):
     assert result["output_text"] == "hello from sdk\nfinal result"
     assert result["stop_reason"] == "end_turn"
     assert result["usage"]["input_tokens"] == 10
+    assert session_ids == ["session-1"]
 
 
 def test_claude_client_creates_missing_cwd(monkeypatch, tmp_path):
@@ -160,3 +163,36 @@ def test_claude_client_calls_on_message_update(monkeypatch):
     assert updates
     assert updates[-1] == ["hello", "world", "done"]
 
+
+def test_claude_client_reports_session_id_from_init_message(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    get_settings.cache_clear()
+
+    async def fake_query(*, prompt, options, transport=None):
+        yield SystemMessage(subtype="init", data={"session_id": "session-from-init"})
+        yield AssistantMessage(content=[TextBlock(text="hello")], model="claude-test")
+        yield ResultMessage(
+            subtype="end_turn",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=1,
+            session_id="session-from-init",
+            usage={},
+            result="done",
+        )
+
+    monkeypatch.setattr(claude_client_module, "query", fake_query)
+
+    session_ids: list[str] = []
+    result = ClaudeClient().run_agent_task(
+        prompt="session",
+        model="claude-test",
+        metadata=None,
+        agent_mode=True,
+        unattended=True,
+        on_session_id=session_ids.append,
+    )
+
+    assert session_ids == ["session-from-init"]
+    assert result["session_id"] == "session-from-init"
