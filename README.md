@@ -4,6 +4,12 @@
 
 ## Docker Compose 启动
 
+Compose 会自动读取项目根目录的 `.env`。首次部署可从示例文件复制后填写模型和 Webhook 配置：
+
+```bash
+cp .env.example .env
+```
+
 ```bash
 docker compose up --build
 ```
@@ -14,10 +20,10 @@ docker compose up --build
 - FastAPI 文档：<http://localhost:18000/docs>
 - 健康检查：<http://localhost:18000/healthz>
 
-可通过 `FRONTEND_PORT` 修改前端端口。如果设置了 `API_TOKEN`，请在控制台右上角的“连接设置”中填写同一个 Token。
+可通过 `BACKEND_PORT` 和 `FRONTEND_PORT` 修改端口。如果设置了 `API_TOKEN`，请在控制台右上角的“连接设置”中填写同一个 Token。
 
 ```bash
-FRONTEND_PORT=8080 API_TOKEN=your-token docker compose up --build
+BACKEND_PORT=8000 FRONTEND_PORT=8080 API_TOKEN=your-token docker compose up --build
 ```
 
 ## 前端本地开发

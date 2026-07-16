@@ -1,16 +1,17 @@
 from pathlib import Path
 
 import pytest
+from claude_agent_sdk._errors import ProcessError
 from claude_agent_sdk.types import AssistantMessage, ResultMessage, SystemMessage, TextBlock
 
 from cc_fastapi.core.config import get_settings
 from cc_fastapi.services import claude_client as claude_client_module
-from cc_fastapi.services.claude_client import ClaudeClient
+from cc_fastapi.services.claude_client import ClaudeClient, ClaudeExecutionError
 
 
 def test_claude_client_uses_agent_options(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://aihubmix.com")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://aihubmix.com/")
     monkeypatch.setenv("API_TIMEOUT_MS", "3000000")
     monkeypatch.setenv("ANTHROPIC_DEFAULT_OPUS_MODEL", "claude-sonnet-4-5")
     monkeypatch.setenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "claude-sonnet-4-5")
@@ -196,3 +197,62 @@ def test_claude_client_reports_session_id_from_init_message(monkeypatch):
 
     assert session_ids == ["session-from-init"]
     assert result["session_id"] == "session-from-init"
+
+
+def test_claude_client_captures_and_redacts_cli_stderr(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "secret-test-key")
+    get_settings.cache_clear()
+
+    async def fake_query(*, prompt, options, transport=None):
+        assert options.stderr is not None
+        options.stderr("startup rejected for secret-test-key")
+        raise ProcessError(
+            "Command failed with exit code 1",
+            exit_code=1,
+            stderr="Check stderr output for details",
+        )
+        yield
+
+    monkeypatch.setattr(claude_client_module, "query", fake_query)
+
+    with pytest.raises(ClaudeExecutionError) as captured:
+        ClaudeClient().run_agent_task(
+            prompt="fail",
+            model="claude-test",
+            metadata=None,
+        )
+
+    error = captured.value
+    assert error.error_type == "ProcessError"
+    assert error.exit_code == 1
+    assert error.cli_stderr == "startup rejected for [REDACTED_API_KEY]"
+    assert "Claude CLI stderr" in str(error)
+    assert "secret-test-key" not in str(error)
+
+
+def test_claude_client_reports_error_result_detail(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    get_settings.cache_clear()
+
+    async def fake_query(*, prompt, options, transport=None):
+        yield ResultMessage(
+            subtype="success",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=True,
+            num_turns=0,
+            session_id="session-error",
+            usage={},
+            result="API Error: invalid endpoint",
+        )
+
+    monkeypatch.setattr(claude_client_module, "query", fake_query)
+
+    with pytest.raises(ClaudeExecutionError, match="API Error: invalid endpoint") as captured:
+        ClaudeClient().run_agent_task(
+            prompt="fail",
+            model="claude-test",
+            metadata=None,
+        )
+
+    assert captured.value.error_type == "RuntimeError"

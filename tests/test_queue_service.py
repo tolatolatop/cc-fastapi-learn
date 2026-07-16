@@ -196,6 +196,45 @@ def test_mark_success_persists_result_session_id_as_fallback():
     assert task.session_id == "session-from-result"
 
 
+def test_mark_failure_persists_execution_error_event():
+    db = make_db()
+    queue = TaskQueueService()
+    task = queue.create_task(
+        db,
+        prompt="hello",
+        model=None,
+        queue_name=None,
+        metadata=None,
+        priority=1,
+        agent_mode=True,
+        unattended=True,
+        max_attempts=1,
+    )
+    claimed = queue.claim_next_task(db, "worker-1", "default")
+    assert claimed is not None
+
+    queue.mark_retry_or_failed(
+        db,
+        task.id,
+        "ProcessError: failed\nClaude CLI stderr:\npermission denied",
+        {"exception_type": "ProcessError", "exit_code": 1, "has_cli_stderr": True},
+    )
+
+    db.refresh(task)
+    assert task.error_message is not None
+    assert "permission denied" in task.error_message
+    logs, _ = queue.list_logs(db, task.id, 0, 100)
+    diagnostic = next(log for log in logs if log.event_type == "execution_error")
+    assert "permission denied" in diagnostic.message
+    assert diagnostic.metadata_json == {
+        "attempt": 1,
+        "max_attempts": 1,
+        "exception_type": "ProcessError",
+        "exit_code": 1,
+        "has_cli_stderr": True,
+    }
+
+
 def test_create_task_unknown_queue_raises():
     db = make_db()
     queue = TaskQueueService()
