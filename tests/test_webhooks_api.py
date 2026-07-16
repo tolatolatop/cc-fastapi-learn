@@ -8,7 +8,7 @@ from sqlalchemy.pool import StaticPool
 from cc_fastapi.api.webhooks import router
 from cc_fastapi.core.config import get_settings
 from cc_fastapi.core.queue_config import get_queue_config
-from cc_fastapi.db.models import AgentTask, Base, TaskStatus, WebhookTrigger
+from cc_fastapi.db.models import AgentTask, Base, TaskStatus, WebhookDeduplicationKey, WebhookTrigger
 from cc_fastapi.db.session import get_db
 
 
@@ -91,6 +91,7 @@ def test_gitlab_webhook_renders_prompt_creates_task_and_records_metadata():
     body = response.json()
     assert body["status"] == "queued"
     assert body["queue_name"] == "hooks"
+    assert body["deduplicated"] is False
 
     with session_factory() as db:
         task = db.get(AgentTask, body["task_id"])
@@ -116,6 +117,45 @@ def test_gitlab_webhook_renders_prompt_creates_task_and_records_metadata():
     assert listed.json()["total"] == 1
     assert listed.json()["items"][0]["task_id"] == body["task_id"]
     assert listed.json()["items"][0]["payload"] == payload
+
+
+def test_gitlab_webhook_reuses_task_for_duplicate_webhook_uuid(webhook_settings):
+    client, session_factory = build_client()
+    headers = gitlab_headers()
+
+    first = client.post("/v1/webhooks/gitlab", headers=headers, json=gitlab_payload())
+    webhook_settings.unlink()
+    duplicate = client.post("/v1/webhooks/gitlab", headers=headers, json=gitlab_payload(2))
+
+    assert first.status_code == 200
+    assert duplicate.status_code == 200
+    assert first.json()["deduplicated"] is False
+    assert duplicate.json()["deduplicated"] is True
+    assert duplicate.json()["webhook_id"] == first.json()["webhook_id"]
+    assert duplicate.json()["task_id"] == first.json()["task_id"]
+    with session_factory() as db:
+        assert db.scalar(select(func.count()).select_from(AgentTask)) == 1
+        assert db.scalar(select(func.count()).select_from(WebhookTrigger)) == 1
+        assert db.scalar(select(func.count()).select_from(WebhookDeduplicationKey)) == 1
+
+
+def test_gitlab_webhook_without_webhook_uuid_is_not_deduplicated():
+    client, session_factory = build_client()
+    headers = gitlab_headers()
+    headers.pop("X-Gitlab-Webhook-UUID")
+
+    first = client.post("/v1/webhooks/gitlab", headers=headers, json=gitlab_payload())
+    second = client.post("/v1/webhooks/gitlab", headers=headers, json=gitlab_payload())
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["deduplicated"] is False
+    assert second.json()["deduplicated"] is False
+    assert second.json()["task_id"] != first.json()["task_id"]
+    with session_factory() as db:
+        assert db.scalar(select(func.count()).select_from(AgentTask)) == 2
+        assert db.scalar(select(func.count()).select_from(WebhookTrigger)) == 2
+        assert db.scalar(select(func.count()).select_from(WebhookDeduplicationKey)) == 0
 
 
 def test_gitlab_webhook_rejects_invalid_token_without_creating_records():
