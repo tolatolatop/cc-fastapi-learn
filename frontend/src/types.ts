@@ -75,9 +75,12 @@ export interface WebhookTrigger {
   event_uuid: string | null
   webhook_uuid: string | null
   instance_url: string | null
-  task_id: string
+  task_id: string | null
   payload: Record<string, unknown>
   created_at: string
+  workflow_run_id: string | null
+  workflow_status: 'planning' | 'running' | 'skipped' | 'succeeded' | 'failed' | null
+  skip_reason: string | null
 }
 
 export interface WebhookTriggerListResponse {

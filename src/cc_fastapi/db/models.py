@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from uuid import uuid4
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.mysql import JSON as MySQLJSON
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
@@ -23,6 +23,21 @@ class TaskStatus(StrEnum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     ABANDONED = "abandoned"
+
+
+class WorkflowRunStatus(StrEnum):
+    PLANNING = "planning"
+    RUNNING = "running"
+    SKIPPED = "skipped"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+class WorkflowStepStatus(StrEnum):
+    RUNNING = "running"
+    SKIPPED = "skipped"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
 
 
 class AgentTask(Base):
@@ -99,7 +114,7 @@ class WebhookTrigger(Base):
     event_uuid: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     webhook_uuid: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     instance_url: Mapped[str | None] = mapped_column(Text, nullable=True)
-    task_id: Mapped[str] = mapped_column(String(36), ForeignKey("agent_tasks.id"), nullable=False, index=True)
+    task_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("agent_tasks.id"), nullable=True, index=True)
     payload_json: Mapped[dict] = mapped_column(
         "payload", MySQLJSON().with_variant(JSON, "sqlite"), nullable=False, default=dict
     )
@@ -117,4 +132,81 @@ class WebhookDeduplicationKey(Base):
         nullable=False,
         unique=True,
     )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class WorkflowRun(Base):
+    __tablename__ = "workflow_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    workflow_name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    workflow_version: Mapped[str] = mapped_column(String(32), nullable=False, default="1")
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    event_type: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    event_uuid: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    webhook_uuid: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    instance_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    payload_json: Mapped[dict] = mapped_column(
+        "payload", MySQLJSON().with_variant(JSON, "sqlite"), nullable=False, default=dict
+    )
+    config_json: Mapped[dict] = mapped_column(
+        "config", MySQLJSON().with_variant(JSON, "sqlite"), nullable=False, default=dict
+    )
+    context_json: Mapped[dict] = mapped_column(
+        "context", MySQLJSON().with_variant(JSON, "sqlite"), nullable=False, default=dict
+    )
+    status: Mapped[WorkflowRunStatus] = mapped_column(
+        Enum(WorkflowRunStatus, native_enum=False, length=32), nullable=False, default=WorkflowRunStatus.PLANNING
+    )
+    skip_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    webhook_trigger_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("webhook_triggers.id"),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class WorkflowStepRun(Base):
+    __tablename__ = "workflow_step_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    workflow_run_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("workflow_runs.id"), nullable=False, index=True
+    )
+    step_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    status: Mapped[WorkflowStepStatus] = mapped_column(
+        Enum(WorkflowStepStatus, native_enum=False, length=32),
+        nullable=False,
+        default=WorkflowStepStatus.RUNNING,
+    )
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    input_json: Mapped[dict | None] = mapped_column(
+        "input", MySQLJSON().with_variant(JSON, "sqlite"), nullable=True
+    )
+    output_json: Mapped[dict | None] = mapped_column(
+        "output", MySQLJSON().with_variant(JSON, "sqlite"), nullable=True
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class WorkflowTaskLink(Base):
+    __tablename__ = "workflow_task_links"
+
+    workflow_run_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("workflow_runs.id"), primary_key=True, nullable=False
+    )
+    task_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agent_tasks.id"), primary_key=True, nullable=False, unique=True, index=True
+    )
+    role: Mapped[str] = mapped_column(String(64), nullable=False, default="primary")
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)

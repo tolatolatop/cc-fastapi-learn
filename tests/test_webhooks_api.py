@@ -8,8 +8,21 @@ from sqlalchemy.pool import StaticPool
 from cc_fastapi.api.webhooks import router
 from cc_fastapi.core.config import get_settings
 from cc_fastapi.core.queue_config import get_queue_config
-from cc_fastapi.db.models import AgentTask, Base, TaskStatus, WebhookDeduplicationKey, WebhookTrigger
+from cc_fastapi.db.models import (
+    AgentTask,
+    Base,
+    TaskStatus,
+    WebhookDeduplicationKey,
+    WebhookTrigger,
+    WorkflowRun,
+    WorkflowRunStatus,
+    WorkflowStepRun,
+    WorkflowStepStatus,
+    WorkflowTaskLink,
+)
 from cc_fastapi.db.session import get_db
+from cc_fastapi.services.queue import TaskQueueService
+from cc_fastapi.workflows import build_default_workflow_engine
 
 
 @pytest.fixture(autouse=True)
@@ -92,12 +105,16 @@ def test_gitlab_webhook_renders_prompt_creates_task_and_records_metadata():
     assert body["status"] == "queued"
     assert body["queue_name"] == "hooks"
     assert body["deduplicated"] is False
+    assert body["workflow_status"] == "running"
+    assert body["skip_reason"] is None
 
     with session_factory() as db:
         task = db.get(AgentTask, body["task_id"])
         trigger = db.get(WebhookTrigger, body["webhook_id"])
+        workflow_run = db.get(WorkflowRun, body["workflow_run_id"])
         assert task is not None
         assert trigger is not None
+        assert workflow_run is not None
         assert task.status == TaskStatus.QUEUED
         assert task.payload["prompt"] == "Review Push Hook for group/project on refs/heads/feature-1 (1 commits)"
         assert task.metadata_json == {
@@ -111,12 +128,23 @@ def test_gitlab_webhook_renders_prompt_creates_task_and_records_metadata():
         }
         assert trigger.task_id == task.id
         assert trigger.payload_json == payload
+        assert workflow_run.workflow_name == "gitlab_prompt_task"
+        assert workflow_run.status == WorkflowRunStatus.RUNNING
+        assert workflow_run.webhook_trigger_id == trigger.id
+        link = db.scalar(select(WorkflowTaskLink).where(WorkflowTaskLink.workflow_run_id == workflow_run.id))
+        assert link is not None
+        assert link.task_id == task.id
+        step = db.scalar(select(WorkflowStepRun).where(WorkflowStepRun.workflow_run_id == workflow_run.id))
+        assert step is not None
+        assert step.status == WorkflowStepStatus.SUCCEEDED
 
     listed = client.get("/v1/webhooks")
     assert listed.status_code == 200
     assert listed.json()["total"] == 1
     assert listed.json()["items"][0]["task_id"] == body["task_id"]
     assert listed.json()["items"][0]["payload"] == payload
+    assert listed.json()["items"][0]["workflow_run_id"] == body["workflow_run_id"]
+    assert listed.json()["items"][0]["workflow_status"] == "running"
 
 
 def test_gitlab_webhook_reuses_task_for_duplicate_webhook_uuid(webhook_settings):
@@ -137,6 +165,32 @@ def test_gitlab_webhook_reuses_task_for_duplicate_webhook_uuid(webhook_settings)
         assert db.scalar(select(func.count()).select_from(AgentTask)) == 1
         assert db.scalar(select(func.count()).select_from(WebhookTrigger)) == 1
         assert db.scalar(select(func.count()).select_from(WebhookDeduplicationKey)) == 1
+        assert db.scalar(select(func.count()).select_from(WorkflowRun)) == 1
+        assert db.scalar(select(func.count()).select_from(WorkflowTaskLink)) == 1
+
+
+def test_gitlab_prompt_workflow_completes_after_task_success():
+    client, session_factory = build_client()
+    response = client.post("/v1/webhooks/gitlab", headers=gitlab_headers(), json=gitlab_payload())
+    body = response.json()
+
+    with session_factory() as db:
+        task = db.get(AgentTask, body["task_id"])
+        assert task is not None
+        task.status = TaskStatus.SUCCEEDED
+        task.result = {"message": "done"}
+        db.commit()
+
+        updated = build_default_workflow_engine().handle_task_terminal(db, task.id)
+        assert len(updated) == 1
+        run = db.get(WorkflowRun, body["workflow_run_id"])
+        assert run is not None
+        assert run.status == WorkflowRunStatus.SUCCEEDED
+        assert run.context_json["last_task_id"] == task.id
+        assert run.context_json["last_task_status"] == "succeeded"
+        assert db.scalar(
+            select(func.count()).select_from(WorkflowStepRun).where(WorkflowStepRun.workflow_run_id == run.id)
+        ) == 2
 
 
 def test_gitlab_webhook_without_webhook_uuid_is_not_deduplicated():
@@ -158,6 +212,57 @@ def test_gitlab_webhook_without_webhook_uuid_is_not_deduplicated():
         assert db.scalar(select(func.count()).select_from(WebhookDeduplicationKey)) == 0
 
 
+def test_duplicate_legacy_trigger_is_adopted_into_workflow():
+    client, session_factory = build_client()
+    with session_factory() as db:
+        task = TaskQueueService().create_task(
+            db,
+            prompt="legacy prompt",
+            model=None,
+            queue_name="hooks",
+            metadata={"trigger": "gitlab_webhook"},
+            priority=0,
+            agent_mode=True,
+            unattended=True,
+            max_attempts=None,
+        )
+        trigger = WebhookTrigger(
+            provider="gitlab",
+            event_type="Push Hook",
+            event_uuid="legacy-event",
+            webhook_uuid="legacy-webhook",
+            instance_url="https://gitlab.example.com",
+            task_id=task.id,
+            payload_json=gitlab_payload(),
+        )
+        db.add(trigger)
+        db.flush()
+        db.add(
+            WebhookDeduplicationKey(
+                provider="gitlab",
+                webhook_uuid="legacy-webhook",
+                webhook_trigger_id=trigger.id,
+            )
+        )
+        db.commit()
+
+    response = client.post(
+        "/v1/webhooks/gitlab",
+        headers=gitlab_headers(**{"X-Gitlab-Webhook-UUID": "legacy-webhook"}),
+        json=gitlab_payload(2),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["deduplicated"] is True
+    assert response.json()["task_id"] == task.id
+    assert response.json()["workflow_status"] == "running"
+    with session_factory() as db:
+        run = db.get(WorkflowRun, response.json()["workflow_run_id"])
+        assert run is not None
+        assert run.context_json == {"legacy_adopted": True}
+        assert run.webhook_trigger_id == trigger.id
+
+
 def test_gitlab_webhook_rejects_invalid_token_without_creating_records():
     client, session_factory = build_client()
 
@@ -172,6 +277,7 @@ def test_gitlab_webhook_rejects_invalid_token_without_creating_records():
     with session_factory() as db:
         assert db.scalar(select(func.count()).select_from(AgentTask)) == 0
         assert db.scalar(select(func.count()).select_from(WebhookTrigger)) == 0
+        assert db.scalar(select(func.count()).select_from(WorkflowRun)) == 0
 
 
 def test_gitlab_webhook_template_error_does_not_create_task(webhook_settings):
@@ -185,6 +291,10 @@ def test_gitlab_webhook_template_error_does_not_create_task(webhook_settings):
     with session_factory() as db:
         assert db.scalar(select(func.count()).select_from(AgentTask)) == 0
         assert db.scalar(select(func.count()).select_from(WebhookTrigger)) == 0
+        workflow_run = db.scalar(select(WorkflowRun))
+        assert workflow_run is not None
+        assert workflow_run.status == WorkflowRunStatus.FAILED
+        assert "failed to render webhook prompt" in (workflow_run.error_message or "")
 
 
 def test_gitlab_webhook_missing_template_file_does_not_create_task(monkeypatch, tmp_path):

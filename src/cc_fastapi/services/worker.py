@@ -11,6 +11,7 @@ from cc_fastapi.db.session import SessionLocal
 from cc_fastapi.services.claude_client import ClaudeClient
 from cc_fastapi.services.queue import TaskQueueService
 from cc_fastapi.db.models import TaskStatus
+from cc_fastapi.workflows import build_default_workflow_engine
 
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,7 @@ class WorkerManager:
         self.settings = get_settings()
         self.queue = TaskQueueService()
         self.client = ClaudeClient()
+        self.workflows = build_default_workflow_engine()
         self.stop_event = threading.Event()
         self.threads: list[threading.Thread] = []
         self._empty_log_last_ts: dict[str, float] = {}
@@ -59,14 +61,18 @@ class WorkerManager:
     def run_startup_recovery(self) -> int:
         db = SessionLocal()
         try:
-            return self.queue.recover_orphan_running_on_startup(db)
+            recovered = self.queue.recover_orphan_running_on_startup(db)
+            self.workflows.reconcile_terminal_tasks(db)
+            return recovered
         finally:
             db.close()
 
     def abandon_running_on_shutdown(self) -> int:
         db = SessionLocal()
         try:
-            return self.queue.abandon_running_on_shutdown(db)
+            abandoned = self.queue.abandon_running_on_shutdown(db)
+            self.workflows.reconcile_terminal_tasks(db)
+            return abandoned
         finally:
             db.close()
 
@@ -116,6 +122,7 @@ class WorkerManager:
     def _maintenance(self, db: Session) -> None:
         queued_count = self.queue.abandon_expired_queued(db)
         running_count = self.queue.abandon_expired_running(db)
+        self.workflows.reconcile_terminal_tasks(db)
         if queued_count or running_count:
             logger.warning(
                 "worker maintenance abandoned tasks",
@@ -150,6 +157,7 @@ class WorkerManager:
                 on_message_update=lambda messages: self.queue.upsert_task_context(db, task.id, messages),
             )
             self.queue.mark_success(db, task.id, result)
+            self.workflows.handle_task_terminal(db, task.id)
             logger.info(
                 "task succeeded",
                 extra={
@@ -162,6 +170,9 @@ class WorkerManager:
             )
         except Exception as exc:
             self.queue.mark_retry_or_failed(db, task.id, str(exc))
+            terminal_task = self.queue.get_task(db, task.id)
+            if terminal_task is not None and terminal_task.status == TaskStatus.FAILED:
+                self.workflows.handle_task_terminal(db, task.id)
             logger.exception(
                 "task failed",
                 extra={
@@ -170,4 +181,3 @@ class WorkerManager:
                     "queue_name": getattr(task, "queue_name", "default"),
                 },
             )
-

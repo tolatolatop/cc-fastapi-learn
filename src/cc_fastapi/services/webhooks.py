@@ -1,62 +1,91 @@
-from pathlib import Path
 from typing import Any
 
-from jinja2 import StrictUndefined, TemplateError
-from jinja2.sandbox import SandboxedEnvironment
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from cc_fastapi.db.models import AgentTask, WebhookDeduplicationKey, WebhookTrigger
-from cc_fastapi.services.queue import TaskQueueService
+from cc_fastapi.db.models import (
+    AgentTask,
+    TaskStatus,
+    WebhookDeduplicationKey,
+    WebhookTrigger,
+    WorkflowRun,
+    WorkflowRunStatus,
+    WorkflowStepRun,
+    WorkflowStepStatus,
+    WorkflowTaskLink,
+    utc_now,
+)
+from cc_fastapi.workflows import WorkflowEngine, build_default_workflow_engine
+from cc_fastapi.workflows.base import WorkflowEvent, WorkflowTemplateError
 
 
-class WebhookTemplateError(ValueError):
-    pass
+WebhookTemplateError = WorkflowTemplateError
 
 
 class WebhookService:
-    def __init__(self) -> None:
-        self.queue = TaskQueueService()
-        self.template_environment = SandboxedEnvironment(
-            autoescape=False,
-            undefined=StrictUndefined,
-        )
+    def __init__(self, workflows: WorkflowEngine | None = None) -> None:
+        self.workflows = workflows or build_default_workflow_engine()
 
-    def render_gitlab_prompt(
+    def _adopt_legacy_trigger(
         self,
-        template_path: str,
+        db: Session,
+        trigger: WebhookTrigger,
+        task: AgentTask | None,
         *,
-        payload: dict[str, Any],
-        event_type: str,
-        event_uuid: str | None,
-        webhook_uuid: str | None,
-        instance_url: str | None,
-    ) -> str:
-        webhook = {
-            "provider": "gitlab",
-            "event_type": event_type,
-            "event_uuid": event_uuid,
-            "webhook_uuid": webhook_uuid,
-            "instance_url": instance_url,
-        }
-        context = {
-            **payload,
-            "payload": payload,
-            "event_type": event_type,
-            "webhook": webhook,
-        }
+        prompt_template_path: str,
+        queue_name: str | None,
+    ) -> WorkflowRun:
+        now = utc_now()
+        if task is None:
+            run_status = WorkflowRunStatus.SKIPPED
+        elif task.status in {TaskStatus.QUEUED, TaskStatus.RUNNING}:
+            run_status = WorkflowRunStatus.RUNNING
+        elif task.status == TaskStatus.SUCCEEDED:
+            run_status = WorkflowRunStatus.SUCCEEDED
+        else:
+            run_status = WorkflowRunStatus.FAILED
+
+        run = WorkflowRun(
+            workflow_name="gitlab_prompt_task",
+            workflow_version="1",
+            provider=trigger.provider,
+            event_type=trigger.event_type,
+            event_uuid=trigger.event_uuid,
+            webhook_uuid=trigger.webhook_uuid,
+            instance_url=trigger.instance_url,
+            payload_json=trigger.payload_json,
+            config_json={"prompt_template_path": prompt_template_path, "queue_name": queue_name},
+            context_json={"legacy_adopted": True},
+            status=run_status,
+            skip_reason="legacy_trigger_without_task" if task is None else None,
+            webhook_trigger_id=trigger.id,
+            updated_at=now,
+            finished_at=now if run_status not in {WorkflowRunStatus.PLANNING, WorkflowRunStatus.RUNNING} else None,
+        )
+        db.add(run)
+        db.flush()
+        db.add(
+            WorkflowStepRun(
+                workflow_run_id=run.id,
+                step_name="before",
+                status=WorkflowStepStatus.SUCCEEDED,
+                output_json={"decision": "legacy_adopted", "task_id": task.id if task else None},
+                finished_at=now,
+            )
+        )
+        if task is not None:
+            db.add(WorkflowTaskLink(workflow_run_id=run.id, task_id=task.id, role="primary", ordinal=0))
         try:
-            template_source = Path(template_path).read_text(encoding="utf-8")
-        except (OSError, UnicodeError) as exc:
-            raise WebhookTemplateError(f"failed to load webhook prompt template: {template_path}") from exc
-        try:
-            prompt = self.template_environment.from_string(template_source).render(context).strip()
-        except TemplateError as exc:
-            raise WebhookTemplateError(f"failed to render webhook prompt: {exc}") from exc
-        if not prompt:
-            raise WebhookTemplateError("failed to render webhook prompt: rendered prompt is empty")
-        return prompt
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            existing_run = self.workflows.get_run_for_trigger(db, trigger.id)
+            if existing_run is None:
+                raise
+            return existing_run
+        db.refresh(run)
+        return run
 
     def _find_existing_trigger(
         self,
@@ -64,7 +93,7 @@ class WebhookService:
         *,
         provider: str,
         webhook_uuid: str | None,
-    ) -> tuple[WebhookTrigger, AgentTask] | None:
+    ) -> tuple[WebhookTrigger, AgentTask | None, WorkflowRun | None] | None:
         if webhook_uuid is None:
             return None
         trigger = db.scalar(
@@ -78,10 +107,11 @@ class WebhookService:
         )
         if trigger is None:
             return None
-        task = db.get(AgentTask, trigger.task_id)
-        if task is None:
+        task = db.get(AgentTask, trigger.task_id) if trigger.task_id else None
+        if trigger.task_id is not None and task is None:
             raise RuntimeError(f"webhook trigger references missing task: {trigger.task_id}")
-        return trigger, task
+        workflow_run = self.workflows.get_run_for_trigger(db, trigger.id)
+        return trigger, task, workflow_run
 
     def trigger_gitlab_task(
         self,
@@ -94,7 +124,7 @@ class WebhookService:
         instance_url: str | None,
         prompt_template_path: str,
         queue_name: str | None,
-    ) -> tuple[WebhookTrigger, AgentTask, bool]:
+    ) -> tuple[WebhookTrigger, AgentTask | None, bool, WorkflowRun]:
         provider = "gitlab"
         webhook_uuid = webhook_uuid.strip() if webhook_uuid and webhook_uuid.strip() else None
         existing = self._find_existing_trigger(
@@ -103,49 +133,46 @@ class WebhookService:
             webhook_uuid=webhook_uuid,
         )
         if existing is not None:
-            return *existing, True
+            trigger, task, workflow_run = existing
+            if workflow_run is None:
+                workflow_run = self._adopt_legacy_trigger(
+                    db,
+                    trigger,
+                    task,
+                    prompt_template_path=prompt_template_path,
+                    queue_name=queue_name,
+                )
+            return trigger, task, True, workflow_run
 
-        prompt = self.render_gitlab_prompt(
-            prompt_template_path,
-            payload=payload,
-            event_type=event_type,
-            event_uuid=event_uuid,
-            webhook_uuid=webhook_uuid,
-            instance_url=instance_url,
-        )
-        task_metadata = {
-            "trigger": "gitlab_webhook",
-            "gitlab": {
-                "event_type": event_type,
-                "event_uuid": event_uuid,
-                "webhook_uuid": webhook_uuid,
-                "instance_url": instance_url,
-            },
-        }
-        task = self.queue.create_task(
+        execution = self.workflows.start(
             db,
-            prompt=prompt,
-            model=None,
-            queue_name=queue_name,
-            metadata=task_metadata,
-            priority=0,
-            agent_mode=True,
-            unattended=True,
-            max_attempts=None,
-            commit=False,
+            WorkflowEvent(
+                provider=provider,
+                event_type=event_type,
+                payload=payload,
+                event_uuid=event_uuid,
+                webhook_uuid=webhook_uuid,
+                instance_url=instance_url,
+                config={
+                    "prompt_template_path": prompt_template_path,
+                    "queue_name": queue_name,
+                },
+            ),
         )
+        task = execution.tasks[0] if execution.tasks else None
         trigger = WebhookTrigger(
             provider=provider,
             event_type=event_type,
             event_uuid=event_uuid,
             webhook_uuid=webhook_uuid,
             instance_url=instance_url,
-            task_id=task.id,
+            task_id=task.id if task else None,
             payload_json=payload,
         )
         db.add(trigger)
+        db.flush()
+        execution.run.webhook_trigger_id = trigger.id
         if webhook_uuid is not None:
-            db.flush()
             db.add(
                 WebhookDeduplicationKey(
                     provider=provider,
@@ -164,10 +191,21 @@ class WebhookService:
             )
             if existing is None:
                 raise
-            return *existing, True
-        db.refresh(task)
+            existing_trigger, existing_task, existing_run = existing
+            if existing_run is None:
+                existing_run = self._adopt_legacy_trigger(
+                    db,
+                    existing_trigger,
+                    existing_task,
+                    prompt_template_path=prompt_template_path,
+                    queue_name=queue_name,
+                )
+            return existing_trigger, existing_task, True, existing_run
+        if task is not None:
+            db.refresh(task)
         db.refresh(trigger)
-        return trigger, task, False
+        db.refresh(execution.run)
+        return trigger, task, False, execution.run
 
     def list_triggers(self, db: Session, offset: int, limit: int) -> tuple[list[WebhookTrigger], int]:
         items = list(
@@ -180,3 +218,6 @@ class WebhookService:
         )
         total = db.scalar(select(func.count()).select_from(WebhookTrigger)) or 0
         return items, total
+
+    def get_workflow_run(self, db: Session, trigger_id: int) -> WorkflowRun | None:
+        return self.workflows.get_run_for_trigger(db, trigger_id)

@@ -152,11 +152,18 @@ function WebhookDetail({ record, taskStatus, onClose, onOpenTask }: WebhookDetai
             </div>
           </section>
 
-          <section className="linked-task-card">
-            <div className="linked-task-icon"><Layers3 size={18} /></div>
-            <div><span>关联 Agent 任务{taskStatus ? ` · ${TASK_STATUS_LABEL[taskStatus]}` : ''}</span><strong>TASK-{record.task_id.slice(0, 8).toUpperCase()}</strong></div>
-            <button className="button button-primary" onClick={() => onOpenTask(record.task_id)}>查看任务<ExternalLink size={14} /></button>
-          </section>
+          {record.task_id ? (
+            <section className="linked-task-card">
+              <div className="linked-task-icon"><Layers3 size={18} /></div>
+              <div><span>关联 Agent 任务{taskStatus ? ` · ${TASK_STATUS_LABEL[taskStatus]}` : ''}</span><strong>TASK-{record.task_id.slice(0, 8).toUpperCase()}</strong></div>
+              <button className="button button-primary" onClick={() => onOpenTask(record.task_id!)}>查看任务<ExternalLink size={14} /></button>
+            </section>
+          ) : (
+            <section className="workflow-skip-card">
+              <CircleAlert size={18} />
+              <div><span>工作流未创建任务</span><strong>{record.skip_reason || '事件已被前置规则跳过'}</strong></div>
+            </section>
+          )}
 
           <section className="detail-section payload-section">
             <div className="payload-heading"><h3>原始 Payload</h3><span><Braces size={13} />JSON</span></div>
@@ -223,7 +230,9 @@ export default function WebhookPage({ taskStatuses, onOpenTask, onOpenSettings }
         record.event_uuid || '',
         record.webhook_uuid || '',
         record.instance_url || '',
-        record.task_id,
+        record.task_id || '',
+        record.workflow_status || '',
+        record.skip_reason || '',
         summary.projectName,
         summary.ref,
         summary.actor,
@@ -338,10 +347,14 @@ export default function WebhookPage({ taskStatuses, onOpenTask, onOpenSettings }
                       <td><div className="webhook-subject"><strong>{summary.projectName}</strong><span><GitBranch size={12} />{summary.ref}<i /> <UserRound size={11} />{summary.actor}</span></div></td>
                       <td><div className="webhook-ids"><code title={record.event_uuid || ''}>{compactId(record.event_uuid)}</code><span title={record.webhook_uuid || ''}>{compactId(record.webhook_uuid)}</span></div></td>
                       <td>
-                        <button className="task-link" onClick={(event) => { event.stopPropagation(); onOpenTask(record.task_id) }}>
-                          {taskStatuses[record.task_id] && <i className={`task-dot task-${taskStatuses[record.task_id]}`} title={TASK_STATUS_LABEL[taskStatuses[record.task_id]]} />}
-                          TASK-{record.task_id.slice(0, 8).toUpperCase()}<ExternalLink size={12} />
-                        </button>
+                        {record.task_id ? (
+                          <button className="task-link" onClick={(event) => { event.stopPropagation(); onOpenTask(record.task_id!) }}>
+                            {taskStatuses[record.task_id] && <i className={`task-dot task-${taskStatuses[record.task_id]}`} title={TASK_STATUS_LABEL[taskStatuses[record.task_id]]} />}
+                            TASK-{record.task_id.slice(0, 8).toUpperCase()}<ExternalLink size={12} />
+                          </button>
+                        ) : (
+                          <span className="workflow-decision workflow-skipped" title={record.skip_reason || ''}><i />已跳过</span>
+                        )}
                       </td>
                       <td><button className="row-action" onClick={(event) => { event.stopPropagation(); setSelected(record) }} aria-label={`查看 Webhook ${record.id}`}><ChevronRight size={17} /></button></td>
                     </tr>
@@ -357,7 +370,7 @@ export default function WebhookPage({ taskStatuses, onOpenTask, onOpenSettings }
         )}
       </section>
 
-      {selected && <WebhookDetail record={selected} taskStatus={taskStatuses[selected.task_id]} onClose={() => setSelected(null)} onOpenTask={onOpenTask} />}
+      {selected && <WebhookDetail record={selected} taskStatus={selected.task_id ? taskStatuses[selected.task_id] : undefined} onClose={() => setSelected(null)} onOpenTask={onOpenTask} />}
     </>
   )
 }

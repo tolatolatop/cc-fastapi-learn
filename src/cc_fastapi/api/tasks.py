@@ -21,10 +21,12 @@ from cc_fastapi.schemas.tasks import (
 )
 from cc_fastapi.services.claude_client import validate_claude_agent_options
 from cc_fastapi.services.queue import QueueNotFoundError, TaskQueueService
+from cc_fastapi.workflows import build_default_workflow_engine
 
 
 router = APIRouter(prefix="/v1/agent-tasks", tags=["agent-tasks"])
 queue = TaskQueueService()
+workflow_engine = build_default_workflow_engine()
 logger = logging.getLogger(__name__)
 
 
@@ -152,6 +154,7 @@ def cancel_task(task_id: str, db: Session = Depends(get_db)) -> TaskCancelRespon
     if not task:
         logger.warning("cancel_task not found", extra={"event_type": "api_cancel_task_not_found", "task_id": task_id})
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
+    workflow_engine.handle_task_terminal(db, task.id)
     logger.info("task cancelled via api", extra={"event_type": "api_cancel_task", "task_id": task.id})
     return TaskCancelResponse(task_id=task.id, status=task.status)
 
@@ -173,6 +176,8 @@ def retry_task(task_id: str, db: Session = Depends(get_db)) -> TaskCreateRespons
             extra={"event_type": "api_retry_task_not_found", "task_id": task_id},
         )
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
+
+    workflow_engine.handle_task_retry(db, task_id, task.id)
 
     logger.info(
         "task retried via api",
