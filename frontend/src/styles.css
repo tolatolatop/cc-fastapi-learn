@@ -30,6 +30,7 @@
 }
 
 html {
+  font-size: 150%;
   min-width: 320px;
   min-height: 100%;
   scroll-behavior: smooth;
@@ -161,7 +162,7 @@ select:focus-visible,
 
 .brand strong {
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 15px;
+  font-size: 0.9375rem;
   font-weight: 650;
   letter-spacing: -0.02em;
 }
@@ -170,7 +171,7 @@ select:focus-visible,
   margin-top: 2px;
   color: var(--sidebar-muted);
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 8px;
+  font-size: 0.5rem;
   font-weight: 650;
   letter-spacing: 0.18em;
 }
@@ -188,7 +189,7 @@ select:focus-visible,
 .sidebar-queues > p {
   margin: 0 10px 9px;
   color: #6f7b7e;
-  font-size: 10px;
+  font-size: 0.625rem;
   font-weight: 600;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -223,7 +224,7 @@ select:focus-visible,
 
 .nav-item span {
   flex: 1;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 500;
 }
 
@@ -234,7 +235,7 @@ select:focus-visible,
   background: #3b474a;
   border-radius: 9px;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 10px;
+  font-size: 0.625rem;
   font-weight: 600;
   text-align: center;
 }
@@ -279,7 +280,7 @@ select:focus-visible,
 .sidebar-queues button span {
   overflow: hidden;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 500;
   text-overflow: ellipsis;
 }
@@ -287,7 +288,7 @@ select:focus-visible,
 .sidebar-queues button small {
   color: #6f7b7e;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 10px;
+  font-size: 0.625rem;
 }
 
 .sidebar-status {
@@ -335,7 +336,7 @@ select:focus-visible,
 }
 
 .sidebar-status strong {
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 500;
 }
 
@@ -343,7 +344,7 @@ select:focus-visible,
   margin-top: 2px;
   color: #6f7b7e;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 9px;
+  font-size: 0.5625rem;
 }
 
 .sidebar-scrim {
@@ -374,7 +375,7 @@ main {
   align-items: center;
   gap: 7px;
   color: #8b9599;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .breadcrumb strong {
@@ -394,7 +395,7 @@ main {
   gap: 6px;
   margin-right: 5px;
   color: #8a9599;
-  font-size: 10px;
+  font-size: 0.625rem;
 }
 
 .icon-button {
@@ -428,7 +429,7 @@ main {
   justify-content: center;
   gap: 8px;
   padding: 0 15px;
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 600;
   border: 1px solid transparent;
   border-radius: 8px;
@@ -512,7 +513,7 @@ main {
   margin: 0 0 8px;
   color: var(--blue);
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 9px;
+  font-size: 0.5625rem;
   font-weight: 650;
   letter-spacing: 0.17em;
 }
@@ -521,7 +522,7 @@ main {
   margin: 0;
   color: var(--ink);
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: clamp(33px, 3.1vw, 47px);
+  font-size: clamp(2.0625rem, 4.65vw, 2.9375rem);
   font-weight: 590;
   letter-spacing: -0.055em;
   line-height: 1.02;
@@ -530,7 +531,7 @@ main {
 .page-heading > div > p:last-child {
   margin: 11px 0 0;
   color: #657175;
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .queue-rail {
@@ -577,7 +578,7 @@ main {
   gap: 7px;
   color: #99a5a8;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 8px;
+  font-size: 0.5rem;
   font-weight: 650;
   letter-spacing: 0.19em;
 }
@@ -598,7 +599,7 @@ main {
 
 .rail-summary strong {
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 23px;
+  font-size: 1.4375rem;
   font-variant-numeric: tabular-nums;
   font-weight: 560;
   line-height: 1;
@@ -607,7 +608,7 @@ main {
 .rail-summary div span {
   margin-top: 4px;
   color: #879397;
-  font-size: 9px;
+  font-size: 0.5625rem;
 }
 
 .rail-track {
@@ -693,7 +694,7 @@ main {
   width: 100%;
   overflow: hidden;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 560;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -702,7 +703,7 @@ main {
 .rail-node small {
   margin-top: 4px;
   color: #748084;
-  font-size: 8px;
+  font-size: 0.5rem;
   white-space: nowrap;
 }
 
@@ -717,7 +718,7 @@ main {
 
 .rail-clock strong {
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 520;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.03em;
@@ -727,7 +728,7 @@ main {
   margin-top: 5px;
   color: #6f7c7f;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 7px;
+  font-size: 0.4375rem;
   letter-spacing: 0.13em;
 }
 
@@ -766,14 +767,14 @@ main {
 
 .panel-summary span {
   color: #647075;
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 500;
 }
 
 .panel-summary strong {
   color: #283336;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 27px;
+  font-size: 1.6875rem;
   font-weight: 560;
   font-variant-numeric: tabular-nums;
   line-height: 1;
@@ -791,7 +792,7 @@ main {
   grid-column: 1 / -1;
   margin-top: 8px;
   color: #9aa3a6;
-  font-size: 9px;
+  font-size: 0.5625rem;
 }
 
 .panel-toolbar {
@@ -820,7 +821,7 @@ main {
   color: #7c878b;
   background: none;
   border: 0;
-  font-size: 11px;
+  font-size: 0.6875rem;
   white-space: nowrap;
 }
 
@@ -854,7 +855,7 @@ main {
   background: #edf0f1;
   border-radius: 8px;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 8px;
+  font-size: 0.5rem;
   text-align: center;
 }
 
@@ -895,7 +896,7 @@ main {
   background: none;
   border: 0;
   outline: 0;
-  font-size: 10px;
+  font-size: 0.625rem;
 }
 
 .search-box input::placeholder {
@@ -918,7 +919,7 @@ main {
   background: transparent;
   border: 0;
   outline: 0;
-  font-size: 10px;
+  font-size: 0.625rem;
 }
 
 .toolbar-refresh {
@@ -942,7 +943,7 @@ main {
   padding: 0 12px;
   color: #9aa3a6;
   background: #f3f5f5;
-  font-size: 8px;
+  font-size: 0.5rem;
   font-weight: 600;
   letter-spacing: 0.1em;
   text-align: left;
@@ -982,7 +983,7 @@ main {
   overflow: hidden;
   padding: 0 12px;
   color: #536064;
-  font-size: 10px;
+  font-size: 0.625rem;
   white-space: nowrap;
 }
 
@@ -996,7 +997,7 @@ main {
 .task-name strong {
   overflow: hidden;
   color: #2e3a3d;
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 500;
   line-height: 1.25;
   text-overflow: ellipsis;
@@ -1007,7 +1008,7 @@ main {
   overflow: hidden;
   color: #9ca5a8;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 8px;
+  font-size: 0.5rem;
   text-overflow: ellipsis;
   text-transform: uppercase;
 }
@@ -1019,7 +1020,7 @@ main {
   padding: 4px 8px;
   border: 1px solid transparent;
   border-radius: 10px;
-  font-size: 9px;
+  font-size: 0.5625rem;
   font-weight: 500;
 }
 
@@ -1077,7 +1078,7 @@ main {
   border: 1px solid #e2e6e7;
   border-radius: 5px;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 9px;
+  font-size: 0.5625rem;
   text-overflow: ellipsis;
 }
 
@@ -1128,7 +1129,7 @@ main {
   color: #929c9f;
   background: #f6f7f7;
   border-top: 1px solid var(--line);
-  font-size: 9px;
+  font-size: 0.5625rem;
 }
 
 .panel-footer span:last-child {
@@ -1155,7 +1156,7 @@ main {
 
 .state-message strong {
   color: #445155;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 600;
 }
 
@@ -1163,7 +1164,7 @@ main {
   max-width: 390px;
   margin: 6px 0 16px;
   color: #919b9e;
-  font-size: 11px;
+  font-size: 0.6875rem;
   line-height: 1.6;
 }
 
@@ -1236,7 +1237,7 @@ main {
   margin: 0;
   color: var(--ink);
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 24px;
+  font-size: 1.5rem;
   font-weight: 590;
   letter-spacing: -0.04em;
 }
@@ -1244,7 +1245,7 @@ main {
 .modal-head > div > p:last-child {
   margin: 7px 0 0;
   color: #768185;
-  font-size: 11px;
+  font-size: 0.6875rem;
 }
 
 .create-modal form,
@@ -1261,7 +1262,7 @@ main {
 
 .field > span {
   color: #455155;
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 600;
 }
 
@@ -1281,14 +1282,14 @@ main {
 .field select {
   height: 42px;
   padding: 0 12px;
-  font-size: 11px;
+  font-size: 0.6875rem;
 }
 
 .field textarea {
   min-height: 152px;
   padding: 13px 15px 25px;
   resize: vertical;
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.75;
 }
 
@@ -1306,7 +1307,7 @@ main {
 
 .field small {
   color: #949da0;
-  font-size: 9px;
+  font-size: 0.5625rem;
   line-height: 1.5;
 }
 
@@ -1334,7 +1335,7 @@ main {
   color: #677377;
   background: none;
   border: 0;
-  font-size: 10px;
+  font-size: 0.625rem;
   font-weight: 500;
   text-align: left;
 }
@@ -1412,14 +1413,14 @@ main {
 
 .switch-row strong {
   color: #3d494d;
-  font-size: 10px;
+  font-size: 0.625rem;
   font-weight: 600;
 }
 
 .switch-row small {
   margin-top: 2px;
   color: #8e989b;
-  font-size: 9px;
+  font-size: 0.5625rem;
 }
 
 .inline-error {
@@ -1432,7 +1433,7 @@ main {
   background: var(--coral-pale);
   border: 1px solid #f1ccc5;
   border-radius: 7px;
-  font-size: 10px;
+  font-size: 0.625rem;
   line-height: 1.5;
 }
 
@@ -1519,7 +1520,7 @@ main {
 .drawer-kicker > span:last-child {
   color: #7b878a;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 9px;
+  font-size: 0.5625rem;
 }
 
 .drawer-intro h2 {
@@ -1528,7 +1529,7 @@ main {
   margin: 0 0 12px;
   color: #243034;
   font-family: 'Space Grotesk Variable', 'IBM Plex Sans', sans-serif;
-  font-size: 21px;
+  font-size: 1.3125rem;
   font-weight: 570;
   letter-spacing: -0.025em;
   line-height: 1.45;
@@ -1545,7 +1546,7 @@ main {
   background: none;
   border: 0;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 9px;
+  font-size: 0.5625rem;
   letter-spacing: 0.04em;
 }
 
@@ -1571,7 +1572,7 @@ main {
   color: #7a8589;
   background: none;
   border: 0;
-  font-size: 10px;
+  font-size: 0.625rem;
 }
 
 .drawer-tabs button::after {
@@ -1600,7 +1601,7 @@ main {
   background: #edf0f1;
   border-radius: 8px;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 8px;
+  font-size: 0.5rem;
 }
 
 .drawer-body {
@@ -1618,7 +1619,7 @@ main {
 .detail-section h3 {
   margin: 0 0 14px;
   color: #758084;
-  font-size: 9px;
+  font-size: 0.5625rem;
   font-weight: 600;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -1657,7 +1658,7 @@ main {
 .detail-grid dt {
   margin-bottom: 5px;
   color: #969fa2;
-  font-size: 8px;
+  font-size: 0.5rem;
 }
 
 .detail-grid dd {
@@ -1665,7 +1666,7 @@ main {
   margin: 0;
   color: #3d494d;
   font-family: 'Space Grotesk Variable', 'IBM Plex Sans', sans-serif;
-  font-size: 10px;
+  font-size: 0.625rem;
   font-variant-numeric: tabular-nums;
   font-weight: 520;
   text-overflow: ellipsis;
@@ -1700,12 +1701,12 @@ main {
 
 .flag-list span {
   color: #536064;
-  font-size: 10px;
+  font-size: 0.625rem;
 }
 
 .flag-list strong {
   color: var(--green);
-  font-size: 9px;
+  font-size: 0.5625rem;
   font-weight: 600;
 }
 
@@ -1731,14 +1732,14 @@ main {
 }
 
 .error-card strong {
-  font-size: 10px;
+  font-size: 0.625rem;
   font-weight: 600;
 }
 
 .error-card p {
   margin: 4px 0 0;
   color: #7c5a54;
-  font-size: 9px;
+  font-size: 0.5625rem;
   line-height: 1.6;
   word-break: break-word;
 }
@@ -1758,7 +1759,7 @@ main {
   border: 1px solid #313c3f;
   border-radius: 8px;
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
-  font-size: 9px;
+  font-size: 0.5625rem;
   line-height: 1.65;
   white-space: pre-wrap;
   word-break: break-word;
@@ -1791,7 +1792,7 @@ main {
   align-items: center;
   gap: 7px;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 9px;
+  font-size: 0.5625rem;
 }
 
 .stream-head i {
@@ -1809,7 +1810,7 @@ main {
 
 .stream-head small {
   color: #768286;
-  font-size: 8px;
+  font-size: 0.5rem;
 }
 
 .stream-messages {
@@ -1822,7 +1823,7 @@ main {
   color: #bfc9cb;
   border-bottom: 1px solid #303b3e;
   font-family: 'SFMono-Regular', Consolas, monospace;
-  font-size: 9px;
+  font-size: 0.5625rem;
   line-height: 1.75;
   white-space: pre-wrap;
   word-break: break-word;
@@ -1849,13 +1850,13 @@ main {
 
 .detail-empty strong {
   color: #acb7b9;
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 500;
 }
 
 .detail-empty p {
   margin: 5px 0 0;
-  font-size: 9px;
+  font-size: 0.5625rem;
 }
 
 .timeline {
@@ -1917,21 +1918,21 @@ main {
 .timeline-content strong {
   color: #3f4b4f;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 10px;
+  font-size: 0.625rem;
   font-weight: 570;
 }
 
 .timeline-content time {
   color: #98a1a4;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 8px;
+  font-size: 0.5rem;
   font-variant-numeric: tabular-nums;
 }
 
 .timeline-content p {
   margin: 4px 0 0;
   color: #788387;
-  font-size: 9px;
+  font-size: 0.5625rem;
   line-height: 1.55;
 }
 
@@ -1954,7 +1955,7 @@ main {
   flex: 1;
   margin: 0;
   color: #929c9f;
-  font-size: 8px;
+  font-size: 0.5rem;
   line-height: 1.45;
 }
 
@@ -1973,7 +1974,7 @@ main {
   border: 1px solid #3d4a4e;
   border-radius: 9px;
   box-shadow: 0 13px 35px rgba(18, 30, 34, 0.24);
-  font-size: 11px;
+  font-size: 0.6875rem;
   animation: toast-in 180ms ease-out;
 }
 
@@ -2131,12 +2132,12 @@ main {
   }
 
   .page-heading h1 {
-    font-size: 33px;
+    font-size: 2.0625rem;
   }
 
   .page-heading > div > p:last-child {
     max-width: 230px;
-    font-size: 11px;
+    font-size: 0.6875rem;
   }
 
   .mobile-create {
@@ -2187,11 +2188,11 @@ main {
   }
 
   .rail-summary strong {
-    font-size: 17px;
+    font-size: 1.0625rem;
   }
 
   .rail-summary div span {
-    font-size: 8px;
+    font-size: 0.5rem;
   }
 
   .rail-track {
@@ -2233,7 +2234,7 @@ main {
   }
 
   .panel-summary strong {
-    font-size: 23px;
+    font-size: 1.4375rem;
   }
 
   .panel-toolbar {
@@ -2333,7 +2334,7 @@ main {
   }
 
   .modal-head h2 {
-    font-size: 21px;
+    font-size: 1.3125rem;
   }
 
   .create-modal form,
@@ -2461,7 +2462,7 @@ main {
   border-radius: 10px 10px 12px 12px;
   box-shadow: 0 7px 17px rgba(232, 93, 38, 0.21);
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 10px;
+  font-size: 0.625rem;
   font-weight: 700;
   letter-spacing: -0.04em;
 }
@@ -2478,7 +2479,7 @@ main {
 .ingress-gateway span,
 .ingress-target span {
   color: #778488;
-  font-size: 8px;
+  font-size: 0.5rem;
 }
 
 .ingress-source strong,
@@ -2487,7 +2488,7 @@ main {
   margin-top: 4px;
   overflow: hidden;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 560;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2540,7 +2541,7 @@ main {
   overflow: hidden;
   color: #707d80;
   font-family: 'SFMono-Regular', Consolas, monospace;
-  font-size: 7px;
+  font-size: 0.4375rem;
   text-align: center;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2567,7 +2568,7 @@ main {
 
 .ingress-gateway strong {
   color: #f4f7f7;
-  font-size: 22px;
+  font-size: 1.375rem;
   font-variant-numeric: tabular-nums;
   line-height: 1;
 }
@@ -2601,7 +2602,7 @@ main {
   color: #748185;
   border-left: 1px solid #374245;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 8px;
+  font-size: 0.5rem;
   white-space: nowrap;
 }
 
@@ -2640,7 +2641,7 @@ main {
   margin: 0;
   color: #273336;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 20px;
+  font-size: 1.25rem;
   font-weight: 580;
   letter-spacing: -0.035em;
 }
@@ -2649,7 +2650,7 @@ main {
   display: block;
   margin-top: 5px;
   color: #929c9f;
-  font-size: 9px;
+  font-size: 0.5625rem;
 }
 
 .webhook-search-tools {
@@ -2686,7 +2687,7 @@ main {
   background: none;
   border: 0;
   outline: 0;
-  font-size: 10px;
+  font-size: 0.625rem;
 }
 
 .webhook-search input::placeholder {
@@ -2709,7 +2710,7 @@ main {
   background: transparent;
   border: 0;
   outline: 0;
-  font-size: 10px;
+  font-size: 0.625rem;
 }
 
 .webhook-results-meta {
@@ -2721,7 +2722,7 @@ main {
   color: #8d979a;
   background: #f3f5f5;
   border-bottom: 1px solid #e0e5e6;
-  font-size: 9px;
+  font-size: 0.5625rem;
 }
 
 .webhook-results-meta strong {
@@ -2735,7 +2736,7 @@ main {
   color: var(--blue);
   background: none;
   border: 0;
-  font-size: 9px;
+  font-size: 0.5625rem;
 }
 
 .webhook-list-wrap {
@@ -2755,7 +2756,7 @@ main {
   color: #9aa3a6;
   background: #fafbfb;
   border-bottom: 1px solid #e1e5e6;
-  font-size: 8px;
+  font-size: 0.5rem;
   font-weight: 600;
   letter-spacing: 0.1em;
   text-align: left;
@@ -2790,7 +2791,7 @@ main {
   overflow: hidden;
   padding: 0 12px;
   color: #596569;
-  font-size: 10px;
+  font-size: 0.625rem;
 }
 
 .webhook-time,
@@ -2804,7 +2805,7 @@ main {
 .webhook-time strong {
   color: #475357;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 550;
   font-variant-numeric: tabular-nums;
 }
@@ -2813,7 +2814,7 @@ main {
   margin-top: 4px;
   color: #9ba4a7;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 8px;
+  font-size: 0.5rem;
 }
 
 .event-chip {
@@ -2825,7 +2826,7 @@ main {
   padding: 5px 8px;
   border: 1px solid transparent;
   border-radius: 10px;
-  font-size: 9px;
+  font-size: 0.5625rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2865,7 +2866,7 @@ main {
 .webhook-subject strong {
   overflow: hidden;
   color: #374347;
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 550;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2879,7 +2880,7 @@ main {
   margin-top: 6px;
   color: #8e989b;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 8px;
+  font-size: 0.5rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2894,7 +2895,7 @@ main {
 .webhook-ids {
   gap: 5px;
   font-family: 'SFMono-Regular', Consolas, monospace;
-  font-size: 8px;
+  font-size: 0.5rem;
 }
 
 .webhook-ids code {
@@ -2923,7 +2924,7 @@ main {
   border: 1px solid #dae2ff;
   border-radius: 6px;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 8px;
+  font-size: 0.5rem;
   font-weight: 550;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2955,7 +2956,7 @@ main {
 .drawer-record-id {
   color: #929c9f;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 9px;
+  font-size: 0.5625rem;
   letter-spacing: 0.08em;
 }
 
@@ -2980,7 +2981,7 @@ main {
   background: #fff0e9;
   border: 1px solid #f4d1c2;
   border-radius: 10px;
-  font-size: 9px;
+  font-size: 0.5625rem;
   text-transform: capitalize;
 }
 
@@ -2993,14 +2994,14 @@ main {
 
 .webhook-provider small {
   color: #7e898d;
-  font-size: 9px;
+  font-size: 0.5625rem;
 }
 
 .webhook-detail-intro h2 {
   margin: 0;
   color: #263236;
   font-family: 'Space Grotesk Variable', 'IBM Plex Sans', sans-serif;
-  font-size: 23px;
+  font-size: 1.4375rem;
   font-weight: 580;
   letter-spacing: -0.035em;
   line-height: 1.35;
@@ -3013,7 +3014,7 @@ main {
   margin: 10px 0 0;
   color: #7b878a;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 10px;
+  font-size: 0.625rem;
 }
 
 .webhook-detail-body {
@@ -3055,14 +3056,14 @@ main {
 
 .webhook-identifiers span {
   color: #8e989b;
-  font-size: 8px;
+  font-size: 0.5rem;
 }
 
 .webhook-identifiers code {
   overflow: hidden;
   color: #465256;
   font-family: 'SFMono-Regular', Consolas, monospace;
-  font-size: 8px;
+  font-size: 0.5rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3114,7 +3115,7 @@ main {
 
 .linked-task-card span {
   color: #7b87a8;
-  font-size: 8px;
+  font-size: 0.5rem;
 }
 
 .linked-task-card strong {
@@ -3122,14 +3123,14 @@ main {
   overflow: hidden;
   color: #3e4f81;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 9px;
+  font-size: 0.5625rem;
   text-overflow: ellipsis;
 }
 
 .linked-task-card .button {
   min-height: 34px;
   padding: 0 11px;
-  font-size: 9px;
+  font-size: 0.5625rem;
 }
 
 .payload-section {
@@ -3153,7 +3154,7 @@ main {
   gap: 5px;
   color: #8d979a;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 8px;
+  font-size: 0.5rem;
 }
 
 .webhook-payload {
@@ -3229,11 +3230,11 @@ main {
   }
 
   .ingress-source strong {
-    font-size: 10px;
+    font-size: 0.625rem;
   }
 
   .ingress-gateway strong {
-    font-size: 18px;
+    font-size: 1.125rem;
   }
 
   .ingress-arrow,
