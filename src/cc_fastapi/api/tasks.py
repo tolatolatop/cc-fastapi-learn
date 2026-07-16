@@ -21,10 +21,13 @@ from cc_fastapi.schemas.tasks import (
 )
 from cc_fastapi.services.claude_client import validate_claude_agent_options
 from cc_fastapi.services.queue import QueueNotFoundError, TaskQueueService
+from cc_fastapi.workflows import build_default_workflow_engine
+from cc_fastapi.workflows.base import WorkflowRetryConflictError
 
 
 router = APIRouter(prefix="/v1/agent-tasks", tags=["agent-tasks"])
 queue = TaskQueueService()
+workflow_engine = build_default_workflow_engine()
 logger = logging.getLogger(__name__)
 
 
@@ -153,6 +156,7 @@ def cancel_task(task_id: str, db: Session = Depends(get_db)) -> TaskCancelRespon
     if not task:
         logger.warning("cancel_task not found", extra={"event_type": "api_cancel_task_not_found", "task_id": task_id})
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
+    workflow_engine.handle_task_terminal(db, task.id)
     logger.info("task cancelled via api", extra={"event_type": "api_cancel_task", "task_id": task.id})
     return TaskCancelResponse(task_id=task.id, status=task.status)
 
@@ -160,13 +164,19 @@ def cancel_task(task_id: str, db: Session = Depends(get_db)) -> TaskCancelRespon
 @router.post("/{task_id}/retry", response_model=TaskCreateResponse, dependencies=[Depends(require_token)])
 def retry_task(task_id: str, db: Session = Depends(get_db)) -> TaskCreateResponse:
     try:
-        task = queue.retry_task(db, task_id)
+        task = workflow_engine.retry_task(db, task_id)
     except QueueNotFoundError as exc:
         logger.warning(
             "retry_task queue resolve failed",
             extra={"event_type": "api_retry_task_queue_not_found", "task_id": task_id, "queue_name": exc.queue_name},
         )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except WorkflowRetryConflictError as exc:
+        logger.warning(
+            "retry_task conflict",
+            extra={"event_type": "api_retry_task_conflict", "task_id": task_id},
+        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
     if task is None:
         logger.warning(

@@ -31,6 +31,10 @@ class ClaudeExecutionError(RuntimeError):
         self.cli_stderr = cli_stderr
 
 
+class AgentTaskCancelledError(RuntimeError):
+    pass
+
+
 def validate_claude_agent_options(options: dict[str, Any] | None) -> dict[str, Any]:
     """Extension hook: currently pass-through without strict validation."""
     if options is None:
@@ -114,6 +118,7 @@ class ClaudeClient:
         unattended: bool = True,
         on_message_update: Callable[[list[str]], None] | None = None,
         on_session_id: Callable[[str], None] | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
         if not self.settings.anthropic_api_key:
             raise RuntimeError("ANTHROPIC_API_KEY is missing")
@@ -128,6 +133,7 @@ class ClaudeClient:
                 unattended=unattended,
                 on_message_update=on_message_update,
                 on_session_id=on_session_id,
+                should_cancel=should_cancel,
             )
         )
 
@@ -142,6 +148,7 @@ class ClaudeClient:
         unattended: bool,
         on_message_update: Callable[[list[str]], None] | None,
         on_session_id: Callable[[str], None] | None,
+        should_cancel: Callable[[], bool] | None,
     ) -> dict[str, Any]:
         system_note = (
             "You are running in Claude Agent task mode. "
@@ -226,6 +233,8 @@ class ClaudeClient:
             stream: AsyncIterator[Any] = query(prompt=prompt, options=options)
             logger.debug("claude sdk stream started", extra={"event_type": "claude_stream_start"})
             async for msg in stream:
+                if should_cancel is not None and should_cancel():
+                    raise AgentTaskCancelledError("task cancelled while agent was running")
                 message_session_id = self._extract_session_id(msg)
                 if message_session_id and message_session_id != session_id:
                     session_id = message_session_id
@@ -248,6 +257,10 @@ class ClaudeClient:
                         raise RuntimeError(
                             f"Claude Code returned an error result ({msg.subtype}): {result_detail}"
                         )
+            if should_cancel is not None and should_cancel():
+                raise AgentTaskCancelledError("task cancelled while agent was running")
+        except AgentTaskCancelledError:
+            raise
         except Exception as exc:
             cli_stderr = _bounded_stderr(stderr_lines)
             reported_stderr = getattr(exc, "stderr", None)

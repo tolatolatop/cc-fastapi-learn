@@ -6,7 +6,7 @@ from claude_agent_sdk.types import AssistantMessage, ResultMessage, SystemMessag
 
 from cc_fastapi.core.config import get_settings
 from cc_fastapi.services import claude_client as claude_client_module
-from cc_fastapi.services.claude_client import ClaudeClient, ClaudeExecutionError
+from cc_fastapi.services.claude_client import AgentTaskCancelledError, ClaudeClient, ClaudeExecutionError
 
 
 def test_claude_client_uses_agent_options(monkeypatch):
@@ -256,3 +256,24 @@ def test_claude_client_reports_error_result_detail(monkeypatch):
         )
 
     assert captured.value.error_type == "RuntimeError"
+
+
+def test_claude_client_stops_stream_when_task_is_cancelled(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    get_settings.cache_clear()
+
+    async def fake_query(*, prompt, options, transport=None):
+        yield AssistantMessage(content=[TextBlock(text="should not be processed")], model="claude-test")
+
+    monkeypatch.setattr(claude_client_module, "query", fake_query)
+
+    client = ClaudeClient()
+    with pytest.raises(AgentTaskCancelledError, match="task cancelled"):
+        client.run_agent_task(
+            prompt="stream",
+            model="claude-test",
+            metadata=None,
+            agent_mode=True,
+            unattended=True,
+            should_cancel=lambda: True,
+        )

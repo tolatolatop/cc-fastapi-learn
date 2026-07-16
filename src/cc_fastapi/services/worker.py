@@ -8,9 +8,10 @@ from sqlalchemy.orm import Session
 from cc_fastapi.core.config import get_settings
 from cc_fastapi.core.queue_config import get_queue_config
 from cc_fastapi.db.session import SessionLocal
-from cc_fastapi.services.claude_client import ClaudeClient
+from cc_fastapi.services.claude_client import AgentTaskCancelledError, ClaudeClient
 from cc_fastapi.services.queue import TaskQueueService
 from cc_fastapi.db.models import TaskStatus
+from cc_fastapi.workflows import build_default_workflow_engine
 
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,7 @@ class WorkerManager:
         self.settings = get_settings()
         self.queue = TaskQueueService()
         self.client = ClaudeClient()
+        self.workflows = build_default_workflow_engine()
         self.stop_event = threading.Event()
         self.threads: list[threading.Thread] = []
         self._empty_log_last_ts: dict[str, float] = {}
@@ -59,14 +61,18 @@ class WorkerManager:
     def run_startup_recovery(self) -> int:
         db = SessionLocal()
         try:
-            return self.queue.recover_orphan_running_on_startup(db)
+            recovered = self.queue.recover_orphan_running_on_startup(db)
+            self.workflows.reconcile_terminal_tasks(db)
+            return recovered
         finally:
             db.close()
 
     def abandon_running_on_shutdown(self) -> int:
         db = SessionLocal()
         try:
-            return self.queue.abandon_running_on_shutdown(db)
+            abandoned = self.queue.abandon_running_on_shutdown(db)
+            self.workflows.reconcile_terminal_tasks(db)
+            return abandoned
         finally:
             db.close()
 
@@ -116,6 +122,7 @@ class WorkerManager:
     def _maintenance(self, db: Session) -> None:
         queued_count = self.queue.abandon_expired_queued(db)
         running_count = self.queue.abandon_expired_running(db)
+        self.workflows.reconcile_terminal_tasks(db)
         if queued_count or running_count:
             logger.warning(
                 "worker maintenance abandoned tasks",
@@ -149,8 +156,20 @@ class WorkerManager:
                 unattended=task.unattended,
                 on_message_update=lambda messages: self.queue.upsert_task_context(db, task.id, messages),
                 on_session_id=lambda session_id: self.queue.set_task_session_id(db, task.id, session_id),
+                should_cancel=lambda: self.queue.is_task_cancelled(db, task.id),
             )
-            self.queue.mark_success(db, task.id, result)
+            transitioned = self.queue.mark_success(db, task.id, result)
+            self.workflows.handle_task_terminal(db, task.id)
+            if not transitioned:
+                logger.info(
+                    "task result ignored after concurrent terminal transition",
+                    extra={
+                        "task_id": task.id,
+                        "event_type": "terminal_transition_lost",
+                        "queue_name": getattr(task, "queue_name", "default"),
+                    },
+                )
+                return
             logger.info(
                 "task succeeded",
                 extra={
@@ -161,6 +180,17 @@ class WorkerManager:
                     "duration_ms": int((time.monotonic() - started_at) * 1000),
                 },
             )
+        except AgentTaskCancelledError:
+            db.rollback()
+            self.workflows.handle_task_terminal(db, task.id)
+            logger.info(
+                "task execution stopped after cancellation",
+                extra={
+                    "task_id": task.id,
+                    "event_type": "cancelled",
+                    "queue_name": getattr(task, "queue_name", "default"),
+                },
+            )
         except Exception as exc:
             error_metadata = {
                 "exception_type": getattr(exc, "error_type", type(exc).__name__),
@@ -168,6 +198,9 @@ class WorkerManager:
                 "has_cli_stderr": bool(getattr(exc, "cli_stderr", "")),
             }
             self.queue.mark_retry_or_failed(db, task.id, str(exc), error_metadata)
+            terminal_task = self.queue.get_task(db, task.id)
+            if terminal_task is not None and terminal_task.status == TaskStatus.FAILED:
+                self.workflows.handle_task_terminal(db, task.id)
             logger.exception(
                 "task failed",
                 extra={

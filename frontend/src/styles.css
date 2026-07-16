@@ -3087,6 +3087,29 @@ main {
 .task-dot.task-succeeded { background: var(--green); }
 .task-dot.task-failed { background: var(--coral); }
 
+.workflow-decision {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  font-size: 9px;
+  font-weight: 500;
+}
+
+.workflow-decision i {
+  width: 5px;
+  height: 5px;
+  background: currentColor;
+  border-radius: 50%;
+}
+
+.workflow-skipped {
+  color: #89671f;
+  background: var(--amber-pale);
+  border: 1px solid #eadbad;
+}
+
 .webhook-empty > svg {
   color: #e26330;
 }
@@ -3269,6 +3292,36 @@ main {
   min-height: 34px;
   padding: 0 11px;
   font-size: 0.5625rem;
+}
+
+.workflow-skip-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 15px;
+  margin-top: 25px;
+  color: #93691c;
+  background: var(--amber-pale);
+  border: 1px solid #eadbad;
+  border-radius: 9px;
+}
+
+.workflow-skip-card > div {
+  display: flex;
+  flex-direction: column;
+}
+
+.workflow-skip-card span {
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.workflow-skip-card strong {
+  margin-top: 5px;
+  color: #725f3b;
+  font-size: 9px;
+  font-weight: 400;
+  line-height: 1.5;
 }
 
 .payload-section {

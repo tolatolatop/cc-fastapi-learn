@@ -21,7 +21,8 @@ RUN pip install --no-cache-dir \
     "claude-agent-sdk>=0.1.44,<0.2.0" \
     "jinja2>=3.1.5,<4.0.0" \
     "pyyaml>=6.0.2,<7.0.0" \
-    "pymysql>=1.1.1,<2.0.0"
+    "pymysql>=1.1.1,<2.0.0" \
+    "psycopg[binary]>=3.3.3,<4.0.0"
 
 COPY --chown=ccagent:ccagent src ./src
 COPY --chown=ccagent:ccagent config ./config

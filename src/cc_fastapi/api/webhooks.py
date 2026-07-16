@@ -41,7 +41,7 @@ def receive_gitlab_webhook(
 ) -> GitLabWebhookResponse:
     settings = get_settings()
     try:
-        trigger, task, deduplicated = webhooks.trigger_gitlab_task(
+        trigger, task, deduplicated, workflow_run = webhooks.trigger_gitlab_task(
             db,
             payload=payload,
             event_type=x_gitlab_event,
@@ -64,21 +64,31 @@ def receive_gitlab_webhook(
         )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
+    log_event_type = (
+        "gitlab_webhook_task_deduplicated"
+        if deduplicated
+        else "gitlab_webhook_workflow_skipped"
+        if task is None
+        else "gitlab_webhook_task_created"
+    )
     logger.info(
-        "gitlab webhook task deduplicated" if deduplicated else "gitlab webhook task created",
+        log_event_type.replace("_", " "),
         extra={
-            "event_type": "gitlab_webhook_task_deduplicated" if deduplicated else "gitlab_webhook_task_created",
-            "task_id": task.id,
-            "queue_name": task.queue_name,
+            "event_type": log_event_type,
+            "task_id": task.id if task else None,
+            "queue_name": task.queue_name if task else None,
             "reason": f"webhook_id={trigger.id}",
         },
     )
     return GitLabWebhookResponse(
         webhook_id=trigger.id,
-        task_id=task.id,
-        status=task.status,
-        queue_name=task.queue_name,
+        task_id=task.id if task else None,
+        status=task.status if task else None,
+        queue_name=task.queue_name if task else None,
         deduplicated=deduplicated,
+        workflow_run_id=workflow_run.id,
+        workflow_status=workflow_run.status,
+        skip_reason=workflow_run.skip_reason,
     )
 
 
@@ -89,6 +99,7 @@ def list_webhook_triggers(
     db: Session = Depends(get_db),
 ) -> WebhookTriggerListResponse:
     items, total = webhooks.list_triggers(db, offset, limit)
+    workflow_runs = {item.id: webhooks.get_workflow_run(db, item.id) for item in items}
     return WebhookTriggerListResponse(
         items=[
             WebhookTriggerItemResponse(
@@ -101,6 +112,9 @@ def list_webhook_triggers(
                 task_id=item.task_id,
                 payload=item.payload_json,
                 created_at=item.created_at,
+                workflow_run_id=workflow_runs[item.id].id if workflow_runs[item.id] else None,
+                workflow_status=workflow_runs[item.id].status if workflow_runs[item.id] else None,
+                skip_reason=workflow_runs[item.id].skip_reason if workflow_runs[item.id] else None,
             )
             for item in items
         ],

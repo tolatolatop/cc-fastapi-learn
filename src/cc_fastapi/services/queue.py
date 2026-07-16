@@ -23,6 +23,14 @@ class TaskQueueService:
     def __init__(self) -> None:
         self.settings = get_settings()
 
+    @staticmethod
+    def _begin_sqlite_write_transaction(db: Session) -> None:
+        if db.get_bind().dialect.name != "sqlite":
+            return
+        if db.in_transaction():
+            db.rollback()
+        db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+
     def create_task(
         self,
         db: Session,
@@ -91,7 +99,14 @@ class TaskQueueService:
     def get_task(self, db: Session, task_id: str) -> AgentTask | None:
         return db.get(AgentTask, task_id)
 
-    def retry_task(self, db: Session, task_id: str) -> AgentTask | None:
+    def is_task_cancelled(self, db: Session, task_id: str) -> bool:
+        task = self.get_task(db, task_id)
+        if task is None:
+            return True
+        db.refresh(task, attribute_names=["status"])
+        return task.status == TaskStatus.CANCELLED
+
+    def retry_task(self, db: Session, task_id: str, *, commit: bool = True) -> AgentTask | None:
         original_task = self.get_task(db, task_id)
         if original_task is None:
             return None
@@ -108,6 +123,7 @@ class TaskQueueService:
             unattended=original_task.unattended,
             max_attempts=original_task.max_attempts,
             claude_agent_options=deepcopy(payload.get("claude_agent_options")),
+            commit=commit,
         )
 
     def get_task_context(self, db: Session, task_id: str) -> AgentTaskContext | None:
@@ -144,21 +160,40 @@ class TaskQueueService:
         total = db.scalar(count_query) or 0
         return items, total
 
-    def cancel_task(self, db: Session, task_id: str) -> AgentTask | None:
+    def cancel_task(
+        self,
+        db: Session,
+        task_id: str,
+        *,
+        commit: bool = True,
+        reason: str = "user",
+    ) -> AgentTask | None:
+        now = utc_now()
+        result = db.execute(
+            update(AgentTask)
+            .where(
+                AgentTask.id == task_id,
+                AgentTask.status.in_([TaskStatus.QUEUED, TaskStatus.RUNNING]),
+            )
+            .values(status=TaskStatus.CANCELLED, finished_at=now)
+        )
+        if result.rowcount == 0:
+            if commit:
+                db.rollback()
+            return self.get_task(db, task_id)
         task = self.get_task(db, task_id)
-        if not task:
-            return None
-        if task.status in {TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.ABANDONED}:
-            return task
-        task.status = TaskStatus.CANCELLED
-        task.finished_at = utc_now()
-        self.log_event(db, task.id, "INFO", "cancelled", "task cancelled by user", None)
-        db.commit()
-        db.refresh(task)
+        if task is None:
+            raise RuntimeError(f"cancelled task disappeared before commit: {task_id}")
+        normalized_reason = reason.strip() or "user"
+        message = "task cancelled by user" if normalized_reason == "user" else "task cancelled by workflow"
+        self.log_event(db, task.id, "INFO", "cancelled", message, {"reason": normalized_reason})
+        if commit:
+            db.commit()
+            db.refresh(task)
         return task
 
     def claim_next_task(self, db: Session, worker_id: str, queue_name: str) -> AgentTask | None:
-        candidate = db.scalar(
+        candidate_query = (
             select(AgentTask.id)
             .where(
                 AgentTask.status == TaskStatus.QUEUED,
@@ -168,8 +203,16 @@ class TaskQueueService:
             .order_by(AgentTask.priority.desc(), AgentTask.created_at.asc())
             .limit(1)
         )
+        candidate = db.scalar(candidate_query)
         if not candidate:
+            db.rollback()
             return None
+        if db.get_bind().dialect.name == "sqlite":
+            self._begin_sqlite_write_transaction(db)
+            candidate = db.scalar(candidate_query)
+            if not candidate:
+                db.rollback()
+                return None
 
         now = utc_now()
         result = db.execute(
@@ -207,23 +250,35 @@ class TaskQueueService:
         db.refresh(task)
         return task
 
-    def mark_success(self, db: Session, task_id: str, result_payload: dict[str, Any]) -> None:
-        task = self.get_task(db, task_id)
-        if not task or task.status != TaskStatus.RUNNING:
-            return
-        old_status = task.status
-        task.status = TaskStatus.SUCCEEDED
-        task.result = result_payload
+    def mark_success(self, db: Session, task_id: str, result_payload: dict[str, Any]) -> bool:
+        values: dict[str, Any] = {
+            "status": TaskStatus.SUCCEEDED,
+            "result": result_payload,
+            "finished_at": utc_now(),
+        }
         result_session_id = result_payload.get("session_id")
         if isinstance(result_session_id, str) and result_session_id.strip():
-            task.session_id = result_session_id.strip()
-        task.finished_at = utc_now()
-        self.log_event(db, task.id, "INFO", "succeeded", "task finished successfully", None)
+            values["session_id"] = result_session_id.strip()
+        result = db.execute(
+            update(AgentTask)
+            .where(AgentTask.id == task_id, AgentTask.status == TaskStatus.RUNNING)
+            .values(**values)
+        )
+        if result.rowcount == 0:
+            db.rollback()
+            return False
+        self.log_event(db, task_id, "INFO", "succeeded", "task finished successfully", None)
         db.commit()
         logger.info(
             "task status transitioned",
-            extra={"event_type": "status_transition", "task_id": task_id, "status_from": old_status, "status_to": task.status},
+            extra={
+                "event_type": "status_transition",
+                "task_id": task_id,
+                "status_from": TaskStatus.RUNNING,
+                "status_to": TaskStatus.SUCCEEDED,
+            },
         )
+        return True
 
     def mark_retry_or_failed(
         self,
@@ -231,12 +286,49 @@ class TaskQueueService:
         task_id: str,
         error_message: str,
         error_metadata: dict[str, Any] | None = None,
-    ) -> None:
-        task = self.get_task(db, task_id)
-        if not task or task.status != TaskStatus.RUNNING:
-            return
+    ) -> bool:
         now = utc_now()
-        can_retry = task.attempt < task.max_attempts
+        retry_result = db.execute(
+            update(AgentTask)
+            .where(
+                AgentTask.id == task_id,
+                AgentTask.status == TaskStatus.RUNNING,
+                AgentTask.attempt < AgentTask.max_attempts,
+            )
+            .values(
+                status=TaskStatus.QUEUED,
+                error_message=error_message,
+                worker_id=None,
+                started_at=None,
+                running_expire_at=None,
+                queue_expire_at=now + timedelta(hours=self.settings.queue_ttl_hours),
+            )
+        )
+        if retry_result.rowcount:
+            target_status = TaskStatus.QUEUED
+        else:
+            failed_result = db.execute(
+                update(AgentTask)
+                .where(
+                    AgentTask.id == task_id,
+                    AgentTask.status == TaskStatus.RUNNING,
+                    AgentTask.attempt >= AgentTask.max_attempts,
+                )
+                .values(
+                    status=TaskStatus.FAILED,
+                    error_message=error_message,
+                    finished_at=now,
+                )
+            )
+            if failed_result.rowcount == 0:
+                db.rollback()
+                return False
+            target_status = TaskStatus.FAILED
+
+        task = self.get_task(db, task_id)
+        if task is None:
+            db.rollback()
+            return False
         diagnostic_metadata = {
             "attempt": task.attempt,
             "max_attempts": task.max_attempts,
@@ -250,14 +342,7 @@ class TaskQueueService:
             error_message,
             diagnostic_metadata,
         )
-        if can_retry:
-            old_status = task.status
-            task.status = TaskStatus.QUEUED
-            task.error_message = error_message
-            task.worker_id = None
-            task.started_at = None
-            task.running_expire_at = None
-            task.queue_expire_at = now + timedelta(hours=self.settings.queue_ttl_hours)
+        if target_status == TaskStatus.QUEUED:
             self.log_event(
                 db,
                 task.id,
@@ -268,13 +353,14 @@ class TaskQueueService:
             )
             logger.info(
                 "task status transitioned",
-                extra={"event_type": "status_transition", "task_id": task_id, "status_from": old_status, "status_to": task.status},
+                extra={
+                    "event_type": "status_transition",
+                    "task_id": task_id,
+                    "status_from": TaskStatus.RUNNING,
+                    "status_to": target_status,
+                },
             )
         else:
-            old_status = task.status
-            task.status = TaskStatus.FAILED
-            task.error_message = error_message
-            task.finished_at = now
             self.log_event(
                 db,
                 task.id,
@@ -285,84 +371,170 @@ class TaskQueueService:
             )
             logger.info(
                 "task status transitioned",
-                extra={"event_type": "status_transition", "task_id": task_id, "status_from": old_status, "status_to": task.status},
+                extra={
+                    "event_type": "status_transition",
+                    "task_id": task_id,
+                    "status_from": TaskStatus.RUNNING,
+                    "status_to": target_status,
+                },
             )
         db.commit()
+        return True
 
     def abandon_expired_queued(self, db: Session) -> int:
         now = utc_now()
-        tasks = list(
-            db.scalars(select(AgentTask).where(AgentTask.status == TaskStatus.QUEUED, AgentTask.queue_expire_at <= now))
-        )
+        tasks_query = select(AgentTask).where(
+            AgentTask.status == TaskStatus.QUEUED,
+            AgentTask.queue_expire_at <= now,
+        ).order_by(AgentTask.id)
+        tasks = list(db.scalars(tasks_query))
+        if not tasks:
+            db.rollback()
+            return 0
+        if db.get_bind().dialect.name == "sqlite":
+            self._begin_sqlite_write_transaction(db)
+            tasks = list(db.scalars(tasks_query))
+        changed: list[AgentTask] = []
         for task in tasks:
-            task.status = TaskStatus.ABANDONED
-            task.abandoned_at = now
-            task.abandoned_reason = "queue_timeout_24h"
-            task.finished_at = now
+            result = db.execute(
+                update(AgentTask)
+                .where(
+                    AgentTask.id == task.id,
+                    AgentTask.status == TaskStatus.QUEUED,
+                    AgentTask.queue_expire_at <= now,
+                )
+                .execution_options(synchronize_session=False)
+                .values(
+                    status=TaskStatus.ABANDONED,
+                    abandoned_at=now,
+                    abandoned_reason="queue_timeout_24h",
+                    finished_at=now,
+                )
+            )
+            if result.rowcount == 0:
+                continue
+            changed.append(task)
             self.log_event(db, task.id, "WARNING", "abandoned", "task abandoned due to queue timeout", None)
         db.commit()
-        if tasks:
+        if changed:
             logger.warning(
                 "abandoned queued timeout tasks",
-                extra={"event_type": "queue_timeout_abandon", "reason": f"count={len(tasks)}"},
+                extra={"event_type": "queue_timeout_abandon", "reason": f"count={len(changed)}"},
             )
-        return len(tasks)
+        return len(changed)
 
     def abandon_expired_running(self, db: Session) -> int:
         now = utc_now()
-        tasks = list(
-            db.scalars(
-                select(AgentTask).where(AgentTask.status == TaskStatus.RUNNING, AgentTask.running_expire_at <= now)
-            )
-        )
+        tasks_query = select(AgentTask).where(
+            AgentTask.status == TaskStatus.RUNNING,
+            AgentTask.running_expire_at <= now,
+        ).order_by(AgentTask.id)
+        tasks = list(db.scalars(tasks_query))
+        if not tasks:
+            db.rollback()
+            return 0
+        if db.get_bind().dialect.name == "sqlite":
+            self._begin_sqlite_write_transaction(db)
+            tasks = list(db.scalars(tasks_query))
+        changed: list[AgentTask] = []
         for task in tasks:
-            task.status = TaskStatus.ABANDONED
-            task.abandoned_at = now
-            task.abandoned_reason = "running_timeout_4h"
-            task.error_message = "task_execution_timeout"
-            task.finished_at = now
+            result = db.execute(
+                update(AgentTask)
+                .where(
+                    AgentTask.id == task.id,
+                    AgentTask.status == TaskStatus.RUNNING,
+                    AgentTask.running_expire_at <= now,
+                )
+                .execution_options(synchronize_session=False)
+                .values(
+                    status=TaskStatus.ABANDONED,
+                    abandoned_at=now,
+                    abandoned_reason="running_timeout_4h",
+                    error_message="task_execution_timeout",
+                    finished_at=now,
+                )
+            )
+            if result.rowcount == 0:
+                continue
+            changed.append(task)
             self.log_event(db, task.id, "ERROR", "timeout", "task abandoned due to running timeout", None)
         db.commit()
-        if tasks:
+        if changed:
             logger.warning(
                 "abandoned running timeout tasks",
-                extra={"event_type": "running_timeout_abandon", "reason": f"count={len(tasks)}"},
+                extra={"event_type": "running_timeout_abandon", "reason": f"count={len(changed)}"},
             )
-        return len(tasks)
+        return len(changed)
 
     def abandon_running_on_shutdown(self, db: Session) -> int:
         now = utc_now()
-        tasks = list(db.scalars(select(AgentTask).where(AgentTask.status == TaskStatus.RUNNING)))
+        tasks_query = select(AgentTask).where(AgentTask.status == TaskStatus.RUNNING).order_by(AgentTask.id)
+        tasks = list(db.scalars(tasks_query))
+        if not tasks:
+            db.rollback()
+            return 0
+        if db.get_bind().dialect.name == "sqlite":
+            self._begin_sqlite_write_transaction(db)
+            tasks = list(db.scalars(tasks_query))
+        changed: list[AgentTask] = []
         for task in tasks:
-            task.status = TaskStatus.ABANDONED
-            task.abandoned_at = now
-            task.abandoned_reason = "service_shutdown"
-            task.finished_at = now
+            result = db.execute(
+                update(AgentTask)
+                .where(AgentTask.id == task.id, AgentTask.status == TaskStatus.RUNNING)
+                .execution_options(synchronize_session=False)
+                .values(
+                    status=TaskStatus.ABANDONED,
+                    abandoned_at=now,
+                    abandoned_reason="service_shutdown",
+                    finished_at=now,
+                )
+            )
+            if result.rowcount == 0:
+                continue
+            changed.append(task)
             self.log_event(db, task.id, "WARNING", "abandoned", "task abandoned due to service shutdown", None)
         db.commit()
-        if tasks:
+        if changed:
             logger.warning(
                 "abandoned running tasks on shutdown",
-                extra={"event_type": "shutdown_abandon", "reason": f"count={len(tasks)}"},
+                extra={"event_type": "shutdown_abandon", "reason": f"count={len(changed)}"},
             )
-        return len(tasks)
+        return len(changed)
 
     def recover_orphan_running_on_startup(self, db: Session) -> int:
         now = utc_now()
-        tasks = list(db.scalars(select(AgentTask).where(AgentTask.status == TaskStatus.RUNNING)))
+        tasks_query = select(AgentTask).where(AgentTask.status == TaskStatus.RUNNING).order_by(AgentTask.id)
+        tasks = list(db.scalars(tasks_query))
+        if not tasks:
+            db.rollback()
+            return 0
+        if db.get_bind().dialect.name == "sqlite":
+            self._begin_sqlite_write_transaction(db)
+            tasks = list(db.scalars(tasks_query))
+        changed: list[AgentTask] = []
         for task in tasks:
-            task.status = TaskStatus.ABANDONED
-            task.abandoned_at = now
-            task.abandoned_reason = "startup_recovery"
-            task.finished_at = now
+            result = db.execute(
+                update(AgentTask)
+                .where(AgentTask.id == task.id, AgentTask.status == TaskStatus.RUNNING)
+                .execution_options(synchronize_session=False)
+                .values(
+                    status=TaskStatus.ABANDONED,
+                    abandoned_at=now,
+                    abandoned_reason="startup_recovery",
+                    finished_at=now,
+                )
+            )
+            if result.rowcount == 0:
+                continue
+            changed.append(task)
             self.log_event(db, task.id, "WARNING", "abandoned", "task abandoned by startup recovery", None)
         db.commit()
-        if tasks:
+        if changed:
             logger.warning(
                 "recovered orphan running tasks",
-                extra={"event_type": "startup_recovery_abandon", "reason": f"count={len(tasks)}"},
+                extra={"event_type": "startup_recovery_abandon", "reason": f"count={len(changed)}"},
             )
-        return len(tasks)
+        return len(changed)
 
     def list_logs(self, db: Session, task_id: str, offset: int, limit: int) -> tuple[list[AgentTaskLog], int]:
         items = list(
