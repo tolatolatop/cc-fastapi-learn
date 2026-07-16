@@ -2,12 +2,15 @@ import logging
 from dataclasses import dataclass
 
 from sqlalchemy import and_, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from cc_fastapi.db.models import (
     AgentTask,
+    AgentTaskRetryLink,
     TaskStatus,
     WorkflowCorrelation,
+    WorkflowResourceLock,
     WorkflowRun,
     WorkflowRunStatus,
     WorkflowStepRun,
@@ -20,6 +23,7 @@ from cc_fastapi.workflows.base import (
     WorkflowCorrelationSpec,
     WorkflowEvent,
     WorkflowPostResult,
+    WorkflowRetryConflictError,
     WorkflowTaskOutcome,
 )
 from cc_fastapi.workflows.registry import WorkflowRegistry
@@ -53,6 +57,15 @@ class WorkflowEngine:
             context_json={},
             status=WorkflowRunStatus.PLANNING,
         )
+
+    @staticmethod
+    def _begin_sqlite_write_transaction(db: Session) -> None:
+        """Serialize SQLite workflow mutations before their first read."""
+        if db.get_bind().dialect.name != "sqlite":
+            return
+        if db.in_transaction():
+            db.rollback()
+        db.connection().exec_driver_sql("BEGIN IMMEDIATE")
 
     def _persist_failed_start(
         self,
@@ -111,6 +124,49 @@ class WorkflowEngine:
             )
         return unique_specs
 
+    def _acquire_resource_locks(
+        self,
+        db: Session,
+        specs: tuple[WorkflowCorrelationSpec, ...],
+    ) -> None:
+        """Lock resource keys in stable order until the caller commits the transaction."""
+        unique_specs = sorted(
+            set(specs),
+            key=lambda spec: (spec.provider, spec.resource_type, spec.project_path, spec.resource_id),
+        )
+        for spec in unique_specs:
+            filters = (
+                WorkflowResourceLock.provider == spec.provider,
+                WorkflowResourceLock.resource_type == spec.resource_type,
+                WorkflowResourceLock.project_path == spec.project_path,
+                WorkflowResourceLock.resource_id == spec.resource_id,
+            )
+            lock_row = db.scalar(select(WorkflowResourceLock).where(*filters).with_for_update())
+            if lock_row is None:
+                try:
+                    with db.begin_nested():
+                        db.add(
+                            WorkflowResourceLock(
+                                provider=spec.provider,
+                                resource_type=spec.resource_type,
+                                project_path=spec.project_path,
+                                resource_id=spec.resource_id,
+                            )
+                        )
+                        db.flush()
+                except IntegrityError:
+                    # A concurrent transaction created the lock row. Its unique
+                    # key serialization is the lock acquisition for this path.
+                    pass
+                lock_row = db.scalar(
+                    select(WorkflowResourceLock)
+                    .where(*filters)
+                    .execution_options(populate_existing=True)
+                    .with_for_update()
+                )
+            if lock_row is None:
+                raise RuntimeError(f"failed to acquire workflow resource lock: {self._correlation_dict(spec)}")
+
     def _supersede_correlated_runs(
         self,
         db: Session,
@@ -132,15 +188,16 @@ class WorkflowEngine:
                 for spec in unique_specs
             )
         )
-        correlated_run_ids = select(WorkflowCorrelation.workflow_run_id).where(correlation_match)
         old_runs = list(
             db.scalars(
                 select(WorkflowRun)
+                .join(WorkflowCorrelation, WorkflowCorrelation.workflow_run_id == WorkflowRun.id)
                 .where(
                     WorkflowRun.id != current_run.id,
-                    WorkflowRun.id.in_(correlated_run_ids),
+                    correlation_match,
                     WorkflowRun.status.in_([WorkflowRunStatus.PLANNING, WorkflowRunStatus.RUNNING]),
                 )
+                .distinct()
                 .order_by(WorkflowRun.created_at.asc())
                 .with_for_update()
             )
@@ -217,6 +274,10 @@ class WorkflowEngine:
 
         try:
             plan = workflow.before(event)
+            self._acquire_resource_locks(
+                db,
+                (*plan.correlations, *plan.supersede_correlations),
+            )
             now = utc_now()
             run.context_json = plan.context
             run.updated_at = now
@@ -290,8 +351,10 @@ class WorkflowEngine:
         return db.scalar(select(WorkflowRun).where(WorkflowRun.webhook_trigger_id == trigger_id).limit(1))
 
     def handle_task_terminal(self, db: Session, task_id: str) -> list[WorkflowRun]:
+        self._begin_sqlite_write_transaction(db)
         task = db.get(AgentTask, task_id)
         if task is None or task.status in {TaskStatus.QUEUED, TaskStatus.RUNNING}:
+            db.rollback()
             return []
 
         links = list(
@@ -304,7 +367,18 @@ class WorkflowEngine:
         )
         updated_runs: list[WorkflowRun] = []
         for link in links:
-            run = db.get(WorkflowRun, link.workflow_run_id)
+            run = db.scalar(
+                select(WorkflowRun)
+                .where(WorkflowRun.id == link.workflow_run_id)
+                .execution_options(populate_existing=True)
+                .with_for_update()
+            )
+            task = db.scalar(
+                select(AgentTask)
+                .where(AgentTask.id == task_id)
+                .execution_options(populate_existing=True)
+                .with_for_update()
+            )
             if run is None or run.status in {
                 WorkflowRunStatus.SKIPPED,
                 WorkflowRunStatus.SUCCEEDED,
@@ -321,6 +395,7 @@ class WorkflowEngine:
                     WorkflowStepRun.step_name == step_name,
                 )
                 .limit(1)
+                .with_for_update()
             )
             if existing_step is not None:
                 continue
@@ -368,6 +443,7 @@ class WorkflowEngine:
                             WorkflowTaskLink.workflow_run_id == run.id,
                             WorkflowTaskLink.is_active.is_(True),
                         )
+                        .with_for_update()
                     )
                 )
                 active = any(item.status in {TaskStatus.QUEUED, TaskStatus.RUNNING} for item in linked_tasks)
@@ -377,7 +453,7 @@ class WorkflowEngine:
                         select(WorkflowStepRun.step_name).where(
                             WorkflowStepRun.workflow_run_id == run.id,
                             WorkflowStepRun.step_name.like("after_task:%"),
-                        )
+                        ).with_for_update()
                     )
                 )
                 all_terminal_tasks_processed = all(
@@ -407,6 +483,8 @@ class WorkflowEngine:
 
         if updated_runs:
             db.commit()
+        else:
+            db.rollback()
         return updated_runs
 
     def reconcile_terminal_tasks(self, db: Session) -> int:
@@ -428,46 +506,100 @@ class WorkflowEngine:
             updated += len(self.handle_task_terminal(db, task_id))
         return updated
 
-    def handle_task_retry(self, db: Session, original_task_id: str, retried_task_id: str) -> list[WorkflowRun]:
-        links = list(
-            db.scalars(
-                select(WorkflowTaskLink).where(
-                    WorkflowTaskLink.task_id == original_task_id,
-                    WorkflowTaskLink.is_active.is_(True),
-                )
+    def retry_task(self, db: Session, original_task_id: str) -> AgentTask | None:
+        """Atomically claim and replace one task retry attempt."""
+        self._begin_sqlite_write_transaction(db)
+        try:
+            original_link = db.scalar(
+                select(WorkflowTaskLink)
+                .where(WorkflowTaskLink.task_id == original_task_id)
+                .limit(1)
             )
-        )
-        updated_runs: list[WorkflowRun] = []
-        for link in links:
-            run = db.get(WorkflowRun, link.workflow_run_id)
-            if run is None or run.status in {WorkflowRunStatus.SKIPPED, WorkflowRunStatus.SUPERSEDED}:
-                continue
-            link.is_active = False
+            if original_link is not None:
+                run = db.scalar(
+                    select(WorkflowRun)
+                    .where(WorkflowRun.id == original_link.workflow_run_id)
+                    .execution_options(populate_existing=True)
+                    .with_for_update()
+                )
+                active_link = db.scalar(
+                    select(WorkflowTaskLink)
+                    .where(
+                        WorkflowTaskLink.task_id == original_task_id,
+                        WorkflowTaskLink.is_active.is_(True),
+                    )
+                    .execution_options(populate_existing=True)
+                    .limit(1)
+                    .with_for_update()
+                )
+                if (
+                    run is None
+                    or active_link is None
+                    or run.status in {WorkflowRunStatus.SKIPPED, WorkflowRunStatus.SUPERSEDED}
+                ):
+                    raise WorkflowRetryConflictError("task retry was already replaced or workflow is not retryable")
+            else:
+                run = None
+                active_link = None
+
+            original_task = db.scalar(
+                select(AgentTask)
+                .where(AgentTask.id == original_task_id)
+                .execution_options(populate_existing=True)
+                .with_for_update()
+            )
+            if original_task is None:
+                db.rollback()
+                return None
+            existing_retry = db.scalar(
+                select(AgentTaskRetryLink)
+                .where(AgentTaskRetryLink.original_task_id == original_task_id)
+                .with_for_update()
+            )
+            if existing_retry is not None:
+                raise WorkflowRetryConflictError("task retry was already created")
+
+            retried_task = self.queue.retry_task(db, original_task_id, commit=False)
+            if retried_task is None:
+                db.rollback()
+                return None
             db.add(
-                WorkflowTaskLink(
-                    workflow_run_id=run.id,
-                    task_id=retried_task_id,
-                    role=link.role,
-                    ordinal=link.ordinal,
-                    is_active=True,
+                AgentTaskRetryLink(
+                    original_task_id=original_task_id,
+                    retried_task_id=retried_task.id,
                 )
             )
-            now = utc_now()
-            run.status = WorkflowRunStatus.RUNNING
-            run.error_message = None
-            run.finished_at = None
-            run.updated_at = now
-            db.add(
-                WorkflowStepRun(
-                    workflow_run_id=run.id,
-                    step_name=f"retry_task:{retried_task_id}",
-                    status=WorkflowStepStatus.SUCCEEDED,
-                    input_json={"original_task_id": original_task_id},
-                    output_json={"retried_task_id": retried_task_id},
-                    finished_at=now,
+
+            if run is not None and active_link is not None:
+                active_link.is_active = False
+                db.add(
+                    WorkflowTaskLink(
+                        workflow_run_id=run.id,
+                        task_id=retried_task.id,
+                        role=active_link.role,
+                        ordinal=active_link.ordinal,
+                        is_active=True,
+                    )
                 )
-            )
-            updated_runs.append(run)
-        if updated_runs:
+                now = utc_now()
+                run.status = WorkflowRunStatus.RUNNING
+                run.error_message = None
+                run.finished_at = None
+                run.updated_at = now
+                db.add(
+                    WorkflowStepRun(
+                        workflow_run_id=run.id,
+                        step_name=f"retry_task:{retried_task.id}",
+                        status=WorkflowStepStatus.SUCCEEDED,
+                        input_json={"original_task_id": original_task_id},
+                        output_json={"retried_task_id": retried_task.id},
+                        finished_at=now,
+                    )
+                )
+
             db.commit()
-        return updated_runs
+            db.refresh(retried_task)
+            return retried_task
+        except Exception:
+            db.rollback()
+            raise

@@ -1,12 +1,14 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from threading import Barrier
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
 from cc_fastapi.core.config import get_settings
 from cc_fastapi.core.queue_config import get_queue_config
-from cc_fastapi.db.models import AgentTask, AgentTaskContext, Base, TaskStatus, utc_now
+from cc_fastapi.db.models import AgentTask, AgentTaskContext, AgentTaskLog, Base, TaskStatus, utc_now
 from cc_fastapi.services.queue import QueueNotFoundError, TaskQueueService
 
 
@@ -161,6 +163,77 @@ def test_cancelled_running_task_is_not_overwritten_by_late_success():
         worker_db.refresh(task)
         assert task.status == TaskStatus.CANCELLED
         assert task.result is None
+
+
+def test_concurrent_cancel_and_success_have_only_one_winning_transition(tmp_path):
+    engine = create_engine(
+        f"sqlite+pysqlite:///{tmp_path / 'task-transition-concurrency.db'}",
+        connect_args={"check_same_thread": False, "timeout": 30},
+        future=True,
+    )
+    Base.metadata.create_all(bind=engine)
+    session_factory = sessionmaker(
+        bind=engine,
+        autocommit=False,
+        autoflush=False,
+        expire_on_commit=False,
+    )
+    with session_factory() as db:
+        queue = TaskQueueService()
+        task = queue.create_task(
+            db,
+            prompt="race terminal transitions",
+            model=None,
+            queue_name=None,
+            metadata=None,
+            priority=0,
+            agent_mode=True,
+            unattended=True,
+            max_attempts=1,
+        )
+        task_id = task.id
+        assert queue.claim_next_task(db, "worker-1", "default") is not None
+
+    barrier = Barrier(2)
+
+    def cancel_once() -> TaskStatus:
+        with session_factory() as db:
+            barrier.wait()
+            task = TaskQueueService().cancel_task(db, task_id, reason="concurrent_test")
+            assert task is not None
+            return task.status
+
+    def succeed_once() -> bool:
+        with session_factory() as db:
+            barrier.wait()
+            return TaskQueueService().mark_success(db, task_id, {"ok": True})
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        cancel_future = pool.submit(cancel_once)
+        success_future = pool.submit(succeed_once)
+        cancel_status = cancel_future.result()
+        success_won = success_future.result()
+
+    with session_factory() as db:
+        task = db.get(AgentTask, task_id)
+        assert task is not None
+        if success_won:
+            assert cancel_status == TaskStatus.SUCCEEDED
+            assert task.status == TaskStatus.SUCCEEDED
+            assert task.result == {"ok": True}
+        else:
+            assert cancel_status == TaskStatus.CANCELLED
+            assert task.status == TaskStatus.CANCELLED
+            assert task.result is None
+        terminal_log_count = db.scalar(
+            select(func.count())
+            .select_from(AgentTaskLog)
+            .where(
+                AgentTaskLog.task_id == task_id,
+                AgentTaskLog.event_type.in_(["cancelled", "succeeded"]),
+            )
+        )
+        assert terminal_log_count == 1
 
 
 def test_upsert_task_context_updates_latest():

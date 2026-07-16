@@ -1,16 +1,29 @@
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
 from cc_fastapi.db.models import (
     AgentTask,
+    AgentTaskRetryLink,
     Base,
     TaskStatus,
+    WorkflowRun,
     WorkflowRunStatus,
     WorkflowStepRun,
     WorkflowStepStatus,
     WorkflowTaskLink,
 )
-from cc_fastapi.workflows.base import Workflow, WorkflowEvent, WorkflowPlan, WorkflowPostResult, WorkflowTaskOutcome, WorkflowTaskSpec
+from cc_fastapi.workflows.base import (
+    Workflow,
+    WorkflowEvent,
+    WorkflowPlan,
+    WorkflowPostResult,
+    WorkflowRetryConflictError,
+    WorkflowTaskOutcome,
+    WorkflowTaskSpec,
+)
 from cc_fastapi.workflows.engine import WorkflowEngine
 from cc_fastapi.workflows.registry import WorkflowRegistry
 
@@ -19,6 +32,16 @@ def make_db():
     engine = create_engine("sqlite+pysqlite:///:memory:", connect_args={"check_same_thread": False}, future=True)
     Base.metadata.create_all(bind=engine)
     return sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)()
+
+
+def make_session_factory(tmp_path):
+    engine = create_engine(
+        f"sqlite+pysqlite:///{tmp_path / 'workflow-concurrency.db'}",
+        connect_args={"check_same_thread": False, "timeout": 30},
+        future=True,
+    )
+    Base.metadata.create_all(bind=engine)
+    return sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
 
 
 class SkipWorkflow(Workflow):
@@ -158,18 +181,8 @@ def test_manual_task_retry_reopens_workflow_and_supersedes_failed_task():
     db.refresh(execution.run)
     assert execution.run.status == WorkflowRunStatus.FAILED
 
-    retried = engine.queue.create_task(
-        db,
-        prompt=first.payload["prompt"],
-        model=first.payload["model"],
-        queue_name=first.queue_name,
-        metadata=first.metadata_json,
-        priority=first.priority,
-        agent_mode=first.agent_mode,
-        unattended=first.unattended,
-        max_attempts=first.max_attempts,
-    )
-    engine.handle_task_retry(db, first.id, retried.id)
+    retried = engine.retry_task(db, first.id)
+    assert retried is not None
     db.refresh(execution.run)
     assert execution.run.status == WorkflowRunStatus.RUNNING
     original_link = db.scalar(select(WorkflowTaskLink).where(WorkflowTaskLink.task_id == first.id))
@@ -184,3 +197,95 @@ def test_manual_task_retry_reopens_workflow_and_supersedes_failed_task():
     engine.handle_task_terminal(db, retried.id)
     db.refresh(execution.run)
     assert execution.run.status == WorkflowRunStatus.SUCCEEDED
+
+
+def test_concurrent_terminal_callbacks_are_serialized_per_workflow(tmp_path):
+    session_factory = make_session_factory(tmp_path)
+    registry = WorkflowRegistry([MultiTaskWorkflow()])
+    with session_factory() as db:
+        execution = WorkflowEngine(registry).start(
+            db,
+            WorkflowEvent(provider="gitlab", event_type="merge_completed", payload={"ref": "main"}),
+        )
+        db.commit()
+        run_id = execution.run.id
+        first_id, second_id = (task.id for task in execution.tasks)
+        for task_id in (first_id, second_id):
+            task = db.get(AgentTask, task_id)
+            assert task is not None
+            task.status = TaskStatus.SUCCEEDED
+            task.result = {"ok": True}
+        db.commit()
+
+    barrier = Barrier(3)
+
+    def process_terminal(task_id: str) -> int:
+        with session_factory() as db:
+            barrier.wait()
+            return len(WorkflowEngine(registry).handle_task_terminal(db, task_id))
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        results = list(pool.map(process_terminal, [first_id, first_id, second_id]))
+
+    assert sum(results) == 2
+    with session_factory() as db:
+        run = db.get(WorkflowRun, run_id)
+        assert run is not None
+        assert run.status == WorkflowRunStatus.SUCCEEDED
+        assert sorted(run.context_json["completed_tasks"]) == sorted([first_id, second_id])
+        assert run.context_json["completed_tasks"].count(first_id) == 1
+        steps = list(
+            db.scalars(
+                select(WorkflowStepRun).where(
+                    WorkflowStepRun.workflow_run_id == run_id,
+                    WorkflowStepRun.step_name.like("after_task:%"),
+                )
+            )
+        )
+        assert sorted(step.step_name for step in steps) == sorted(
+            [f"after_task:{first_id}", f"after_task:{second_id}"]
+        )
+
+
+def test_concurrent_manual_retry_creates_only_one_replacement(tmp_path):
+    session_factory = make_session_factory(tmp_path)
+    registry = WorkflowRegistry([MultiTaskWorkflow()])
+    with session_factory() as db:
+        execution = WorkflowEngine(registry).start(
+            db,
+            WorkflowEvent(provider="gitlab", event_type="merge_completed", payload={"ref": "main"}),
+        )
+        db.commit()
+        original_task_id = execution.tasks[0].id
+        run_id = execution.run.id
+
+    barrier = Barrier(2)
+
+    def retry_once() -> str:
+        with session_factory() as db:
+            barrier.wait()
+            try:
+                task = WorkflowEngine(registry).retry_task(db, original_task_id)
+            except WorkflowRetryConflictError:
+                return "conflict"
+            assert task is not None
+            return task.id
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: retry_once(), range(2)))
+
+    assert results.count("conflict") == 1
+    replacement_ids = [result for result in results if result != "conflict"]
+    assert len(replacement_ids) == 1
+    with session_factory() as db:
+        links = list(
+            db.scalars(
+                select(WorkflowTaskLink)
+                .where(WorkflowTaskLink.workflow_run_id == run_id)
+                .order_by(WorkflowTaskLink.created_at)
+            )
+        )
+        assert sum(link.is_active for link in links if link.ordinal == 0) == 1
+        assert db.scalar(select(func.count()).select_from(AgentTaskRetryLink)) == 1
+        assert db.get(AgentTask, replacement_ids[0]) is not None
+        assert db.scalar(select(func.count()).select_from(AgentTask)) == 3

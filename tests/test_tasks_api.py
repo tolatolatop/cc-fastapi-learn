@@ -125,6 +125,10 @@ def test_retry_task_creates_new_queued_task():
     assert response.json()["queue_name"] == "slow"
     assert client.get(f"/v1/agent-tasks/{original_task_id}").json()["status"] == "cancelled"
 
+    duplicate = client.post(f"/v1/agent-tasks/{original_task_id}/retry")
+    assert duplicate.status_code == 409
+    assert duplicate.json()["detail"] == "task retry was already created"
+
 
 def test_retry_task_not_found_returns_404():
     client = build_client()

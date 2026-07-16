@@ -107,8 +107,10 @@ erDiagram
     WORKFLOW_RUNS ||--o{ WORKFLOW_TASK_LINKS : owns
     AGENT_TASKS ||--o| WORKFLOW_TASK_LINKS : linked_by
     WORKFLOW_RUNS ||--o{ WORKFLOW_CORRELATIONS : relates_to
+    WORKFLOW_CORRELATIONS }o--|| WORKFLOW_RESOURCE_LOCKS : serializes
     AGENT_TASKS ||--o{ AGENT_TASK_LOGS : emits
     AGENT_TASKS ||--o| AGENT_TASK_CONTEXTS : streams
+    AGENT_TASKS ||--o| AGENT_TASK_RETRY_LINKS : original
 ```
 
 ### `webhook_triggers`
@@ -150,6 +152,8 @@ erDiagram
 
 一个 Task 最多关联一个 Workflow。手动 Retry 不会复用旧 Task，而是把旧 Link 设为 `is_active=false`，创建新 Task 和 Link，并保留原来的 `role/ordinal`。
 
+`agent_task_retry_links` 记录原 Task 到新 Task 的替换关系，并以原 Task ID 为主键。对同一个原 Task 重复或并发 Retry 时，只有第一个请求可以创建替代任务，其他请求返回冲突。
+
 ### `workflow_correlations`
 
 把 Workflow Run 映射到外部业务资源。当前关联键由以下字段组成：
@@ -165,6 +169,12 @@ gitlab + merge_request + group/project + 123
 ```
 
 表上有同字段顺序的组合索引，用于快速查询同一 MR 的历史 Workflow 和 Task；同一 Run 的重复关联由唯一约束阻止。未来可以使用相同机制关联 Issue、Commit 或 Pipeline。
+
+### `workflow_resource_locks`
+
+为每个 Correlation Key 保存一条持久化锁记录。同一个 MR 的 Workflow 规划会锁定同一行，直到 Webhook 事务提交；不同 MR 使用不同锁行，仍可并发执行。多个关联键按稳定顺序加锁，避免工作流同时关联多个资源时产生锁顺序死锁。
+
+PostgreSQL/MySQL 使用 `SELECT ... FOR UPDATE` 行锁。SQLite 不支持行级 `FOR UPDATE`，创建 Workflow 时由其单写事务串行化；终态处理和队列维护在读取状态前使用 `BEGIN IMMEDIATE` 获取写事务。
 
 ### Task 相关表
 
@@ -185,7 +195,7 @@ gitlab + merge_request + group/project + 123
 | `cancelled` | 用户或 Workflow 主动取消 |
 | `abandoned` | 队列超时、运行超时、服务关闭或启动恢复时中止 |
 
-自动重试是同一 Task 从 `running` 回到 `queued`；它被 Worker 再次领取时增加 `attempt`。手动 Retry 会创建全新的 Task，同时更新 Workflow Link。
+自动重试是同一 Task 从 `running` 回到 `queued`；它被 Worker 再次领取时增加 `attempt`。手动 Retry 会在一个事务中创建全新的 Task、写入 Retry Link、替换 Workflow Link 并重开 Workflow。
 
 ### Workflow Run 状态
 
@@ -226,7 +236,8 @@ sequenceDiagram
 
     GitLab->>Webhook: MR update
     Webhook->>Engine: start(event)
-    Engine->>DB: 锁定同关联的 planning/running Workflow
+    Engine->>DB: 锁定 MR Correlation 对应的资源锁行
+    Engine->>DB: 查询同关联的 planning/running Workflow
     Engine->>DB: 取消旧 queued/running Task
     Engine->>DB: 旧 Workflow = superseded
     Engine->>DB: 创建新 Workflow、关联和 Task
@@ -259,6 +270,22 @@ sequenceDiagram
 因此，新任务创建失败时，旧任务取消也会一起回滚。规划异常是特殊情况：Engine 会回滚上述事务，再单独保存一个 `failed` Workflow Run 和失败的 `before` Step，便于诊断；此时不会产生 Webhook Trigger 或 Agent Task。
 
 Task 执行发生在后续 Worker 事务中。Task 终态和 Workflow `after_task` 分开提交，因此启动恢复和周期维护会调用 `reconcile_terminal_tasks()`，补齐已经终态但尚未处理的 Workflow。
+
+### 并发写入规则
+
+系统只串行化会修改相同业务状态的操作，不会锁住无关 Webhook：
+
+| 共享范围 | 并发控制 |
+| --- | --- |
+| 不同 Correlation Key | 不共享业务锁，可并发 |
+| 同一 MR 的 Start/Supersede | `workflow_resource_locks` 行锁 |
+| 同一 Workflow 的多个 Terminal 回调 | 锁定对应 `workflow_runs` 行 |
+| Task 状态变化 | `UPDATE ... WHERE status = <expected>` 条件更新 |
+| 同一原 Task 的 Retry | 原 Task 行锁和 `agent_task_retry_links` 主键 |
+
+Task 的成功、自动重试、最终失败、取消和 Abandon 都只有在数据库状态仍符合预期时才能更新。竞争失败的一方不会写日志或覆盖先完成的终态。例如 Worker 成功和 Cancel 同时发生时，最终只保留一个状态及一条对应的终态日志。
+
+同一 Workflow 的 Terminal 回调取得行锁后，才检查已有 Step、执行 `after_task`、合并 Context 并计算整体状态。因此多个 Task 同时完成时会依次合并，不会互相覆盖，也不会因为双方看不到对方 Step 而永久停留在 `running`。
 
 ## 7. 数据库初始化与变更
 

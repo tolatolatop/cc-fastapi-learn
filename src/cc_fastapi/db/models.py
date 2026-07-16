@@ -106,6 +106,18 @@ class AgentTaskContext(Base):
     task: Mapped[AgentTask] = relationship("AgentTask", back_populates="context")
 
 
+class AgentTaskRetryLink(Base):
+    __tablename__ = "agent_task_retry_links"
+
+    original_task_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agent_tasks.id"), primary_key=True, nullable=False
+    )
+    retried_task_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agent_tasks.id"), nullable=False, unique=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
 class WebhookTrigger(Base):
     __tablename__ = "webhook_triggers"
 
@@ -241,4 +253,16 @@ class WorkflowCorrelation(Base):
     resource_type: Mapped[str] = mapped_column(String(64), nullable=False)
     project_path: Mapped[str] = mapped_column(String(255), nullable=False)
     resource_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class WorkflowResourceLock(Base):
+    """Persistent lock row used to serialize workflows for one external resource."""
+
+    __tablename__ = "workflow_resource_locks"
+
+    provider: Mapped[str] = mapped_column(String(32), primary_key=True)
+    resource_type: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_path: Mapped[str] = mapped_column(String(255), primary_key=True)
+    resource_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)

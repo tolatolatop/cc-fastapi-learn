@@ -1,3 +1,6 @@
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
@@ -17,6 +20,7 @@ from cc_fastapi.db.models import (
     WebhookDeduplicationKey,
     WebhookTrigger,
     WorkflowCorrelation,
+    WorkflowResourceLock,
     WorkflowRun,
     WorkflowRunStatus,
     WorkflowStepRun,
@@ -25,6 +29,7 @@ from cc_fastapi.db.models import (
 )
 from cc_fastapi.db.session import get_db
 from cc_fastapi.services.queue import TaskQueueService
+from cc_fastapi.services.webhooks import WebhookService
 from cc_fastapi.workflows import build_default_workflow_engine
 
 
@@ -77,6 +82,16 @@ def build_client():
     return TestClient(app), TestingSessionLocal
 
 
+def build_concurrent_session_factory(tmp_path):
+    engine = create_engine(
+        f"sqlite+pysqlite:///{tmp_path / 'webhook-concurrency.db'}",
+        connect_args={"check_same_thread": False, "timeout": 30},
+        future=True,
+    )
+    Base.metadata.create_all(bind=engine)
+    return sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
+
+
 def gitlab_headers(**overrides):
     headers = {
         "X-Gitlab-Token": "gitlab-secret",
@@ -126,6 +141,32 @@ def merge_request_headers(sequence: str):
             "X-Gitlab-Webhook-UUID": f"mr-webhook-{sequence}",
         }
     )
+
+
+def trigger_merge_request(
+    session_factory,
+    *,
+    sequence: str,
+    merge_request_iid: int,
+    action: str,
+    project_path: str = "group/project",
+):
+    settings = get_settings()
+    with session_factory() as db:
+        return WebhookService().trigger_gitlab_task(
+            db,
+            payload=gitlab_merge_request_payload(
+                merge_request_iid=merge_request_iid,
+                action=action,
+                project_path=project_path,
+            ),
+            event_type="Merge Request Hook",
+            event_uuid=f"concurrent-event-{sequence}",
+            webhook_uuid=f"concurrent-webhook-{sequence}",
+            instance_url="https://gitlab.example.com",
+            prompt_template_path=settings.resolved_gitlab_webhook_prompt_template_path,
+            queue_name=settings.gitlab_webhook_queue_name or None,
+        )
 
 
 def test_gitlab_webhook_renders_prompt_creates_task_and_records_metadata():
@@ -289,6 +330,83 @@ def test_merge_request_update_supersedes_active_workflow_and_cancels_task():
         )
         assert cancellation_log is not None
         assert cancellation_log.metadata_json == {"reason": f"superseded_by_workflow:{new_run.id}"}
+
+
+def test_concurrent_updates_leave_only_one_running_workflow_for_merge_request(tmp_path):
+    session_factory = build_concurrent_session_factory(tmp_path)
+    trigger_merge_request(
+        session_factory,
+        sequence="initial",
+        merge_request_iid=41,
+        action="open",
+    )
+    barrier = Barrier(2)
+
+    def update_once(sequence: str):
+        barrier.wait()
+        return trigger_merge_request(
+            session_factory,
+            sequence=sequence,
+            merge_request_iid=41,
+            action="update",
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(update_once, ["update-a", "update-b"]))
+
+    with session_factory() as db:
+        runs = list(
+            db.scalars(
+                select(WorkflowRun)
+                .join(WorkflowCorrelation, WorkflowCorrelation.workflow_run_id == WorkflowRun.id)
+                .where(
+                    WorkflowCorrelation.provider == "gitlab",
+                    WorkflowCorrelation.resource_type == "merge_request",
+                    WorkflowCorrelation.project_path == "group/project",
+                    WorkflowCorrelation.resource_id == "41",
+                )
+            )
+        )
+        tasks = list(
+            db.scalars(
+                select(AgentTask)
+                .join(WorkflowTaskLink, WorkflowTaskLink.task_id == AgentTask.id)
+                .join(WorkflowCorrelation, WorkflowCorrelation.workflow_run_id == WorkflowTaskLink.workflow_run_id)
+                .where(WorkflowCorrelation.resource_id == "41")
+            )
+        )
+        assert len(runs) == 3
+        assert sum(run.status == WorkflowRunStatus.RUNNING for run in runs) == 1
+        assert sum(run.status == WorkflowRunStatus.SUPERSEDED for run in runs) == 2
+        assert sum(task.status == TaskStatus.QUEUED for task in tasks) == 1
+        assert sum(task.status == TaskStatus.CANCELLED for task in tasks) == 2
+        assert db.scalar(select(func.count()).select_from(WorkflowResourceLock)) == 1
+
+
+def test_concurrent_independent_merge_requests_do_not_modify_each_other(tmp_path):
+    session_factory = build_concurrent_session_factory(tmp_path)
+    barrier = Barrier(2)
+
+    def open_once(merge_request_iid: int):
+        barrier.wait()
+        return trigger_merge_request(
+            session_factory,
+            sequence=f"independent-{merge_request_iid}",
+            merge_request_iid=merge_request_iid,
+            action="open",
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(open_once, [51, 52]))
+
+    with session_factory() as db:
+        runs = list(db.scalars(select(WorkflowRun)))
+        tasks = list(db.scalars(select(AgentTask)))
+        assert len(runs) == 2
+        assert all(run.status == WorkflowRunStatus.RUNNING for run in runs)
+        assert len(tasks) == 2
+        assert all(task.status == TaskStatus.QUEUED for task in tasks)
+        assert db.scalar(select(func.count()).select_from(WorkflowResourceLock)) == 2
 
 
 def test_merge_request_update_does_not_cancel_other_merge_requests_or_completed_tasks():

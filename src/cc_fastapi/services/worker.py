@@ -157,8 +157,18 @@ class WorkerManager:
                 on_message_update=lambda messages: self.queue.upsert_task_context(db, task.id, messages),
                 should_cancel=lambda: self.queue.is_task_cancelled(db, task.id),
             )
-            self.queue.mark_success(db, task.id, result)
+            transitioned = self.queue.mark_success(db, task.id, result)
             self.workflows.handle_task_terminal(db, task.id)
+            if not transitioned:
+                logger.info(
+                    "task result ignored after concurrent terminal transition",
+                    extra={
+                        "task_id": task.id,
+                        "event_type": "terminal_transition_lost",
+                        "queue_name": getattr(task, "queue_name", "default"),
+                    },
+                )
+                return
             logger.info(
                 "task succeeded",
                 extra={

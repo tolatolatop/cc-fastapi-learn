@@ -21,6 +21,10 @@ class WorkflowTemplateError(WorkflowPlanningError):
     pass
 
 
+class WorkflowRetryConflictError(WorkflowError):
+    pass
+
+
 @dataclass(frozen=True)
 class WorkflowEvent:
     provider: str
