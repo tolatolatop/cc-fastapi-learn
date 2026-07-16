@@ -104,3 +104,17 @@ class WebhookTrigger(Base):
         "payload", MySQLJSON().with_variant(JSON, "sqlite"), nullable=False, default=dict
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, index=True)
+
+
+class WebhookDeduplicationKey(Base):
+    __tablename__ = "webhook_deduplication_keys"
+
+    provider: Mapped[str] = mapped_column(String(32), primary_key=True)
+    webhook_uuid: Mapped[str] = mapped_column(String(128), primary_key=True)
+    webhook_trigger_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("webhook_triggers.id"),
+        nullable=False,
+        unique=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)

@@ -41,7 +41,7 @@ def receive_gitlab_webhook(
 ) -> GitLabWebhookResponse:
     settings = get_settings()
     try:
-        trigger, task = webhooks.trigger_gitlab_task(
+        trigger, task, deduplicated = webhooks.trigger_gitlab_task(
             db,
             payload=payload,
             event_type=x_gitlab_event,
@@ -65,9 +65,9 @@ def receive_gitlab_webhook(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     logger.info(
-        "gitlab webhook task created",
+        "gitlab webhook task deduplicated" if deduplicated else "gitlab webhook task created",
         extra={
-            "event_type": "gitlab_webhook_task_created",
+            "event_type": "gitlab_webhook_task_deduplicated" if deduplicated else "gitlab_webhook_task_created",
             "task_id": task.id,
             "queue_name": task.queue_name,
             "reason": f"webhook_id={trigger.id}",
@@ -78,6 +78,7 @@ def receive_gitlab_webhook(
         task_id=task.id,
         status=task.status,
         queue_name=task.queue_name,
+        deduplicated=deduplicated,
     )
 
 

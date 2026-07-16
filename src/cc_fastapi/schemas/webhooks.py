@@ -11,6 +11,7 @@ class GitLabWebhookResponse(BaseModel):
     task_id: str
     status: TaskStatus
     queue_name: str
+    deduplicated: bool
 
 
 class WebhookTriggerItemResponse(BaseModel):
