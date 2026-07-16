@@ -65,3 +65,14 @@ GET /v1/internal/gitlab/merge-request-tasks?project_path=group/project&merge_req
 ```
 
 接口支持 `offset`、`limit`，并与任务 API 一样通过 `X-API-Token` 使用 `API_TOKEN` 鉴权。
+
+## 列表分页
+
+任务和 Webhook 列表均使用服务端分页，默认每页 20 条，单页最大 200 条：
+
+```text
+GET /v1/agent-tasks?offset=0&limit=20&status=queued&queue=default&q=prompt
+GET /v1/webhooks?offset=0&limit=20&event_type=Push%20Hook&q=project
+```
+
+响应中的 `total` 是当前筛选条件下的记录总数，`summary` 提供不受筛选影响的全局状态、队列或事件类型摘要。任务接口可重复传递 `status` 参数以同时查询多个状态。

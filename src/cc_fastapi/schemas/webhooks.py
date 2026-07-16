@@ -25,6 +25,7 @@ class WebhookTriggerItemResponse(BaseModel):
     webhook_uuid: str | None
     instance_url: str | None
     task_id: str | None
+    task_status: TaskStatus | None
     payload: dict[str, Any]
     created_at: datetime
     workflow_run_id: str | None
@@ -32,6 +33,12 @@ class WebhookTriggerItemResponse(BaseModel):
     skip_reason: str | None
 
 
+class WebhookTriggerListSummaryResponse(BaseModel):
+    total: int
+    event_types: list[str]
+
+
 class WebhookTriggerListResponse(BaseModel):
     items: list[WebhookTriggerItemResponse]
     total: int
+    summary: WebhookTriggerListSummaryResponse

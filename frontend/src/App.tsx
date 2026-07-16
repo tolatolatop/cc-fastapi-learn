@@ -24,6 +24,7 @@ import {
   X,
 } from 'lucide-react'
 import { api } from './api'
+import Pagination from './Pagination'
 import type { CreateTaskPayload, QueueItem, TaskContext, TaskItem, TaskLog, TaskStatus } from './types'
 import WebhookPage from './WebhookPage'
 
@@ -535,14 +536,19 @@ function App() {
   const [activeView, setActiveView] = useState<'tasks' | 'webhooks'>(() => window.location.hash === '#/webhooks' ? 'webhooks' : 'tasks')
   const [tasks, setTasks] = useState<TaskItem[]>([])
   const [total, setTotal] = useState(0)
+  const [counts, setCounts] = useState({ all: 0, queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0, abandoned: 0 })
+  const [queueCounts, setQueueCounts] = useState<Record<string, { total: number; queued: number; running: number }>>({})
   const [queues, setQueues] = useState<QueueItem[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
   const [apiOnline, setApiOnline] = useState<boolean | null>(null)
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<TaskStatus | 'all'>('all')
   const [queueFilter, setQueueFilter] = useState('all')
+  const [taskPage, setTaskPage] = useState(1)
+  const [taskPageSize, setTaskPageSize] = useState(20)
   const [selectedTask, setSelectedTask] = useState<TaskItem | null>(null)
   const [logs, setLogs] = useState<TaskLog[]>([])
   const [context, setContext] = useState<TaskContext | null>(null)
@@ -559,20 +565,38 @@ function App() {
     if (silent) setRefreshing(true)
     else setLoading(true)
     try {
-      const [taskResponse, queueResponse] = await Promise.all([api.listTasks(), api.listQueues()])
+      const statuses = statusFilter === 'all'
+        ? []
+        : statusFilter === 'failed'
+          ? ['failed', 'abandoned']
+          : [statusFilter]
+      const [taskResponse, queueResponse] = await Promise.all([
+        api.listTasks({
+          offset: (taskPage - 1) * taskPageSize,
+          limit: taskPageSize,
+          statuses,
+          queue: queueFilter === 'all' ? undefined : queueFilter,
+          query: debouncedSearch.trim() || undefined,
+        }),
+        api.listQueues(),
+      ])
       setTasks(taskResponse.items)
       setTotal(taskResponse.total)
+      setCounts({ all: taskResponse.summary.total, ...taskResponse.summary.status_counts })
+      setQueueCounts(Object.fromEntries(taskResponse.summary.queues.map((queue) => [queue.name, queue])))
       setQueues(queueResponse.items)
       setError('')
       setApiOnline(true)
       setSelectedTask((current) => current ? taskResponse.items.find((item) => item.id === current.id) || current : null)
+      const lastPage = Math.max(1, Math.ceil(taskResponse.total / taskPageSize))
+      if (taskPage > lastPage) setTaskPage(lastPage)
     } catch (requestError) {
       setError(messageFrom(requestError))
     } finally {
       setLoading(false)
       setRefreshing(false)
     }
-  }, [])
+  }, [debouncedSearch, queueFilter, statusFilter, taskPage, taskPageSize])
 
   const loadDetail = useCallback(async (id: string, showLoader = true) => {
     if (showLoader) setDetailLoading(true)
@@ -596,6 +620,11 @@ function App() {
       setApiOnline(false)
     }
   }, [])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(search), 300)
+    return () => window.clearTimeout(timer)
+  }, [search])
 
   useEffect(() => {
     loadDashboard()
@@ -632,32 +661,11 @@ function App() {
     return () => window.removeEventListener('hashchange', onHashChange)
   }, [])
 
-  const counts = useMemo(() => {
-    const result = { all: tasks.length, queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0, abandoned: 0 }
-    tasks.forEach((task) => { result[task.status] += 1 })
-    return result
-  }, [tasks])
-
-  const visibleTasks = useMemo(() => {
-    const query = search.trim().toLowerCase()
-    return tasks.filter((task) => {
-      const matchesStatus = statusFilter === 'all' || task.status === statusFilter || (statusFilter === 'failed' && task.status === 'abandoned')
-      const matchesQueue = queueFilter === 'all' || task.queue_name === queueFilter
-      const matchesSearch = !query || task.prompt.toLowerCase().includes(query) || task.id.toLowerCase().includes(query) || task.queue_name.toLowerCase().includes(query)
-      return matchesStatus && matchesQueue && matchesSearch
-    })
-  }, [queueFilter, search, statusFilter, tasks])
-
   const displayQueues = useMemo(() => {
     if (queues.length) return queues
     const names = [...new Set(tasks.map((task) => task.queue_name))]
     return names.map((name, index) => ({ name, workers: 0, is_default: index === 0 }))
   }, [queues, tasks])
-
-  const taskStatuses = useMemo(
-    () => Object.fromEntries(tasks.map((task) => [task.id, task.status])) as Record<string, TaskStatus>,
-    [tasks],
-  )
 
   async function openTask(task: TaskItem) {
     setSelectedTask(task)
@@ -728,7 +736,7 @@ function App() {
 
         <nav aria-label="主导航">
           <p>工作区</p>
-          <button className={`nav-item ${activeView === 'tasks' ? 'active' : ''}`} onClick={() => navigate('tasks')}><Layers3 size={18} /><span>任务调度</span><b>{total}</b></button>
+          <button className={`nav-item ${activeView === 'tasks' ? 'active' : ''}`} onClick={() => navigate('tasks')}><Layers3 size={18} /><span>任务调度</span><b>{counts.all}</b></button>
           <button className={`nav-item ${activeView === 'webhooks' ? 'active' : ''}`} onClick={() => navigate('webhooks')}>
             <Webhook size={18} /><span>Webhook 档案</span>
           </button>
@@ -741,9 +749,9 @@ function App() {
         <div className="sidebar-queues">
           <p>活跃队列</p>
           {displayQueues.map((queue) => {
-            const active = tasks.filter((task) => task.queue_name === queue.name && task.status === 'running').length
+            const active = queueCounts[queue.name]?.running || 0
             return (
-              <button key={queue.name} onClick={() => { setQueueFilter(queue.name); setSidebarOpen(false) }}>
+              <button key={queue.name} onClick={() => { setQueueFilter(queue.name); setTaskPage(1); setSidebarOpen(false) }}>
                 <i className={active ? 'busy' : ''} />
                 <span>{queue.name}</span>
                 <small>{active}/{queue.workers || '—'}</small>
@@ -792,13 +800,13 @@ function App() {
             <div className="rail-track">
               <div className="track-line" />
               {displayQueues.map((queue) => {
-                const active = tasks.filter((task) => task.queue_name === queue.name && task.status === 'running').length
-                const waiting = tasks.filter((task) => task.queue_name === queue.name && task.status === 'queued').length
+                const active = queueCounts[queue.name]?.running || 0
+                const waiting = queueCounts[queue.name]?.queued || 0
                 return (
                   <button
                     className={`rail-node ${active ? 'active' : ''}`}
                     key={queue.name}
-                    onClick={() => setQueueFilter(queue.name)}
+                    onClick={() => { setQueueFilter(queue.name); setTaskPage(1) }}
                     title={`筛选 ${queue.name} 队列`}
                   >
                     <span className="node-dot"><i /></span>
@@ -816,9 +824,9 @@ function App() {
 
           <section className="task-panel">
             <div className="panel-summary">
-              <div><span>任务总数</span><strong>{total}</strong><small>最近载入 {tasks.length} 条</small></div>
+              <div><span>任务总数</span><strong>{counts.all}</strong><small>当前页 {tasks.length} 条</small></div>
               <div><span>执行中</span><strong className="blue">{counts.running}</strong><small>{counts.queued} 条等待中</small></div>
-              <div><span>已完成</span><strong>{counts.succeeded}</strong><small>{tasks.length ? Math.round((counts.succeeded / tasks.length) * 100) : 0}% 当前成功率</small></div>
+              <div><span>已完成</span><strong>{counts.succeeded}</strong><small>{counts.all ? Math.round((counts.succeeded / counts.all) * 100) : 0}% 总体成功率</small></div>
               <div><span>需关注</span><strong className={counts.failed + counts.abandoned ? 'coral' : ''}>{counts.failed + counts.abandoned}</strong><small>失败与中止</small></div>
             </div>
 
@@ -828,7 +836,7 @@ function App() {
                   <button
                     key={filter.value}
                     className={statusFilter === filter.value ? 'active' : ''}
-                    onClick={() => setStatusFilter(filter.value)}
+                    onClick={() => { setStatusFilter(filter.value); setTaskPage(1) }}
                   >
                     {filter.label}
                     <span>{filter.value === 'all' ? counts.all : filter.value === 'failed' ? counts.failed + counts.abandoned : counts[filter.value]}</span>
@@ -838,12 +846,12 @@ function App() {
               <div className="toolbar-tools">
                 <label className="search-box">
                   <Search size={16} />
-                  <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索指令或 ID" aria-label="搜索任务" />
-                  {search && <button onClick={() => setSearch('')} aria-label="清除搜索"><X size={14} /></button>}
+                  <input value={search} onChange={(event) => { setSearch(event.target.value); setTaskPage(1) }} placeholder="搜索指令或 ID" aria-label="搜索任务" />
+                  {search && <button onClick={() => { setSearch(''); setTaskPage(1) }} aria-label="清除搜索"><X size={14} /></button>}
                 </label>
                 <label className="queue-select">
                   <ListFilter size={16} />
-                  <select value={queueFilter} onChange={(event) => setQueueFilter(event.target.value)} aria-label="筛选队列">
+                  <select value={queueFilter} onChange={(event) => { setQueueFilter(event.target.value); setTaskPage(1) }} aria-label="筛选队列">
                     <option value="all">全部队列</option>
                     {displayQueues.map((queue) => <option key={queue.name} value={queue.name}>{queue.name}</option>)}
                   </select>
@@ -865,12 +873,12 @@ function App() {
                     <button className="button button-primary" onClick={() => loadDashboard()}><RefreshCw size={16} />重试连接</button>
                   </div>
                 </div>
-              ) : visibleTasks.length === 0 ? (
+              ) : tasks.length === 0 ? (
                 <div className="state-message">
                   <Layers3 size={26} />
-                  <strong>{tasks.length ? '没有符合条件的任务' : '队列还是空的'}</strong>
-                  <p>{tasks.length ? '调整状态、队列或搜索条件后再试。' : '下发第一个任务，worker 会自动接管执行。'}</p>
-                  {!tasks.length && <button className="button button-primary" onClick={() => setCreateOpen(true)}><Plus size={17} />新建任务</button>}
+                  <strong>{counts.all ? '没有符合条件的任务' : '队列还是空的'}</strong>
+                  <p>{counts.all ? '调整状态、队列或搜索条件后再试。' : '下发第一个任务，worker 会自动接管执行。'}</p>
+                  {!counts.all && <button className="button button-primary" onClick={() => setCreateOpen(true)}><Plus size={17} />新建任务</button>}
                 </div>
               ) : (
                 <table className="task-table">
@@ -878,7 +886,7 @@ function App() {
                     <tr><th>任务</th><th>状态</th><th>队列</th><th>创建时间</th><th>耗时</th><th>尝试</th><th><span className="sr-only">操作</span></th></tr>
                   </thead>
                   <tbody>
-                    {visibleTasks.map((task) => (
+                    {tasks.map((task) => (
                       <tr key={task.id} tabIndex={0} onClick={() => openTask(task)} onKeyDown={(event) => handleRowKey(event, task)}>
                         <td>
                           <div className="task-name"><strong>{task.prompt || '未命名任务'}</strong><span>TASK-{shortId(task.id).toUpperCase()} · {task.model || '默认模型'}</span></div>
@@ -896,13 +904,23 @@ function App() {
               )}
             </div>
 
-            {!loading && !error && visibleTasks.length > 0 && (
-              <div className="panel-footer"><span>显示 {visibleTasks.length} / {total} 条任务</span><span><Server size={13} />数据来自实时 API</span></div>
+            {!loading && !error && tasks.length > 0 && (
+              <div className="panel-footer">
+                <Pagination
+                  page={taskPage}
+                  pageSize={taskPageSize}
+                  total={total}
+                  itemLabel="任务"
+                  onPageChange={setTaskPage}
+                  onPageSizeChange={(value) => { setTaskPageSize(value); setTaskPage(1) }}
+                />
+                <span className="panel-source"><Server size={13} />数据来自实时 API</span>
+              </div>
             )}
           </section>
           </>
           ) : (
-            <WebhookPage key={connectionRevision} taskStatuses={taskStatuses} onOpenTask={(taskId) => loadDetail(taskId)} onOpenSettings={() => setSettingsOpen(true)} />
+            <WebhookPage key={connectionRevision} onOpenTask={(taskId) => loadDetail(taskId)} onOpenSettings={() => setSettingsOpen(true)} />
           )}
         </div>
       </main>

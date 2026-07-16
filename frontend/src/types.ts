@@ -25,6 +25,16 @@ export interface TaskItem {
 export interface TaskListResponse {
   items: TaskItem[]
   total: number
+  summary: {
+    total: number
+    status_counts: Record<TaskStatus, number>
+    queues: Array<{
+      name: string
+      total: number
+      queued: number
+      running: number
+    }>
+  }
 }
 
 export interface QueueItem {
@@ -77,6 +87,7 @@ export interface WebhookTrigger {
   webhook_uuid: string | null
   instance_url: string | null
   task_id: string | null
+  task_status: TaskStatus | null
   payload: Record<string, unknown>
   created_at: string
   workflow_run_id: string | null
@@ -87,4 +98,8 @@ export interface WebhookTrigger {
 export interface WebhookTriggerListResponse {
   items: WebhookTrigger[]
   total: number
+  summary: {
+    total: number
+    event_types: string[]
+  }
 }

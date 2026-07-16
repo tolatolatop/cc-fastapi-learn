@@ -1,4 +1,4 @@
-import { KeyboardEvent, useCallback, useEffect, useMemo, useState } from 'react'
+import { KeyboardEvent, useCallback, useEffect, useState } from 'react'
 import {
   ArrowRight,
   Braces,
@@ -18,6 +18,7 @@ import {
   X,
 } from 'lucide-react'
 import { api } from './api'
+import Pagination from './Pagination'
 import type { TaskStatus, WebhookTrigger } from './types'
 
 const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
@@ -176,37 +177,55 @@ function WebhookDetail({ record, taskStatus, onClose, onOpenTask }: WebhookDetai
 }
 
 interface WebhookPageProps {
-  taskStatuses: Record<string, TaskStatus>
   onOpenTask: (taskId: string) => void
   onOpenSettings: () => void
 }
 
-export default function WebhookPage({ taskStatuses, onOpenTask, onOpenSettings }: WebhookPageProps) {
+export default function WebhookPage({ onOpenTask, onOpenSettings }: WebhookPageProps) {
   const [records, setRecords] = useState<WebhookTrigger[]>([])
   const [total, setTotal] = useState(0)
+  const [summaryTotal, setSummaryTotal] = useState(0)
+  const [eventTypes, setEventTypes] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [eventFilter, setEventFilter] = useState('all')
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
   const [selected, setSelected] = useState<WebhookTrigger | null>(null)
 
   const loadRecords = useCallback(async (silent = false) => {
     if (silent) setRefreshing(true)
     else setLoading(true)
     try {
-      const response = await api.listWebhooks()
+      const response = await api.listWebhooks({
+        offset: (page - 1) * pageSize,
+        limit: pageSize,
+        eventType: eventFilter === 'all' ? undefined : eventFilter,
+        query: debouncedSearch.trim() || undefined,
+      })
       setRecords(response.items)
       setTotal(response.total)
+      setSummaryTotal(response.summary.total)
+      setEventTypes(response.summary.event_types)
       setError('')
       setSelected((current) => current ? response.items.find((item) => item.id === current.id) || current : null)
+      const lastPage = Math.max(1, Math.ceil(response.total / pageSize))
+      if (page > lastPage) setPage(lastPage)
     } catch (requestError) {
       setError(errorMessage(requestError))
     } finally {
       setLoading(false)
       setRefreshing(false)
     }
-  }, [])
+  }, [debouncedSearch, eventFilter, page, pageSize])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(search), 300)
+    return () => window.clearTimeout(timer)
+  }, [search])
 
   useEffect(() => {
     loadRecords()
@@ -215,32 +234,6 @@ export default function WebhookPage({ taskStatuses, onOpenTask, onOpenSettings }
     }, 10000)
     return () => window.clearInterval(timer)
   }, [loadRecords])
-
-  const eventTypes = useMemo(() => [...new Set(records.map((record) => record.event_type))].sort(), [records])
-
-  const visibleRecords = useMemo(() => {
-    const query = search.trim().toLowerCase()
-    return records.filter((record) => {
-      if (eventFilter !== 'all' && record.event_type !== eventFilter) return false
-      if (!query) return true
-      const summary = payloadSummary(record.payload)
-      const haystack = [
-        record.provider,
-        record.event_type,
-        record.event_uuid || '',
-        record.webhook_uuid || '',
-        record.instance_url || '',
-        record.task_id || '',
-        record.workflow_status || '',
-        record.skip_reason || '',
-        summary.projectName,
-        summary.ref,
-        summary.actor,
-        JSON.stringify(record.payload),
-      ].join(' ').toLowerCase()
-      return haystack.includes(query)
-    })
-  }, [eventFilter, records, search])
 
   function handleRowKey(event: KeyboardEvent<HTMLTableRowElement>, record: WebhookTrigger) {
     if (event.key === 'Enter' || event.key === ' ') {
@@ -273,7 +266,7 @@ export default function WebhookPage({ taskStatuses, onOpenTask, onOpenSettings }
         </div>
         <div className="ingress-gateway">
           <div className="gateway-rings"><Webhook size={18} /></div>
-          <div><span>接收记录</span><strong>{total}</strong></div>
+          <div><span>接收记录</span><strong>{summaryTotal}</strong></div>
         </div>
         <ArrowRight className="ingress-arrow" size={18} />
         <div className="ingress-target">
@@ -288,22 +281,22 @@ export default function WebhookPage({ taskStatuses, onOpenTask, onOpenSettings }
           <div>
             <p className="eyebrow">EVENT LEDGER</p>
             <h2>触发记录</h2>
-            <span>当前载入最近 {records.length} 条{total > records.length ? `，总计 ${total} 条` : ''}</span>
+            <span>共归档 {summaryTotal.toLocaleString('zh-CN')} 条，当前页 {records.length} 条</span>
           </div>
           <div className="webhook-search-tools">
             <label className="webhook-search">
               <Search size={18} />
               <input
                 value={search}
-                onChange={(event) => setSearch(event.target.value)}
+                onChange={(event) => { setSearch(event.target.value); setPage(1) }}
                 placeholder="搜索项目、分支、UUID 或任务 ID"
                 aria-label="搜索 Webhook 记录"
               />
-              {search && <button onClick={() => setSearch('')} aria-label="清除搜索"><X size={15} /></button>}
+              {search && <button onClick={() => { setSearch(''); setPage(1) }} aria-label="清除搜索"><X size={15} /></button>}
             </label>
             <label className="webhook-event-filter">
               <GitPullRequest size={16} />
-              <select value={eventFilter} onChange={(event) => setEventFilter(event.target.value)} aria-label="筛选事件类型">
+              <select value={eventFilter} onChange={(event) => { setEventFilter(event.target.value); setPage(1) }} aria-label="筛选事件类型">
                 <option value="all">全部事件</option>
                 {eventTypes.map((eventType) => <option key={eventType} value={eventType}>{eventType}</option>)}
               </select>
@@ -312,8 +305,8 @@ export default function WebhookPage({ taskStatuses, onOpenTask, onOpenSettings }
         </div>
 
         <div className="webhook-results-meta">
-          <span>找到 <strong>{visibleRecords.length}</strong> 条记录</span>
-          {(search || eventFilter !== 'all') && <button onClick={() => { setSearch(''); setEventFilter('all') }}>清除检索条件</button>}
+          <span>找到 <strong>{total.toLocaleString('zh-CN')}</strong> 条记录</span>
+          {(search || eventFilter !== 'all') && <button onClick={() => { setSearch(''); setEventFilter('all'); setPage(1) }}>清除检索条件</button>}
         </div>
 
         <div className="webhook-list-wrap">
@@ -327,17 +320,17 @@ export default function WebhookPage({ taskStatuses, onOpenTask, onOpenSettings }
                 <button className="button button-primary" onClick={() => loadRecords()}><RefreshCw size={16} />重试连接</button>
               </div>
             </div>
-          ) : visibleRecords.length === 0 ? (
+          ) : records.length === 0 ? (
             <div className="state-message webhook-empty">
               <Webhook size={27} />
-              <strong>{records.length ? '没有匹配的触发记录' : '还没有收到 Webhook'}</strong>
-              <p>{records.length ? '尝试搜索项目名、分支、UUID 或关联任务 ID。' : '在 GitLab 中配置 Webhook 后，收到的事件会归档在这里。'}</p>
+              <strong>{summaryTotal ? '没有匹配的触发记录' : '还没有收到 Webhook'}</strong>
+              <p>{summaryTotal ? '尝试搜索项目名、分支、UUID 或关联任务 ID。' : '在 GitLab 中配置 Webhook 后，收到的事件会归档在这里。'}</p>
             </div>
           ) : (
             <table className="webhook-table">
               <thead><tr><th>接收时间</th><th>事件</th><th>项目 / 分支</th><th>事件标识</th><th>关联任务</th><th><span className="sr-only">操作</span></th></tr></thead>
               <tbody>
-                {visibleRecords.map((record) => {
+                {records.map((record) => {
                   const summary = payloadSummary(record.payload)
                   const received = formatWebhookTime(record.created_at)
                   return (
@@ -349,7 +342,7 @@ export default function WebhookPage({ taskStatuses, onOpenTask, onOpenSettings }
                       <td>
                         {record.task_id ? (
                           <button className="task-link" onClick={(event) => { event.stopPropagation(); onOpenTask(record.task_id!) }}>
-                            {taskStatuses[record.task_id] && <i className={`task-dot task-${taskStatuses[record.task_id]}`} title={TASK_STATUS_LABEL[taskStatuses[record.task_id]]} />}
+                            {record.task_status && <i className={`task-dot task-${record.task_status}`} title={TASK_STATUS_LABEL[record.task_status]} />}
                             TASK-{record.task_id.slice(0, 8).toUpperCase()}<ExternalLink size={12} />
                           </button>
                         ) : (
@@ -365,12 +358,22 @@ export default function WebhookPage({ taskStatuses, onOpenTask, onOpenSettings }
           )}
         </div>
 
-        {!loading && !error && visibleRecords.length > 0 && (
-          <div className="panel-footer"><span>显示 {visibleRecords.length} / {total} 条触发记录</span><span><Server size={13} />数据来自 Webhook API</span></div>
+        {!loading && !error && records.length > 0 && (
+          <div className="panel-footer">
+            <Pagination
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              itemLabel="Webhook 记录"
+              onPageChange={setPage}
+              onPageSizeChange={(value) => { setPageSize(value); setPage(1) }}
+            />
+            <span className="panel-source"><Server size={13} />数据来自 Webhook API</span>
+          </div>
         )}
       </section>
 
-      {selected && <WebhookDetail record={selected} taskStatus={selected.task_id ? taskStatuses[selected.task_id] : undefined} onClose={() => setSelected(null)} onOpenTask={onOpenTask} />}
+      {selected && <WebhookDetail record={selected} taskStatus={selected.task_status || undefined} onClose={() => setSelected(null)} onOpenTask={onOpenTask} />}
     </>
   )
 }

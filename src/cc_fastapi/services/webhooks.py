@@ -1,6 +1,6 @@
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -220,17 +220,53 @@ class WebhookService:
         db.refresh(execution.run)
         return trigger, task, False, execution.run
 
-    def list_triggers(self, db: Session, offset: int, limit: int) -> tuple[list[WebhookTrigger], int]:
+    def list_triggers(
+        self,
+        db: Session,
+        offset: int,
+        limit: int,
+        event_type: str | None = None,
+        search: str | None = None,
+    ) -> tuple[list[tuple[WebhookTrigger, TaskStatus | None]], int]:
+        query = select(WebhookTrigger, AgentTask.status).outerjoin(
+            AgentTask, AgentTask.id == WebhookTrigger.task_id
+        )
+        count_query = select(func.count()).select_from(WebhookTrigger)
+        filters = []
+        if event_type:
+            filters.append(WebhookTrigger.event_type == event_type)
+        if search and (normalized_search := search.strip()):
+            pattern = f"%{normalized_search}%"
+            filters.append(
+                or_(
+                    WebhookTrigger.provider.ilike(pattern),
+                    WebhookTrigger.event_type.ilike(pattern),
+                    WebhookTrigger.event_uuid.ilike(pattern),
+                    WebhookTrigger.webhook_uuid.ilike(pattern),
+                    WebhookTrigger.instance_url.ilike(pattern),
+                    WebhookTrigger.task_id.ilike(pattern),
+                    cast(WebhookTrigger.payload_json, String).ilike(pattern),
+                )
+            )
+        if filters:
+            query = query.where(*filters)
+            count_query = count_query.where(*filters)
         items = list(
-            db.scalars(
-                select(WebhookTrigger)
-                .order_by(WebhookTrigger.created_at.desc(), WebhookTrigger.id.desc())
+            db.execute(
+                query.order_by(WebhookTrigger.created_at.desc(), WebhookTrigger.id.desc())
                 .offset(offset)
                 .limit(limit)
-            )
+            ).tuples()
         )
-        total = db.scalar(select(func.count()).select_from(WebhookTrigger)) or 0
+        total = db.scalar(count_query) or 0
         return items, total
 
     def get_workflow_run(self, db: Session, trigger_id: int) -> WorkflowRun | None:
         return self.workflows.get_run_for_trigger(db, trigger_id)
+
+    def summarize_triggers(self, db: Session) -> tuple[int, list[str]]:
+        total = db.scalar(select(func.count()).select_from(WebhookTrigger)) or 0
+        event_types = list(
+            db.scalars(select(WebhookTrigger.event_type).distinct().order_by(WebhookTrigger.event_type.asc()))
+        )
+        return total, event_types
