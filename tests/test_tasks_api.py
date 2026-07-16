@@ -66,6 +66,9 @@ def test_create_get_and_logs():
     assert detail.status_code == 200
     assert detail.json()["status"] == "queued"
     assert detail.json()["queue_name"] == "default"
+    assert detail.json()["prompt"] == "hello"
+    assert detail.json()["model"]
+    assert detail.json()["metadata"] == {"source": "test"}
     assert detail.json()["agent_mode"] is True
     assert detail.json()["unattended"] is True
 
@@ -137,6 +140,18 @@ def test_create_task_with_explicit_queue():
     response = client.post("/v1/agent-tasks", json={"prompt": "queue", "queue_name": "slow"})
     assert response.status_code == 200
     assert response.json()["queue_name"] == "slow"
+
+
+def test_list_available_queues():
+    client = build_client()
+    response = client.get("/v1/agent-tasks/queues/available")
+    assert response.status_code == 200
+    assert response.json() == {
+        "items": [
+            {"name": "default", "workers": 1, "is_default": True},
+            {"name": "slow", "workers": 1, "is_default": False},
+        ]
+    }
 
 
 def test_create_task_with_missing_queue_returns_400():

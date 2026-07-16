@@ -19,8 +19,20 @@ services:
       CLAUDE_CWD: "."
       ANTHROPIC_MODEL: "claude-sonnet-4-20250514"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      API_TOKEN: "${API_TOKEN:-}"
     volumes:
       - app_data:/app/data
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: cc-agent-console
+    ports:
+      - "${FRONTEND_PORT:-18080}:80"
+    depends_on:
+      - app
     restart: unless-stopped
 
 volumes:

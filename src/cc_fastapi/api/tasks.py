@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from cc_fastapi.core.config import get_settings
+from cc_fastapi.core.queue_config import get_queue_config
 from cc_fastapi.db.models import TaskStatus
 from cc_fastapi.db.session import get_db
 from cc_fastapi.schemas.tasks import (
@@ -15,6 +16,8 @@ from cc_fastapi.schemas.tasks import (
     TaskListResponse,
     TaskLogItemResponse,
     TaskLogListResponse,
+    QueueItemResponse,
+    QueueListResponse,
 )
 from cc_fastapi.services.claude_client import validate_claude_agent_options
 from cc_fastapi.services.queue import QueueNotFoundError, TaskQueueService
@@ -38,6 +41,9 @@ def _to_task_item(task) -> TaskItemResponse:
         id=task.id,
         status=task.status,
         queue_name=getattr(task, "queue_name", "default") or "default",
+        prompt=str(task.payload.get("prompt", "")),
+        model=str(task.payload.get("model", "")),
+        metadata=task.metadata_json,
         priority=task.priority,
         attempt=task.attempt,
         max_attempts=task.max_attempts,
@@ -50,6 +56,17 @@ def _to_task_item(task) -> TaskItemResponse:
         abandoned_reason=task.abandoned_reason,
         error_message=task.error_message,
         result=task.result,
+    )
+
+
+@router.get("/queues/available", response_model=QueueListResponse, dependencies=[Depends(require_token)])
+def list_queues() -> QueueListResponse:
+    config = get_queue_config()
+    return QueueListResponse(
+        items=[
+            QueueItemResponse(name=name, workers=definition.workers, is_default=name == config.default_queue)
+            for name, definition in config.queues.items()
+        ]
     )
 
 

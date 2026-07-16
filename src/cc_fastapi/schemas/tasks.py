@@ -28,6 +28,9 @@ class TaskItemResponse(BaseModel):
     id: str
     status: TaskStatus
     queue_name: str
+    prompt: str
+    model: str
+    metadata: dict[str, Any] | None
     priority: int
     attempt: int
     max_attempts: int
@@ -72,3 +75,12 @@ class TaskContextResponse(BaseModel):
     messages: list[str]
     updated_at: datetime | None
 
+
+class QueueItemResponse(BaseModel):
+    name: str
+    workers: int
+    is_default: bool
+
+
+class QueueListResponse(BaseModel):
+    items: list[QueueItemResponse]
