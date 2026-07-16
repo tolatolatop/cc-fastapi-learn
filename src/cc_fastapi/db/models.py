@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.mysql import JSON as MySQLJSON
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
@@ -31,6 +31,7 @@ class WorkflowRunStatus(StrEnum):
     SKIPPED = "skipped"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    SUPERSEDED = "superseded"
 
 
 class WorkflowStepStatus(StrEnum):
@@ -209,4 +210,35 @@ class WorkflowTaskLink(Base):
     role: Mapped[str] = mapped_column(String(64), nullable=False, default="primary")
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class WorkflowCorrelation(Base):
+    __tablename__ = "workflow_correlations"
+    __table_args__ = (
+        UniqueConstraint(
+            "workflow_run_id",
+            "provider",
+            "resource_type",
+            "project_path",
+            "resource_id",
+            name="uq_workflow_correlation_run_resource",
+        ),
+        Index(
+            "ix_workflow_correlation_lookup",
+            "provider",
+            "resource_type",
+            "project_path",
+            "resource_id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    workflow_run_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("workflow_runs.id"), nullable=False, index=True
+    )
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    resource_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    project_path: Mapped[str] = mapped_column(String(255), nullable=False)
+    resource_id: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)

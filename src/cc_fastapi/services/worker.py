@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from cc_fastapi.core.config import get_settings
 from cc_fastapi.core.queue_config import get_queue_config
 from cc_fastapi.db.session import SessionLocal
-from cc_fastapi.services.claude_client import ClaudeClient
+from cc_fastapi.services.claude_client import AgentTaskCancelledError, ClaudeClient
 from cc_fastapi.services.queue import TaskQueueService
 from cc_fastapi.db.models import TaskStatus
 from cc_fastapi.workflows import build_default_workflow_engine
@@ -155,6 +155,7 @@ class WorkerManager:
                 agent_mode=task.agent_mode,
                 unattended=task.unattended,
                 on_message_update=lambda messages: self.queue.upsert_task_context(db, task.id, messages),
+                should_cancel=lambda: self.queue.is_task_cancelled(db, task.id),
             )
             self.queue.mark_success(db, task.id, result)
             self.workflows.handle_task_terminal(db, task.id)
@@ -166,6 +167,17 @@ class WorkerManager:
                     "trace_id": result.get("session_id", ""),
                     "queue_name": getattr(task, "queue_name", "default"),
                     "duration_ms": int((time.monotonic() - started_at) * 1000),
+                },
+            )
+        except AgentTaskCancelledError:
+            db.rollback()
+            self.workflows.handle_task_terminal(db, task.id)
+            logger.info(
+                "task execution stopped after cancellation",
+                extra={
+                    "task_id": task.id,
+                    "event_type": "cancelled",
+                    "queue_name": getattr(task, "queue_name", "default"),
                 },
             )
         except Exception as exc:

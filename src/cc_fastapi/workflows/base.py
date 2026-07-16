@@ -47,26 +47,67 @@ class WorkflowTaskSpec:
 
 
 @dataclass(frozen=True)
+class WorkflowCorrelationSpec:
+    provider: str
+    resource_type: str
+    project_path: str
+    resource_id: str
+
+    def __post_init__(self) -> None:
+        normalized = {
+            "provider": self.provider.strip().lower(),
+            "resource_type": self.resource_type.strip().lower(),
+            "project_path": self.project_path.strip(),
+            "resource_id": self.resource_id.strip(),
+        }
+        if not all(normalized.values()):
+            raise ValueError("workflow correlation fields must not be empty")
+        for field_name, value in normalized.items():
+            object.__setattr__(self, field_name, value)
+
+
+@dataclass(frozen=True)
 class WorkflowPlan:
     tasks: tuple[WorkflowTaskSpec, ...] = ()
     skip_reason: str | None = None
     context: dict[str, Any] = field(default_factory=dict)
+    correlations: tuple[WorkflowCorrelationSpec, ...] = ()
+    supersede_correlations: tuple[WorkflowCorrelationSpec, ...] = ()
 
     @classmethod
     def create_tasks(
         cls,
         *tasks: WorkflowTaskSpec,
         context: dict[str, Any] | None = None,
+        correlations: tuple[WorkflowCorrelationSpec, ...] = (),
+        supersede_correlations: tuple[WorkflowCorrelationSpec, ...] = (),
     ) -> "WorkflowPlan":
         if not tasks:
             raise ValueError("workflow plan must contain at least one task")
-        return cls(tasks=tuple(tasks), context=context or {})
+        return cls(
+            tasks=tuple(tasks),
+            context=context or {},
+            correlations=correlations,
+            supersede_correlations=supersede_correlations,
+        )
 
     @classmethod
-    def skip(cls, reason: str, *, context: dict[str, Any] | None = None) -> "WorkflowPlan":
+    def skip(
+        cls,
+        reason: str,
+        *,
+        context: dict[str, Any] | None = None,
+        correlations: tuple[WorkflowCorrelationSpec, ...] = (),
+        supersede_correlations: tuple[WorkflowCorrelationSpec, ...] = (),
+    ) -> "WorkflowPlan":
         if not reason.strip():
             raise ValueError("workflow skip reason must not be empty")
-        return cls(skip_reason=reason.strip(), context=context or {})
+        return cls(
+            skip_reason=reason.strip(),
+            context=context or {},
+            correlations=correlations,
+            supersede_correlations=supersede_correlations,
+        )
 
 
 @dataclass(frozen=True)

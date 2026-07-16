@@ -5,15 +5,18 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from cc_fastapi.api.internal import router as internal_router
 from cc_fastapi.api.webhooks import router
 from cc_fastapi.core.config import get_settings
 from cc_fastapi.core.queue_config import get_queue_config
 from cc_fastapi.db.models import (
     AgentTask,
+    AgentTaskLog,
     Base,
     TaskStatus,
     WebhookDeduplicationKey,
     WebhookTrigger,
+    WorkflowCorrelation,
     WorkflowRun,
     WorkflowRunStatus,
     WorkflowStepRun,
@@ -61,6 +64,7 @@ def build_client():
 
     app = FastAPI()
     app.include_router(router)
+    app.include_router(internal_router)
 
     def override_db():
         db = TestingSessionLocal()
@@ -92,6 +96,36 @@ def gitlab_payload(index: int = 1):
         "project": {"path_with_namespace": "group/project"},
         "commits": [{"id": f"commit-{index}"}],
     }
+
+
+def gitlab_merge_request_payload(
+    *,
+    merge_request_iid: int = 7,
+    action: str = "open",
+    project_path: str = "group/project",
+):
+    return {
+        "object_kind": "merge_request",
+        "ref": f"refs/heads/feature-{merge_request_iid}",
+        "project": {"path_with_namespace": project_path},
+        "object_attributes": {
+            "iid": merge_request_iid,
+            "action": action,
+            "source_branch": f"feature-{merge_request_iid}",
+            "target_branch": "main",
+        },
+        "commits": [],
+    }
+
+
+def merge_request_headers(sequence: str):
+    return gitlab_headers(
+        **{
+            "X-Gitlab-Event": "Merge Request Hook",
+            "X-Gitlab-Event-UUID": f"mr-event-{sequence}",
+            "X-Gitlab-Webhook-UUID": f"mr-webhook-{sequence}",
+        }
+    )
 
 
 def test_gitlab_webhook_renders_prompt_creates_task_and_records_metadata():
@@ -210,6 +244,138 @@ def test_gitlab_webhook_without_webhook_uuid_is_not_deduplicated():
         assert db.scalar(select(func.count()).select_from(AgentTask)) == 2
         assert db.scalar(select(func.count()).select_from(WebhookTrigger)) == 2
         assert db.scalar(select(func.count()).select_from(WebhookDeduplicationKey)) == 0
+
+
+def test_merge_request_update_supersedes_active_workflow_and_cancels_task():
+    client, session_factory = build_client()
+    opened = client.post(
+        "/v1/webhooks/gitlab",
+        headers=merge_request_headers("open"),
+        json=gitlab_merge_request_payload(action="open"),
+    )
+    assert opened.status_code == 200
+
+    with session_factory() as db:
+        old_task = db.get(AgentTask, opened.json()["task_id"])
+        assert old_task is not None
+        old_task.status = TaskStatus.RUNNING
+        old_task.worker_id = "test-worker"
+        db.commit()
+
+    updated = client.post(
+        "/v1/webhooks/gitlab",
+        headers=merge_request_headers("update"),
+        json=gitlab_merge_request_payload(action="update"),
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["status"] == "queued"
+    assert updated.json()["workflow_status"] == "running"
+    with session_factory() as db:
+        old_task = db.get(AgentTask, opened.json()["task_id"])
+        old_run = db.get(WorkflowRun, opened.json()["workflow_run_id"])
+        new_task = db.get(AgentTask, updated.json()["task_id"])
+        new_run = db.get(WorkflowRun, updated.json()["workflow_run_id"])
+        assert old_task is not None and old_task.status == TaskStatus.CANCELLED
+        assert old_run is not None and old_run.status == WorkflowRunStatus.SUPERSEDED
+        assert new_task is not None and new_task.status == TaskStatus.QUEUED
+        assert new_run is not None and new_run.status == WorkflowRunStatus.RUNNING
+        assert old_run.context_json["superseded_by_workflow_run_id"] == new_run.id
+        assert db.scalar(select(func.count()).select_from(WorkflowCorrelation)) == 2
+        cancellation_log = db.scalar(
+            select(AgentTaskLog)
+            .where(AgentTaskLog.task_id == old_task.id, AgentTaskLog.event_type == "cancelled")
+            .limit(1)
+        )
+        assert cancellation_log is not None
+        assert cancellation_log.metadata_json == {"reason": f"superseded_by_workflow:{new_run.id}"}
+
+
+def test_merge_request_update_does_not_cancel_other_merge_requests_or_completed_tasks():
+    client, session_factory = build_client()
+    completed = client.post(
+        "/v1/webhooks/gitlab",
+        headers=merge_request_headers("completed"),
+        json=gitlab_merge_request_payload(merge_request_iid=7, action="open"),
+    ).json()
+    other = client.post(
+        "/v1/webhooks/gitlab",
+        headers=merge_request_headers("other"),
+        json=gitlab_merge_request_payload(merge_request_iid=8, action="open"),
+    ).json()
+    with session_factory() as db:
+        completed_task = db.get(AgentTask, completed["task_id"])
+        assert completed_task is not None
+        completed_task.status = TaskStatus.SUCCEEDED
+        completed_task.result = {"review": "done"}
+        db.commit()
+        build_default_workflow_engine().handle_task_terminal(db, completed_task.id)
+
+    updated = client.post(
+        "/v1/webhooks/gitlab",
+        headers=merge_request_headers("completed-update"),
+        json=gitlab_merge_request_payload(merge_request_iid=7, action="update"),
+    )
+    assert updated.status_code == 200
+
+    with session_factory() as db:
+        completed_task = db.get(AgentTask, completed["task_id"])
+        completed_run = db.get(WorkflowRun, completed["workflow_run_id"])
+        other_task = db.get(AgentTask, other["task_id"])
+        other_run = db.get(WorkflowRun, other["workflow_run_id"])
+        assert completed_task is not None and completed_task.status == TaskStatus.SUCCEEDED
+        assert completed_run is not None and completed_run.status == WorkflowRunStatus.SUCCEEDED
+        assert other_task is not None and other_task.status == TaskStatus.QUEUED
+        assert other_run is not None and other_run.status == WorkflowRunStatus.RUNNING
+
+
+def test_internal_api_lists_task_contents_for_exact_merge_request(monkeypatch):
+    client, _ = build_client()
+    opened = client.post(
+        "/v1/webhooks/gitlab",
+        headers=merge_request_headers("api-open"),
+        json=gitlab_merge_request_payload(merge_request_iid=21, action="open"),
+    ).json()
+    updated = client.post(
+        "/v1/webhooks/gitlab",
+        headers=merge_request_headers("api-update"),
+        json=gitlab_merge_request_payload(merge_request_iid=21, action="update"),
+    ).json()
+    client.post(
+        "/v1/webhooks/gitlab",
+        headers=merge_request_headers("api-other-project"),
+        json=gitlab_merge_request_payload(
+            merge_request_iid=21,
+            action="open",
+            project_path="group/other-project",
+        ),
+    )
+
+    monkeypatch.setenv("API_TOKEN", "internal-secret")
+    get_settings.cache_clear()
+    unauthorized = client.get(
+        "/v1/internal/gitlab/merge-request-tasks",
+        params={"project_path": "group/project", "merge_request_iid": 21},
+    )
+    response = client.get(
+        "/v1/internal/gitlab/merge-request-tasks",
+        params={"project_path": "group/project", "merge_request_iid": 21},
+        headers={"X-API-Token": "internal-secret"},
+    )
+
+    assert unauthorized.status_code == 401
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 2
+    assert [item["id"] for item in body["items"]] == [updated["task_id"], opened["task_id"]]
+    assert body["items"][0]["status"] == "queued"
+    assert body["items"][0]["workflow_status"] == "running"
+    assert body["items"][0]["prompt"].startswith("Review Merge Request Hook")
+    assert body["items"][0]["payload"]["prompt"] == body["items"][0]["prompt"]
+    assert body["items"][0]["webhook_id"] == updated["webhook_id"]
+    assert body["items"][1]["status"] == "cancelled"
+    assert body["items"][1]["workflow_status"] == "superseded"
+    assert body["items"][1]["superseded_by_workflow_run_id"] == updated["workflow_run_id"]
 
 
 def test_duplicate_legacy_trigger_is_adopted_into_workflow():

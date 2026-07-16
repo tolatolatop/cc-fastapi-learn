@@ -91,6 +91,13 @@ class TaskQueueService:
     def get_task(self, db: Session, task_id: str) -> AgentTask | None:
         return db.get(AgentTask, task_id)
 
+    def is_task_cancelled(self, db: Session, task_id: str) -> bool:
+        task = self.get_task(db, task_id)
+        if task is None:
+            return True
+        db.refresh(task, attribute_names=["status"])
+        return task.status == TaskStatus.CANCELLED
+
     def retry_task(self, db: Session, task_id: str) -> AgentTask | None:
         original_task = self.get_task(db, task_id)
         if original_task is None:
@@ -126,7 +133,14 @@ class TaskQueueService:
         total = db.scalar(count_query) or 0
         return items, total
 
-    def cancel_task(self, db: Session, task_id: str) -> AgentTask | None:
+    def cancel_task(
+        self,
+        db: Session,
+        task_id: str,
+        *,
+        commit: bool = True,
+        reason: str = "user",
+    ) -> AgentTask | None:
         task = self.get_task(db, task_id)
         if not task:
             return None
@@ -134,9 +148,12 @@ class TaskQueueService:
             return task
         task.status = TaskStatus.CANCELLED
         task.finished_at = utc_now()
-        self.log_event(db, task.id, "INFO", "cancelled", "task cancelled by user", None)
-        db.commit()
-        db.refresh(task)
+        normalized_reason = reason.strip() or "user"
+        message = "task cancelled by user" if normalized_reason == "user" else "task cancelled by workflow"
+        self.log_event(db, task.id, "INFO", "cancelled", message, {"reason": normalized_reason})
+        if commit:
+            db.commit()
+            db.refresh(task)
         return task
 
     def claim_next_task(self, db: Session, worker_id: str, queue_name: str) -> AgentTask | None:
@@ -191,7 +208,10 @@ class TaskQueueService:
 
     def mark_success(self, db: Session, task_id: str, result_payload: dict[str, Any]) -> None:
         task = self.get_task(db, task_id)
-        if not task or task.status != TaskStatus.RUNNING:
+        if not task:
+            return
+        db.refresh(task, attribute_names=["status"])
+        if task.status != TaskStatus.RUNNING:
             return
         old_status = task.status
         task.status = TaskStatus.SUCCEEDED
@@ -206,7 +226,10 @@ class TaskQueueService:
 
     def mark_retry_or_failed(self, db: Session, task_id: str, error_message: str) -> None:
         task = self.get_task(db, task_id)
-        if not task or task.status != TaskStatus.RUNNING:
+        if not task:
+            return
+        db.refresh(task, attribute_names=["status"])
+        if task.status != TaskStatus.RUNNING:
             return
         now = utc_now()
         can_retry = task.attempt < task.max_attempts

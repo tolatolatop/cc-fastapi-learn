@@ -13,6 +13,10 @@ from cc_fastapi.core.config import get_settings
 logger = logging.getLogger(__name__)
 
 
+class AgentTaskCancelledError(RuntimeError):
+    pass
+
+
 def validate_claude_agent_options(options: dict[str, Any] | None) -> dict[str, Any]:
     """Extension hook: currently pass-through without strict validation."""
     if options is None:
@@ -81,6 +85,7 @@ class ClaudeClient:
         agent_mode: bool = True,
         unattended: bool = True,
         on_message_update: Callable[[list[str]], None] | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
         if not self.settings.anthropic_api_key:
             raise RuntimeError("ANTHROPIC_API_KEY is missing")
@@ -94,6 +99,7 @@ class ClaudeClient:
                 agent_mode=agent_mode,
                 unattended=unattended,
                 on_message_update=on_message_update,
+                should_cancel=should_cancel,
             )
         )
 
@@ -107,6 +113,7 @@ class ClaudeClient:
         agent_mode: bool,
         unattended: bool,
         on_message_update: Callable[[list[str]], None] | None,
+        should_cancel: Callable[[], bool] | None,
     ) -> dict[str, Any]:
         system_note = (
             "You are running in Claude Agent task mode. "
@@ -179,6 +186,8 @@ class ClaudeClient:
         stream: AsyncIterator[Any] = query(prompt=prompt, options=options)
         logger.debug("claude sdk stream started", extra={"event_type": "claude_stream_start"})
         async for msg in stream:
+            if should_cancel is not None and should_cancel():
+                raise AgentTaskCancelledError("task cancelled while agent was running")
             if isinstance(msg, AssistantMessage):
                 for block in msg.content:
                     if isinstance(block, TextBlock) and block.text:
@@ -193,6 +202,8 @@ class ClaudeClient:
                 if msg.result:
                     output_chunks.append(msg.result)
                     self._emit_messages(on_message_update, output_chunks)
+        if should_cancel is not None and should_cancel():
+            raise AgentTaskCancelledError("task cancelled while agent was running")
         logger.debug(
             "claude sdk stream finished",
             extra={"event_type": "claude_stream_end", "trace_id": session_id, "duration_ms": duration_ms},

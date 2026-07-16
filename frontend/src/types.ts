@@ -79,7 +79,7 @@ export interface WebhookTrigger {
   payload: Record<string, unknown>
   created_at: string
   workflow_run_id: string | null
-  workflow_status: 'planning' | 'running' | 'skipped' | 'succeeded' | 'failed' | null
+  workflow_status: 'planning' | 'running' | 'skipped' | 'succeeded' | 'failed' | 'superseded' | null
   skip_reason: string | null
 }
 

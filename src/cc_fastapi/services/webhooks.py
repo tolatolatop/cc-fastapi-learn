@@ -9,6 +9,7 @@ from cc_fastapi.db.models import (
     TaskStatus,
     WebhookDeduplicationKey,
     WebhookTrigger,
+    WorkflowCorrelation,
     WorkflowRun,
     WorkflowRunStatus,
     WorkflowStepRun,
@@ -18,6 +19,7 @@ from cc_fastapi.db.models import (
 )
 from cc_fastapi.workflows import WorkflowEngine, build_default_workflow_engine
 from cc_fastapi.workflows.base import WorkflowEvent, WorkflowTemplateError
+from cc_fastapi.workflows.gitlab_prompt import gitlab_merge_request_correlation
 
 
 WebhookTemplateError = WorkflowTemplateError
@@ -65,6 +67,17 @@ class WebhookService:
         )
         db.add(run)
         db.flush()
+        correlation = gitlab_merge_request_correlation(trigger.payload_json)
+        if correlation is not None:
+            db.add(
+                WorkflowCorrelation(
+                    workflow_run_id=run.id,
+                    provider=correlation.provider,
+                    resource_type=correlation.resource_type,
+                    project_path=correlation.project_path,
+                    resource_id=correlation.resource_id,
+                )
+            )
         db.add(
             WorkflowStepRun(
                 workflow_run_id=run.id,

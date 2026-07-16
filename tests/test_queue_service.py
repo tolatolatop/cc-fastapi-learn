@@ -125,6 +125,44 @@ def test_retry_task_returns_none_when_original_does_not_exist():
     assert queue.retry_task(db, "not-exists") is None
 
 
+def test_cancelled_running_task_is_not_overwritten_by_late_success():
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        future=True,
+    )
+    Base.metadata.create_all(bind=engine)
+    session_factory = sessionmaker(
+        bind=engine,
+        autocommit=False,
+        autoflush=False,
+        expire_on_commit=False,
+    )
+    queue = TaskQueueService()
+    with session_factory() as worker_db, session_factory() as webhook_db:
+        task = queue.create_task(
+            worker_db,
+            prompt="cancel while running",
+            model=None,
+            queue_name=None,
+            metadata=None,
+            priority=0,
+            agent_mode=True,
+            unattended=True,
+            max_attempts=1,
+        )
+        claimed = queue.claim_next_task(worker_db, "worker-1", "default")
+        assert claimed is not None
+
+        cancelled = queue.cancel_task(webhook_db, task.id, reason="superseded_by_workflow:test")
+        assert cancelled is not None and cancelled.status == TaskStatus.CANCELLED
+
+        queue.mark_success(worker_db, task.id, {"late": "result"})
+        worker_db.refresh(task)
+        assert task.status == TaskStatus.CANCELLED
+        assert task.result is None
+
+
 def test_upsert_task_context_updates_latest():
     db = make_db()
     queue = TaskQueueService()

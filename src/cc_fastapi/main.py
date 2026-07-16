@@ -3,6 +3,7 @@ import logging
 
 from fastapi import FastAPI
 
+from cc_fastapi.api.internal import router as internal_router
 from cc_fastapi.api.tasks import router as tasks_router
 from cc_fastapi.api.webhooks import router as webhooks_router
 from cc_fastapi.core.config import get_settings
@@ -50,6 +51,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
 app.include_router(tasks_router)
 app.include_router(webhooks_router)
+app.include_router(internal_router)
 
 
 @app.get("/healthz")
