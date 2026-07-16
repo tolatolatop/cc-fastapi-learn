@@ -147,6 +147,31 @@ def cancel_task(task_id: str, db: Session = Depends(get_db)) -> TaskCancelRespon
     return TaskCancelResponse(task_id=task.id, status=task.status)
 
 
+@router.post("/{task_id}/retry", response_model=TaskCreateResponse, dependencies=[Depends(require_token)])
+def retry_task(task_id: str, db: Session = Depends(get_db)) -> TaskCreateResponse:
+    try:
+        task = queue.retry_task(db, task_id)
+    except QueueNotFoundError as exc:
+        logger.warning(
+            "retry_task queue resolve failed",
+            extra={"event_type": "api_retry_task_queue_not_found", "task_id": task_id, "queue_name": exc.queue_name},
+        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    if task is None:
+        logger.warning(
+            "retry_task not found",
+            extra={"event_type": "api_retry_task_not_found", "task_id": task_id},
+        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
+
+    logger.info(
+        "task retried via api",
+        extra={"event_type": "api_retry_task_success", "task_id": task.id, "queue_name": task.queue_name},
+    )
+    return TaskCreateResponse(task_id=task.id, status=task.status, queue_name=task.queue_name)
+
+
 @router.get("/{task_id}/logs", response_model=TaskLogListResponse, dependencies=[Depends(require_token)])
 def list_task_logs(
     task_id: str,
@@ -178,4 +203,3 @@ def list_task_logs(
         ],
         total=total,
     )
-

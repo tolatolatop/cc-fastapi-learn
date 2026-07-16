@@ -87,6 +87,44 @@ def test_create_task_with_explicit_queue_name():
     assert task.queue_name == "slow"
 
 
+def test_retry_task_creates_new_task_with_same_configuration():
+    db = make_db()
+    queue = TaskQueueService()
+    original = queue.create_task(
+        db,
+        prompt="try this again",
+        model="test-model",
+        queue_name="slow",
+        metadata={"source": {"name": "test"}},
+        priority=3,
+        agent_mode=False,
+        unattended=False,
+        max_attempts=5,
+        claude_agent_options={"max_turns": 2},
+    )
+
+    retried = queue.retry_task(db, original.id)
+
+    assert retried is not None
+    assert retried.id != original.id
+    assert retried.status == TaskStatus.QUEUED
+    assert retried.attempt == 0
+    assert retried.payload == original.payload
+    assert retried.queue_name == original.queue_name
+    assert retried.metadata_json == original.metadata_json
+    assert retried.priority == original.priority
+    assert retried.agent_mode == original.agent_mode
+    assert retried.unattended == original.unattended
+    assert retried.max_attempts == original.max_attempts
+
+
+def test_retry_task_returns_none_when_original_does_not_exist():
+    db = make_db()
+    queue = TaskQueueService()
+
+    assert queue.retry_task(db, "not-exists") is None
+
+
 def test_upsert_task_context_updates_latest():
     db = make_db()
     queue = TaskQueueService()
@@ -207,4 +245,3 @@ def test_default_worker_concurrency_is_one(monkeypatch):
     monkeypatch.delenv("WORKER_CONCURRENCY", raising=False)
     get_settings.cache_clear()
     assert get_settings().worker_concurrency == 1
-

@@ -103,6 +103,35 @@ def test_cancel_task():
     assert cancelled.json()["status"] == "cancelled"
 
 
+def test_retry_task_creates_new_queued_task():
+    client = build_client()
+    create = client.post(
+        "/v1/agent-tasks",
+        json={"prompt": "retry-me", "queue_name": "slow", "priority": 3},
+    )
+    original_task_id = create.json()["task_id"]
+    cancelled = client.post(f"/v1/agent-tasks/{original_task_id}/cancel")
+    assert cancelled.status_code == 200
+
+    response = client.post(f"/v1/agent-tasks/{original_task_id}/retry")
+
+    assert response.status_code == 200
+    retried_task_id = response.json()["task_id"]
+    assert retried_task_id != original_task_id
+    assert response.json()["status"] == "queued"
+    assert response.json()["queue_name"] == "slow"
+    assert client.get(f"/v1/agent-tasks/{original_task_id}").json()["status"] == "cancelled"
+
+
+def test_retry_task_not_found_returns_404():
+    client = build_client()
+
+    response = client.post("/v1/agent-tasks/not-exists/retry")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "task not found"
+
+
 def test_create_task_with_explicit_queue():
     client = build_client()
     response = client.post("/v1/agent-tasks", json={"prompt": "queue", "queue_name": "slow"})
@@ -128,4 +157,3 @@ def test_create_task_with_absolute_cwd_returns_400():
     )
     assert response.status_code == 400
     assert "cwd must be a relative path" in response.json()["detail"]
-

@@ -1,4 +1,5 @@
 import logging
+from copy import deepcopy
 from datetime import timedelta
 from typing import Any
 
@@ -87,6 +88,25 @@ class TaskQueueService:
 
     def get_task(self, db: Session, task_id: str) -> AgentTask | None:
         return db.get(AgentTask, task_id)
+
+    def retry_task(self, db: Session, task_id: str) -> AgentTask | None:
+        original_task = self.get_task(db, task_id)
+        if original_task is None:
+            return None
+
+        payload = original_task.payload
+        return self.create_task(
+            db,
+            prompt=payload["prompt"],
+            model=payload.get("model"),
+            queue_name=original_task.queue_name,
+            metadata=deepcopy(original_task.metadata_json),
+            priority=original_task.priority,
+            agent_mode=original_task.agent_mode,
+            unattended=original_task.unattended,
+            max_attempts=original_task.max_attempts,
+            claude_agent_options=deepcopy(payload.get("claude_agent_options")),
+        )
 
     def get_task_context(self, db: Session, task_id: str) -> AgentTaskContext | None:
         return db.get(AgentTaskContext, task_id)
@@ -349,4 +369,3 @@ class TaskQueueService:
             context.messages_json = messages
             context.updated_at = now
         db.commit()
-
