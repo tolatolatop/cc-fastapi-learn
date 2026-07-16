@@ -116,6 +116,7 @@ def test_gitlab_webhook_renders_prompt_creates_task_and_records_metadata():
     assert listed.status_code == 200
     assert listed.json()["total"] == 1
     assert listed.json()["items"][0]["task_id"] == body["task_id"]
+    assert listed.json()["items"][0]["task_status"] == "queued"
     assert listed.json()["items"][0]["payload"] == payload
 
 
@@ -205,10 +206,12 @@ def test_gitlab_webhook_missing_template_file_does_not_create_task(monkeypatch, 
 def test_list_webhook_triggers_supports_pagination():
     client, _ = build_client()
     for index in range(3):
+        event_type = "Merge Request Hook" if index == 2 else "Push Hook"
         response = client.post(
             "/v1/webhooks/gitlab",
             headers=gitlab_headers(
                 **{
+                    "X-Gitlab-Event": event_type,
                     "X-Gitlab-Event-UUID": f"event-uuid-{index}",
                     "X-Gitlab-Webhook-UUID": f"webhook-uuid-{index}",
                 }
@@ -222,6 +225,20 @@ def test_list_webhook_triggers_supports_pagination():
     assert response.status_code == 200
     assert response.json()["total"] == 3
     assert len(response.json()["items"]) == 2
+    assert response.json()["summary"] == {
+        "total": 3,
+        "event_types": ["Merge Request Hook", "Push Hook"],
+    }
+
+    searched = client.get("/v1/webhooks", params={"q": "feature-1"})
+    assert searched.status_code == 200
+    assert searched.json()["total"] == 1
+    assert searched.json()["items"][0]["payload"]["ref"] == "refs/heads/feature-1"
+
+    filtered = client.get("/v1/webhooks", params={"event_type": "Merge Request Hook"})
+    assert filtered.status_code == 200
+    assert filtered.json()["total"] == 1
+    assert filtered.json()["items"][0]["event_type"] == "Merge Request Hook"
 
 
 def test_list_webhook_triggers_uses_api_token(monkeypatch):

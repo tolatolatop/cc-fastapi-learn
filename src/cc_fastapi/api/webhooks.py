@@ -12,6 +12,7 @@ from cc_fastapi.schemas.webhooks import (
     GitLabWebhookResponse,
     WebhookTriggerItemResponse,
     WebhookTriggerListResponse,
+    WebhookTriggerListSummaryResponse,
 )
 from cc_fastapi.services.queue import QueueNotFoundError
 from cc_fastapi.services.webhooks import WebhookService, WebhookTemplateError
@@ -86,9 +87,12 @@ def receive_gitlab_webhook(
 def list_webhook_triggers(
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=200),
+    event_type: str | None = Query(default=None, max_length=128),
+    search: str | None = Query(default=None, alias="q", max_length=200),
     db: Session = Depends(get_db),
 ) -> WebhookTriggerListResponse:
-    items, total = webhooks.list_triggers(db, offset, limit)
+    items, total = webhooks.list_triggers(db, offset, limit, event_type, search)
+    summary_total, event_types = webhooks.summarize_triggers(db)
     return WebhookTriggerListResponse(
         items=[
             WebhookTriggerItemResponse(
@@ -99,10 +103,12 @@ def list_webhook_triggers(
                 webhook_uuid=item.webhook_uuid,
                 instance_url=item.instance_url,
                 task_id=item.task_id,
+                task_status=task_status,
                 payload=item.payload_json,
                 created_at=item.created_at,
             )
-            for item in items
+            for item, task_status in items
         ],
         total=total,
+        summary=WebhookTriggerListSummaryResponse(total=summary_total, event_types=event_types),
     )

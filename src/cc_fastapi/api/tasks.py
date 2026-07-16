@@ -16,6 +16,8 @@ from cc_fastapi.schemas.tasks import (
     TaskListResponse,
     TaskLogItemResponse,
     TaskLogListResponse,
+    TaskListSummaryResponse,
+    TaskQueueSummaryResponse,
     QueueItemResponse,
     QueueListResponse,
 )
@@ -134,17 +136,34 @@ def get_task_context(task_id: str, db: Session = Depends(get_db)) -> TaskContext
 
 @router.get("", response_model=TaskListResponse, dependencies=[Depends(require_token)])
 def list_tasks(
-    status_filter: TaskStatus | None = Query(default=None, alias="status"),
+    status_filter: list[TaskStatus] | None = Query(default=None, alias="status"),
+    queue_name: str | None = Query(default=None, alias="queue", max_length=64),
+    search: str | None = Query(default=None, alias="q", max_length=200),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=200),
     db: Session = Depends(get_db),
 ) -> TaskListResponse:
     logger.debug(
         "list_tasks request",
-        extra={"event_type": "api_list_tasks", "reason": f"offset={offset},limit={limit},status={status_filter}"},
+        extra={
+            "event_type": "api_list_tasks",
+            "reason": f"offset={offset},limit={limit},status={status_filter},queue={queue_name},q={bool(search)}",
+        },
     )
-    items, total = queue.list_tasks(db, status_filter, offset, limit)
-    return TaskListResponse(items=[_to_task_item(item) for item in items], total=total)
+    items, total = queue.list_tasks(db, status_filter, queue_name, search, offset, limit)
+    summary_total, status_counts, queue_counts = queue.summarize_tasks(db)
+    return TaskListResponse(
+        items=[_to_task_item(item) for item in items],
+        total=total,
+        summary=TaskListSummaryResponse(
+            total=summary_total,
+            status_counts=status_counts,
+            queues=[
+                TaskQueueSummaryResponse(name=name, **counts)
+                for name, counts in sorted(queue_counts.items())
+            ],
+        ),
+    )
 
 
 @router.post("/{task_id}/cancel", response_model=TaskCancelResponse, dependencies=[Depends(require_token)])

@@ -10,6 +10,30 @@ import type {
 
 const API_ROOT = '/api'
 
+interface TaskListOptions {
+  offset?: number
+  limit?: number
+  statuses?: string[]
+  queue?: string
+  query?: string
+}
+
+interface WebhookListOptions {
+  offset?: number
+  limit?: number
+  eventType?: string
+  query?: string
+}
+
+function queryPath(path: string, values: Array<[string, string | number | undefined]>) {
+  const params = new URLSearchParams()
+  values.forEach(([key, value]) => {
+    if (value !== undefined && value !== '') params.append(key, String(value))
+  })
+  const query = params.toString()
+  return query ? `${path}?${query}` : path
+}
+
 function tokenHeaders(): HeadersInit {
   const token = localStorage.getItem('cc-api-token')?.trim()
   return token ? { 'X-API-Token': token } : {}
@@ -43,9 +67,20 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => request<{ status: string }>('/healthz'),
-  listTasks: () => request<TaskListResponse>('/v1/agent-tasks?limit=200'),
+  listTasks: ({ offset = 0, limit = 20, statuses = [], queue, query }: TaskListOptions = {}) => request<TaskListResponse>(queryPath('/v1/agent-tasks', [
+    ['offset', offset],
+    ['limit', limit],
+    ...statuses.map((status): [string, string] => ['status', status]),
+    ['queue', queue],
+    ['q', query],
+  ])),
   listQueues: () => request<QueueListResponse>('/v1/agent-tasks/queues/available'),
-  listWebhooks: () => request<WebhookTriggerListResponse>('/v1/webhooks?limit=200'),
+  listWebhooks: ({ offset = 0, limit = 20, eventType, query }: WebhookListOptions = {}) => request<WebhookTriggerListResponse>(queryPath('/v1/webhooks', [
+    ['offset', offset],
+    ['limit', limit],
+    ['event_type', eventType],
+    ['q', query],
+  ])),
   getTask: (id: string) => request<TaskItem>(`/v1/agent-tasks/${id}`),
   getLogs: (id: string) => request<TaskLogListResponse>(`/v1/agent-tasks/${id}/logs?limit=500`),
   getContext: (id: string) => request<TaskContext>(`/v1/agent-tasks/${id}/context`),

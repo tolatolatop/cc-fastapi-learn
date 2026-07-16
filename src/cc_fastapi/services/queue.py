@@ -3,7 +3,7 @@ from copy import deepcopy
 from datetime import timedelta
 from typing import Any
 
-from sqlalchemy import Select, func, select, update
+from sqlalchemy import Select, String, cast, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from cc_fastapi.core.config import get_settings
@@ -132,17 +132,57 @@ class TaskQueueService:
         db.commit()
 
     def list_tasks(
-        self, db: Session, status: TaskStatus | None, offset: int, limit: int
+        self,
+        db: Session,
+        statuses: list[TaskStatus] | None,
+        queue_name: str | None,
+        search: str | None,
+        offset: int,
+        limit: int,
     ) -> tuple[list[AgentTask], int]:
         query = self._base_task_query()
         count_query = select(func.count()).select_from(AgentTask)
-        if status:
-            query = query.where(AgentTask.status == status)
-            count_query = count_query.where(AgentTask.status == status)
+        filters = []
+        if statuses:
+            filters.append(AgentTask.status.in_(statuses))
+        if queue_name:
+            filters.append(AgentTask.queue_name == queue_name)
+        if search and (normalized_search := search.strip()):
+            pattern = f"%{normalized_search}%"
+            filters.append(
+                or_(
+                    AgentTask.id.ilike(pattern),
+                    AgentTask.queue_name.ilike(pattern),
+                    cast(AgentTask.payload, String).ilike(pattern),
+                )
+            )
+        if filters:
+            query = query.where(*filters)
+            count_query = count_query.where(*filters)
         query = query.order_by(AgentTask.created_at.desc()).offset(offset).limit(limit)
         items = list(db.scalars(query))
         total = db.scalar(count_query) or 0
         return items, total
+
+    def summarize_tasks(
+        self, db: Session
+    ) -> tuple[int, dict[TaskStatus, int], dict[str, dict[str, int]]]:
+        status_counts = {status: 0 for status in TaskStatus}
+        queue_counts: dict[str, dict[str, int]] = {}
+        rows = db.execute(
+            select(AgentTask.queue_name, AgentTask.status, func.count())
+            .group_by(AgentTask.queue_name, AgentTask.status)
+        )
+        for queue_name, status, count in rows:
+            normalized_count = int(count)
+            status_counts[status] += normalized_count
+            queue_summary = queue_counts.setdefault(queue_name, {"total": 0, "queued": 0, "running": 0})
+            queue_summary["total"] += normalized_count
+            if status == TaskStatus.QUEUED:
+                queue_summary["queued"] = normalized_count
+            elif status == TaskStatus.RUNNING:
+                queue_summary["running"] = normalized_count
+        return sum(status_counts.values()), status_counts, queue_counts
 
     def cancel_task(self, db: Session, task_id: str) -> AgentTask | None:
         task = self.get_task(db, task_id)
