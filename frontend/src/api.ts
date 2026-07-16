@@ -5,6 +5,7 @@ import type {
   TaskItem,
   TaskListResponse,
   TaskLogListResponse,
+  WebhookTriggerListResponse,
 } from './types'
 
 const API_ROOT = '/api'
@@ -44,6 +45,7 @@ export const api = {
   health: () => request<{ status: string }>('/healthz'),
   listTasks: () => request<TaskListResponse>('/v1/agent-tasks?limit=200'),
   listQueues: () => request<QueueListResponse>('/v1/agent-tasks/queues/available'),
+  listWebhooks: () => request<WebhookTriggerListResponse>('/v1/webhooks?limit=200'),
   getTask: (id: string) => request<TaskItem>(`/v1/agent-tasks/${id}`),
   getLogs: (id: string) => request<TaskLogListResponse>(`/v1/agent-tasks/${id}/logs?limit=500`),
   getContext: (id: string) => request<TaskContext>(`/v1/agent-tasks/${id}/context`),

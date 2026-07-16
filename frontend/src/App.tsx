@@ -20,10 +20,12 @@ import {
   Server,
   Settings,
   SquareTerminal,
+  Webhook,
   X,
 } from 'lucide-react'
 import { api } from './api'
 import type { CreateTaskPayload, QueueItem, TaskContext, TaskItem, TaskLog, TaskStatus } from './types'
+import WebhookPage from './WebhookPage'
 
 const STATUS_META: Record<TaskStatus, { label: string; short: string }> = {
   queued: { label: '等待中', short: '等待' },
@@ -474,6 +476,7 @@ function DetailDrawer({ task, logs, context, loading, now, onClose, onCancel, on
 }
 
 function App() {
+  const [activeView, setActiveView] = useState<'tasks' | 'webhooks'>(() => window.location.hash === '#/webhooks' ? 'webhooks' : 'tasks')
   const [tasks, setTasks] = useState<TaskItem[]>([])
   const [total, setTotal] = useState(0)
   const [queues, setQueues] = useState<QueueItem[]>([])
@@ -491,6 +494,7 @@ function App() {
   const [retryingTask, setRetryingTask] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [connectionRevision, setConnectionRevision] = useState(0)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [toast, setToast] = useState('')
   const [now, setNow] = useState(Date.now())
@@ -566,6 +570,12 @@ function App() {
     return () => window.clearTimeout(timer)
   }, [toast])
 
+  useEffect(() => {
+    const onHashChange = () => setActiveView(window.location.hash === '#/webhooks' ? 'webhooks' : 'tasks')
+    window.addEventListener('hashchange', onHashChange)
+    return () => window.removeEventListener('hashchange', onHashChange)
+  }, [])
+
   const counts = useMemo(() => {
     const result = { all: tasks.length, queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0, abandoned: 0 }
     tasks.forEach((task) => { result[task.status] += 1 })
@@ -587,6 +597,11 @@ function App() {
     const names = [...new Set(tasks.map((task) => task.queue_name))]
     return names.map((name, index) => ({ name, workers: 0, is_default: index === 0 }))
   }, [queues, tasks])
+
+  const taskStatuses = useMemo(
+    () => Object.fromEntries(tasks.map((task) => [task.id, task.status])) as Record<string, TaskStatus>,
+    [tasks],
+  )
 
   async function openTask(task: TaskItem) {
     setSelectedTask(task)
@@ -635,6 +650,17 @@ function App() {
     }
   }
 
+  function navigate(view: 'tasks' | 'webhooks') {
+    setActiveView(view)
+    window.location.hash = view === 'webhooks' ? '/webhooks' : '/tasks'
+    setSidebarOpen(false)
+  }
+
+  function showQueueRail() {
+    navigate('tasks')
+    window.setTimeout(() => document.getElementById('queue-rail')?.scrollIntoView({ behavior: 'smooth' }), 0)
+  }
+
   return (
     <div className="app-shell">
       <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
@@ -646,8 +672,11 @@ function App() {
 
         <nav aria-label="主导航">
           <p>工作区</p>
-          <button className="nav-item active"><Layers3 size={18} /><span>任务调度</span><b>{total}</b></button>
-          <button className="nav-item" onClick={() => document.getElementById('queue-rail')?.scrollIntoView({ behavior: 'smooth' })}>
+          <button className={`nav-item ${activeView === 'tasks' ? 'active' : ''}`} onClick={() => navigate('tasks')}><Layers3 size={18} /><span>任务调度</span><b>{total}</b></button>
+          <button className={`nav-item ${activeView === 'webhooks' ? 'active' : ''}`} onClick={() => navigate('webhooks')}>
+            <Webhook size={18} /><span>Webhook 档案</span>
+          </button>
+          <button className="nav-item" onClick={showQueueRail}>
             <Activity size={18} /><span>队列状态</span>
           </button>
           <button className="nav-item" onClick={() => setSettingsOpen(true)}><Settings size={18} /><span>连接设置</span></button>
@@ -678,15 +707,17 @@ function App() {
       <main>
         <header className="topbar">
           <button className="mobile-menu" onClick={() => setSidebarOpen(true)} aria-label="打开导航"><Menu size={20} /></button>
-          <div className="breadcrumb"><span>控制台</span><ChevronRight size={14} /><strong>任务调度</strong></div>
+          <div className="breadcrumb"><span>控制台</span><ChevronRight size={14} /><strong>{activeView === 'tasks' ? '任务调度' : 'Webhook 档案'}</strong></div>
           <div className="top-actions">
-            <span className="last-sync"><RefreshCw size={13} className={refreshing ? 'spin' : ''} />5 秒自动同步</span>
+            <span className="last-sync"><RefreshCw size={13} className={activeView === 'tasks' && refreshing ? 'spin' : ''} />{activeView === 'tasks' ? '5 秒自动同步' : '10 秒自动同步'}</span>
             <button className="icon-button" onClick={() => setSettingsOpen(true)} aria-label="连接设置"><Settings size={18} /></button>
-            <button className="button button-primary top-create" onClick={() => setCreateOpen(true)}><Plus size={18} />新建任务</button>
+            {activeView === 'tasks' && <button className="button button-primary top-create" onClick={() => setCreateOpen(true)}><Plus size={18} />新建任务</button>}
           </div>
         </header>
 
-        <div className="workspace">
+        <div className={`workspace ${activeView === 'webhooks' ? 'webhook-workspace' : ''}`}>
+          {activeView === 'tasks' ? (
+          <>
           <section className="page-heading">
             <div>
               <p className="eyebrow">AGENT OPERATIONS / 实时调度</p>
@@ -813,11 +844,15 @@ function App() {
               <div className="panel-footer"><span>显示 {visibleTasks.length} / {total} 条任务</span><span><Server size={13} />数据来自实时 API</span></div>
             )}
           </section>
+          </>
+          ) : (
+            <WebhookPage key={connectionRevision} taskStatuses={taskStatuses} onOpenTask={(taskId) => loadDetail(taskId)} onOpenSettings={() => setSettingsOpen(true)} />
+          )}
         </div>
       </main>
 
       {createOpen && <CreateTaskModal queues={displayQueues} onClose={() => setCreateOpen(false)} onCreated={created} />}
-      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} onSaved={() => { setSettingsOpen(false); loadDashboard() }} />}
+      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} onSaved={() => { setSettingsOpen(false); setConnectionRevision((value) => value + 1); loadDashboard() }} />}
       {selectedTask && (
         <DetailDrawer
           task={selectedTask}

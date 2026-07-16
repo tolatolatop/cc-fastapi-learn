@@ -67,3 +67,20 @@ export interface CreateTaskPayload {
   max_attempts?: number
   metadata?: Record<string, unknown>
 }
+
+export interface WebhookTrigger {
+  id: number
+  provider: string
+  event_type: string
+  event_uuid: string | null
+  webhook_uuid: string | null
+  instance_url: string | null
+  task_id: string
+  payload: Record<string, unknown>
+  created_at: string
+}
+
+export interface WebhookTriggerListResponse {
+  items: WebhookTrigger[]
+  total: number
+}
