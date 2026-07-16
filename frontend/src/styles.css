@@ -98,7 +98,7 @@ select:focus-visible,
   inset: 0 auto 0 0;
   z-index: 40;
   display: flex;
-  width: 224px;
+  width: 252px;
   flex-direction: column;
   padding: 25px 16px 18px;
   color: #e8edee;
@@ -162,7 +162,7 @@ select:focus-visible,
 
 .brand strong {
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 0.9375rem;
+  font-size: 1rem;
   font-weight: 650;
   letter-spacing: -0.02em;
 }
@@ -171,7 +171,7 @@ select:focus-visible,
   margin-top: 2px;
   color: var(--sidebar-muted);
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 0.5rem;
+  font-size: 0.625rem;
   font-weight: 650;
   letter-spacing: 0.18em;
 }
@@ -189,7 +189,7 @@ select:focus-visible,
 .sidebar-queues > p {
   margin: 0 10px 9px;
   color: #6f7b7e;
-  font-size: 0.625rem;
+  font-size: 0.6875rem;
   font-weight: 600;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -200,7 +200,7 @@ select:focus-visible,
   width: 100%;
   align-items: center;
   gap: 11px;
-  min-height: 43px;
+  min-height: 48px;
   padding: 0 11px;
   margin: 2px 0;
   color: #9da8aa;
@@ -224,7 +224,7 @@ select:focus-visible,
 
 .nav-item span {
   flex: 1;
-  font-size: 0.8125rem;
+  font-size: 0.9375rem;
   font-weight: 500;
 }
 
@@ -235,7 +235,7 @@ select:focus-visible,
   background: #3b474a;
   border-radius: 9px;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 0.625rem;
+  font-size: 0.6875rem;
   font-weight: 600;
   text-align: center;
 }
@@ -252,7 +252,7 @@ select:focus-visible,
   grid-template-columns: 7px 1fr auto;
   align-items: center;
   gap: 10px;
-  padding: 9px 11px;
+  padding: 11px;
   color: #a8b2b4;
   background: none;
   border: 0;
@@ -280,7 +280,7 @@ select:focus-visible,
 .sidebar-queues button span {
   overflow: hidden;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 0.75rem;
+  font-size: 0.875rem;
   font-weight: 500;
   text-overflow: ellipsis;
 }
@@ -288,7 +288,7 @@ select:focus-visible,
 .sidebar-queues button small {
   color: #6f7b7e;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 0.625rem;
+  font-size: 0.6875rem;
 }
 
 .sidebar-status {
@@ -336,7 +336,7 @@ select:focus-visible,
 }
 
 .sidebar-status strong {
-  font-size: 0.6875rem;
+  font-size: 0.8125rem;
   font-weight: 500;
 }
 
@@ -344,7 +344,7 @@ select:focus-visible,
   margin-top: 2px;
   color: #6f7b7e;
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 0.5625rem;
+  font-size: 0.625rem;
 }
 
 .sidebar-scrim {
@@ -353,7 +353,7 @@ select:focus-visible,
 
 main {
   min-height: 100vh;
-  margin-left: 224px;
+  margin-left: 252px;
 }
 
 .topbar {
@@ -1523,18 +1523,22 @@ main {
   font-size: 0.5625rem;
 }
 
-.drawer-intro h2 {
-  display: -webkit-box;
-  overflow: hidden;
-  margin: 0 0 12px;
+.drawer-title-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 17px;
+}
+
+.drawer-title-row h2 {
+  margin: 0;
   color: #243034;
   font-family: 'Space Grotesk Variable', 'IBM Plex Sans', sans-serif;
-  font-size: 1.3125rem;
-  font-weight: 570;
+  font-size: 1.125rem;
+  font-weight: 620;
   letter-spacing: -0.025em;
-  line-height: 1.45;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
+  line-height: 1.25;
 }
 
 .copy-id {
@@ -1552,6 +1556,128 @@ main {
 
 .copy-id:hover {
   color: var(--blue);
+}
+
+.prompt-document {
+  overflow: hidden;
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--blue);
+  border-radius: 9px;
+  box-shadow: 0 8px 24px rgba(29, 43, 47, 0.055);
+}
+
+.prompt-document-head,
+.detail-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.prompt-document-head {
+  min-height: 46px;
+  padding: 8px 13px 8px 15px;
+  background: #f5f7f8;
+  border-bottom: 1px solid #e1e6e7;
+}
+
+.prompt-document-head > div {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.prompt-document-head h3 {
+  margin: 0;
+  color: #4c595d;
+  font-size: 0.625rem;
+  font-weight: 650;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.prompt-document-head span {
+  color: #929c9f;
+  font-family: 'Space Grotesk Variable', sans-serif;
+  font-size: 0.5rem;
+  white-space: nowrap;
+}
+
+.text-action-button {
+  display: inline-flex;
+  min-height: 30px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  color: #516064;
+  background: var(--white);
+  border: 1px solid #d5dcde;
+  border-radius: 6px;
+  font-size: 0.5625rem;
+  font-weight: 600;
+  transition: color 150ms ease, border-color 150ms ease, background 150ms ease;
+}
+
+.text-action-button:hover:not(:disabled) {
+  color: var(--blue);
+  background: #f7f9ff;
+  border-color: #aebdf5;
+}
+
+.text-action-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.prompt-document-body {
+  overflow: hidden;
+  max-height: 190px;
+  padding: 16px 17px 18px;
+  margin: 0;
+  color: #354246;
+  background: var(--white);
+  font-family: 'IBM Plex Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-size: 0.6875rem;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.prompt-document-body.expanded {
+  max-height: none;
+  overflow: visible;
+}
+
+.prompt-expand-button {
+  display: flex;
+  width: 100%;
+  min-height: 37px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  color: #5f6d71;
+  background: #f7f8f8;
+  border: 0;
+  border-top: 1px solid #e3e7e8;
+  font-size: 0.5625rem;
+  font-weight: 600;
+}
+
+.prompt-expand-button:hover {
+  color: var(--blue);
+  background: #f2f5ff;
+}
+
+.prompt-expand-button svg {
+  transition: transform 150ms ease;
+  transform: rotate(90deg);
+}
+
+.prompt-expand-button[aria-expanded='true'] svg {
+  transform: rotate(-90deg);
 }
 
 .drawer-tabs {
@@ -1623,6 +1749,14 @@ main {
   font-weight: 600;
   letter-spacing: 0.12em;
   text-transform: uppercase;
+}
+
+.detail-section-heading {
+  margin-bottom: 10px;
+}
+
+.detail-section-heading h3 {
+  margin-bottom: 0;
 }
 
 .detail-grid {
@@ -2039,7 +2173,7 @@ main {
 
 @media (max-width: 860px) {
   .sidebar {
-    width: 240px;
+    width: 260px;
     transform: translateX(-100%);
     transition: transform 210ms ease;
   }
@@ -2367,6 +2501,10 @@ main {
   .drawer-tabs {
     gap: 20px;
     padding: 0 20px;
+  }
+
+  .prompt-document-body {
+    max-height: 220px;
   }
 
   .drawer-footer {

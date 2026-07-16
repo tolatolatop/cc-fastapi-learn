@@ -329,14 +329,44 @@ interface DetailDrawerProps {
   onCancel: (id: string) => void
   onRetry: (id: string) => void
   onRefresh: () => void
+  onNotify: (message: string) => void
   retrying: boolean
 }
 
-function DetailDrawer({ task, logs, context, loading, now, onClose, onCancel, onRetry, onRefresh, retrying }: DetailDrawerProps) {
+function DetailDrawer({ task, logs, context, loading, now, onClose, onCancel, onRetry, onRefresh, onNotify, retrying }: DetailDrawerProps) {
   const [tab, setTab] = useState<'overview' | 'context' | 'logs'>('overview')
+  const [promptExpanded, setPromptExpanded] = useState(false)
   const canCancel = task.status === 'running' || task.status === 'queued'
   const canRetry = ['succeeded', 'failed', 'cancelled', 'abandoned'].includes(task.status)
-  const copyId = () => navigator.clipboard?.writeText(task.id)
+  const promptText = task.prompt || '未提供 Prompt'
+  const promptIsLong = task.prompt.length > 180 || task.prompt.split('\n').length > 5
+  const resultText = task.result ? JSON.stringify(task.result, null, 2) : ''
+
+  async function copyText(value: string, successMessage: string) {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value)
+      } else {
+        const textarea = document.createElement('textarea')
+        textarea.value = value
+        textarea.style.position = 'fixed'
+        textarea.style.opacity = '0'
+        document.body.appendChild(textarea)
+        textarea.select()
+        const copied = document.execCommand('copy')
+        textarea.remove()
+        if (!copied) throw new Error('copy command failed')
+      }
+      onNotify(successMessage)
+    } catch {
+      onNotify('复制失败，请手动选择文本')
+    }
+  }
+
+  useEffect(() => {
+    setTab('overview')
+    setPromptExpanded(false)
+  }, [task.id])
 
   useEffect(() => {
     const onKey = (event: globalThis.KeyboardEvent) => event.key === 'Escape' && onClose()
@@ -362,10 +392,30 @@ function DetailDrawer({ task, logs, context, loading, now, onClose, onCancel, on
             <StatusBadge status={task.status} />
             <span>{task.queue_name}</span>
           </div>
-          <h2 id="detail-title">{task.prompt || '未命名任务'}</h2>
-          <button className="copy-id" onClick={copyId} title="复制完整任务 ID">
-            TASK-{shortId(task.id).toUpperCase()} <Copy size={13} />
-          </button>
+          <div className="drawer-title-row">
+            <h2 id="detail-title">任务详情</h2>
+            <button className="copy-id" onClick={() => copyText(task.id, '任务 ID 已复制')} title="复制完整任务 ID">
+              TASK-{shortId(task.id).toUpperCase()} <Copy size={13} />
+            </button>
+          </div>
+          <section className="prompt-document" aria-labelledby="prompt-document-title">
+            <div className="prompt-document-head">
+              <div>
+                <h3 id="prompt-document-title">输入 Prompt</h3>
+                <span>{task.prompt.length.toLocaleString('zh-CN')} 字符</span>
+              </div>
+              <button className="text-action-button" onClick={() => copyText(task.prompt, 'Prompt 已复制')} disabled={!task.prompt}>
+                <Copy size={14} />复制 Prompt
+              </button>
+            </div>
+            <pre className={`prompt-document-body ${promptExpanded ? 'expanded' : ''}`}>{promptText}</pre>
+            {promptIsLong && (
+              <button className="prompt-expand-button" onClick={() => setPromptExpanded((value) => !value)} aria-expanded={promptExpanded}>
+                {promptExpanded ? '收起全文' : '展开全文'}
+                <ChevronRight size={15} />
+              </button>
+            )}
+          </section>
         </div>
 
         <div className="drawer-tabs" role="tablist">
@@ -420,8 +470,13 @@ function DetailDrawer({ task, logs, context, loading, now, onClose, onCancel, on
 
               {task.result && (
                 <section className="detail-section">
-                  <h3>任务结果</h3>
-                  <pre className="code-block result-block">{JSON.stringify(task.result, null, 2)}</pre>
+                  <div className="detail-section-heading">
+                    <h3>任务结果</h3>
+                    <button className="text-action-button" onClick={() => copyText(resultText, '完整任务结果已复制')}>
+                      <Copy size={14} />复制完整结果
+                    </button>
+                  </div>
+                  <pre className="code-block result-block">{resultText}</pre>
                 </section>
               )}
             </>
@@ -865,6 +920,7 @@ function App() {
           onCancel={cancelTask}
           onRetry={retryTask}
           onRefresh={() => loadDetail(selectedTask.id)}
+          onNotify={setToast}
           retrying={retryingTask}
         />
       )}
