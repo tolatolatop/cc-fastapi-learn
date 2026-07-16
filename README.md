@@ -2,6 +2,8 @@
 
 基于 FastAPI 的 Agent 任务队列，以及用于创建、监控和诊断任务的 React 控制台。
 
+架构说明：[Workflow 与数据库概念](docs/workflows-and-database.md)。
+
 ## Docker Compose 启动
 
 ```bash
