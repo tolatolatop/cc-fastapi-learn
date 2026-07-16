@@ -36,6 +36,7 @@ class TaskQueueService:
         unattended: bool,
         max_attempts: int | None,
         claude_agent_options: dict[str, Any] | None = None,
+        commit: bool = True,
     ) -> AgentTask:
         now = utc_now()
         target_queue = self.resolve_target_queue(queue_name)
@@ -60,8 +61,9 @@ class TaskQueueService:
         self.log_event(
             db, task.id, "INFO", "queued", "task queued", {"priority": priority, "queue_name": target_queue}
         )
-        db.commit()
-        db.refresh(task)
+        if commit:
+            db.commit()
+            db.refresh(task)
         return task
 
     def resolve_target_queue(self, queue_name: str | None) -> str:
