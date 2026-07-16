@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     def resolved_database_url(self) -> str:
         external = self.postgres_external_url.strip()
         if external:
+            if external.startswith("postgres://"):
+                external = f"postgresql://{external.removeprefix('postgres://')}"
+            if external.startswith("postgresql://"):
+                return f"postgresql+psycopg://{external.removeprefix('postgresql://')}"
             return external
         return self.database_url
 
