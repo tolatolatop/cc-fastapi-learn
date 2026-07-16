@@ -162,7 +162,12 @@ class WorkerManager:
                 },
             )
         except Exception as exc:
-            self.queue.mark_retry_or_failed(db, task.id, str(exc))
+            error_metadata = {
+                "exception_type": getattr(exc, "error_type", type(exc).__name__),
+                "exit_code": getattr(exc, "exit_code", None),
+                "has_cli_stderr": bool(getattr(exc, "cli_stderr", "")),
+            }
+            self.queue.mark_retry_or_failed(db, task.id, str(exc), error_metadata)
             logger.exception(
                 "task failed",
                 extra={

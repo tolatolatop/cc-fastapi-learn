@@ -225,12 +225,31 @@ class TaskQueueService:
             extra={"event_type": "status_transition", "task_id": task_id, "status_from": old_status, "status_to": task.status},
         )
 
-    def mark_retry_or_failed(self, db: Session, task_id: str, error_message: str) -> None:
+    def mark_retry_or_failed(
+        self,
+        db: Session,
+        task_id: str,
+        error_message: str,
+        error_metadata: dict[str, Any] | None = None,
+    ) -> None:
         task = self.get_task(db, task_id)
         if not task or task.status != TaskStatus.RUNNING:
             return
         now = utc_now()
         can_retry = task.attempt < task.max_attempts
+        diagnostic_metadata = {
+            "attempt": task.attempt,
+            "max_attempts": task.max_attempts,
+            **(error_metadata or {}),
+        }
+        self.log_event(
+            db,
+            task.id,
+            "ERROR",
+            "execution_error",
+            error_message,
+            diagnostic_metadata,
+        )
         if can_retry:
             old_status = task.status
             task.status = TaskStatus.QUEUED
