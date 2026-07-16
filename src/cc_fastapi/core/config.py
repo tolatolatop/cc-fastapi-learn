@@ -4,6 +4,9 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+DEFAULT_GITLAB_WEBHOOK_PROMPT_TEMPLATE_PATH = "config/templates/gitlab_webhook_prompt.j2"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -34,6 +37,12 @@ class Settings(BaseSettings):
     debug_log_filename: str = Field(default="debug.log", alias="DEBUG_LOG_FILENAME")
     debug_log_utc: bool = Field(default=True, alias="DEBUG_LOG_UTC")
     api_token: str = Field(default="", alias="API_TOKEN")
+    gitlab_webhook_secret: str = Field(default="", alias="GITLAB_WEBHOOK_SECRET")
+    gitlab_webhook_prompt_template_path: str = Field(
+        default=DEFAULT_GITLAB_WEBHOOK_PROMPT_TEMPLATE_PATH,
+        alias="GITLAB_WEBHOOK_PROMPT_TEMPLATE_PATH",
+    )
+    gitlab_webhook_queue_name: str = Field(default="", alias="GITLAB_WEBHOOK_QUEUE_NAME")
     max_attempts: int = Field(default=3, alias="MAX_ATTEMPTS")
 
     @property
@@ -43,8 +52,13 @@ class Settings(BaseSettings):
             return external
         return self.database_url
 
+    @property
+    def resolved_gitlab_webhook_prompt_template_path(self) -> str:
+        if self.gitlab_webhook_prompt_template_path.strip():
+            return self.gitlab_webhook_prompt_template_path
+        return DEFAULT_GITLAB_WEBHOOK_PROMPT_TEMPLATE_PATH
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
-

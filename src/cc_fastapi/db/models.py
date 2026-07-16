@@ -88,3 +88,19 @@ class AgentTaskContext(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
 
     task: Mapped[AgentTask] = relationship("AgentTask", back_populates="context")
+
+
+class WebhookTrigger(Base):
+    __tablename__ = "webhook_triggers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    event_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    event_uuid: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    webhook_uuid: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    instance_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    task_id: Mapped[str] = mapped_column(String(36), ForeignKey("agent_tasks.id"), nullable=False, index=True)
+    payload_json: Mapped[dict] = mapped_column(
+        "payload", MySQLJSON().with_variant(JSON, "sqlite"), nullable=False, default=dict
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, index=True)

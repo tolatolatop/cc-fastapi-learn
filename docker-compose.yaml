@@ -20,6 +20,9 @@ services:
       ANTHROPIC_MODEL: "claude-sonnet-4-20250514"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       API_TOKEN: "${API_TOKEN:-}"
+      GITLAB_WEBHOOK_SECRET: "${GITLAB_WEBHOOK_SECRET:-}"
+      GITLAB_WEBHOOK_PROMPT_TEMPLATE_PATH: "${GITLAB_WEBHOOK_PROMPT_TEMPLATE_PATH:-}"
+      GITLAB_WEBHOOK_QUEUE_NAME: "${GITLAB_WEBHOOK_QUEUE_NAME:-}"
     volumes:
       - app_data:/app/data
     restart: unless-stopped

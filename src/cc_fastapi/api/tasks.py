@@ -1,9 +1,9 @@
 import logging
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from cc_fastapi.core.config import get_settings
+from cc_fastapi.api.dependencies import require_token
 from cc_fastapi.core.queue_config import get_queue_config
 from cc_fastapi.db.models import TaskStatus
 from cc_fastapi.db.session import get_db
@@ -26,14 +26,6 @@ from cc_fastapi.services.queue import QueueNotFoundError, TaskQueueService
 router = APIRouter(prefix="/v1/agent-tasks", tags=["agent-tasks"])
 queue = TaskQueueService()
 logger = logging.getLogger(__name__)
-
-
-def require_token(x_api_token: str | None = Header(default=None)) -> None:
-    settings = get_settings()
-    if not settings.api_token:
-        return
-    if x_api_token != settings.api_token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid api token")
 
 
 def _to_task_item(task) -> TaskItemResponse:
