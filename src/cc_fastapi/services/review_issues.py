@@ -1,7 +1,8 @@
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -27,6 +28,20 @@ class ReviewIssueConflictError(Exception):
 
 class ReviewIssueReferenceError(Exception):
     pass
+
+
+class ReviewIssueFilterError(Exception):
+    pass
+
+
+@dataclass
+class PullRequestIssueRecords:
+    latest_batch: ReviewIssueBatch
+    pr_url: str | None
+    items: list[tuple[ReviewIssue, ReviewIssueBatch]]
+    total: int
+    tasks: dict[str, AgentTask]
+    summary: dict[str, Any]
 
 
 class ReviewIssueService:
@@ -275,6 +290,153 @@ class ReviewIssueService:
             .where(*filters)
         ) or 0
         return items, total
+
+    def list_pull_request_issue_records(
+        self,
+        db: Session,
+        *,
+        provider: str,
+        project_path: str,
+        pr_number: str,
+        severities: list[ReviewIssueSeverity] | None,
+        verification_statuses: list[ReviewIssueVerificationStatus] | None,
+        batch_statuses: list[ReviewBatchStatus] | None,
+        commit_sha: str | None,
+        offset: int,
+        limit: int,
+    ) -> PullRequestIssueRecords | None:
+        identity = {
+            "provider": provider.strip(),
+            "project_path": project_path.strip(),
+            "pr_number": pr_number.strip(),
+        }
+        for field_name, value in identity.items():
+            if not value:
+                raise ReviewIssueFilterError(f"{field_name} must not be blank")
+
+        identity_filters = [
+            ReviewIssueBatch.provider == identity["provider"],
+            ReviewIssueBatch.project_path == identity["project_path"],
+            ReviewIssueBatch.pr_number == identity["pr_number"],
+        ]
+        latest_batch = db.scalar(
+            select(ReviewIssueBatch)
+            .where(*identity_filters)
+            .order_by(ReviewIssueBatch.created_at.desc(), ReviewIssueBatch.id.desc())
+            .limit(1)
+        )
+        if latest_batch is None:
+            return None
+        pr_url = db.scalar(
+            select(ReviewIssueBatch.pr_url)
+            .where(*identity_filters, ReviewIssueBatch.pr_url.is_not(None))
+            .order_by(ReviewIssueBatch.created_at.desc(), ReviewIssueBatch.id.desc())
+            .limit(1)
+        )
+
+        batch_filters = list(identity_filters)
+        if batch_statuses:
+            batch_filters.append(ReviewIssueBatch.status.in_(batch_statuses))
+        if commit_sha is not None:
+            normalized_sha = commit_sha.strip()
+            if not normalized_sha:
+                raise ReviewIssueFilterError("commit_sha must not be blank")
+            batch_filters.append(
+                or_(
+                    ReviewIssueBatch.review_head_sha == normalized_sha,
+                    ReviewIssueBatch.merged_sha == normalized_sha,
+                )
+            )
+
+        issue_filters = list(batch_filters)
+        if severities:
+            issue_filters.append(ReviewIssue.severity.in_(severities))
+        if verification_statuses:
+            issue_filters.append(
+                ReviewIssue.verification_status.in_(verification_statuses)
+            )
+
+        rows = list(
+            db.execute(
+                select(ReviewIssue, ReviewIssueBatch)
+                .join(ReviewIssueBatch, ReviewIssueBatch.id == ReviewIssue.batch_id)
+                .where(*issue_filters)
+                .order_by(ReviewIssue.created_at.desc(), ReviewIssue.id.desc())
+                .offset(offset)
+                .limit(limit)
+            ).all()
+        )
+        total = db.scalar(
+            select(func.count())
+            .select_from(ReviewIssue)
+            .join(ReviewIssueBatch, ReviewIssueBatch.id == ReviewIssue.batch_id)
+            .where(*issue_filters)
+        ) or 0
+
+        task_ids = {
+            task_id
+            for _issue, batch in rows
+            for task_id in (
+                batch.review_task_id,
+                batch.extract_task_id,
+                batch.verify_task_id,
+            )
+            if task_id is not None
+        }
+        tasks = (
+            {
+                task.id: task
+                for task in db.scalars(
+                    select(AgentTask).where(AgentTask.id.in_(task_ids))
+                )
+            }
+            if task_ids
+            else {}
+        )
+
+        batch_total = db.scalar(
+            select(func.count()).select_from(ReviewIssueBatch).where(*batch_filters)
+        ) or 0
+        batch_status_rows = db.execute(
+            select(ReviewIssueBatch.status, func.count())
+            .where(*batch_filters)
+            .group_by(ReviewIssueBatch.status)
+        ).all()
+        verification_rows = db.execute(
+            select(ReviewIssue.verification_status, func.count())
+            .join(ReviewIssueBatch, ReviewIssueBatch.id == ReviewIssue.batch_id)
+            .where(*issue_filters)
+            .group_by(ReviewIssue.verification_status)
+        ).all()
+        severity_rows = db.execute(
+            select(ReviewIssue.severity, func.count())
+            .join(ReviewIssueBatch, ReviewIssueBatch.id == ReviewIssue.batch_id)
+            .where(*issue_filters)
+            .group_by(ReviewIssue.severity)
+        ).all()
+        batch_status_counts = {status: 0 for status in ReviewBatchStatus}
+        batch_status_counts.update(dict(batch_status_rows))
+        verification_status_counts = {
+            status: 0 for status in ReviewIssueVerificationStatus
+        }
+        verification_status_counts.update(dict(verification_rows))
+        severity_counts = {severity: 0 for severity in ReviewIssueSeverity}
+        severity_counts.update(dict(severity_rows))
+
+        return PullRequestIssueRecords(
+            latest_batch=latest_batch,
+            pr_url=pr_url,
+            items=rows,
+            total=total,
+            tasks=tasks,
+            summary={
+                "batch_total": batch_total,
+                "issue_total": total,
+                "batch_status_counts": batch_status_counts,
+                "verification_status_counts": verification_status_counts,
+                "severity_counts": severity_counts,
+            },
+        )
 
     def verify_issues(
         self,

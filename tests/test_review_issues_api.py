@@ -315,3 +315,217 @@ def test_review_issue_list_and_batch_list_are_paginated_and_filterable():
 
     assert client.get("/v1/review-issue-batches/not-found").status_code == 404
     assert client.get("/v1/review-issues/not-found").status_code == 404
+
+
+def test_pull_request_issue_records_include_commits_batches_and_tasks():
+    client = build_client()
+    review_task_id = create_task(client, "review PR records")
+    extract_task_id = create_task(client, "extract PR records")
+    verify_task_id = create_task(client, "verify PR records")
+    first_batch = create_batch(
+        client,
+        review_task_id,
+        pr_number="77",
+        pr_url="https://gitlab.example.com/group/project/-/merge_requests/77",
+        review_head_sha="review-first",
+        extract_task_id=extract_task_id,
+    ).json()
+    created = client.post(
+        f"/v1/review-issue-batches/{first_batch['id']}/issues",
+        json={
+            "items": [
+                {
+                    "severity": "high",
+                    "title": "accepted issue",
+                    "description": "fixed before merge",
+                    "file_path": "src/accepted.py",
+                    "line_number": 10,
+                },
+                {
+                    "severity": "medium",
+                    "title": "unhandled issue",
+                    "description": "still present after merge",
+                },
+                {
+                    "severity": "low",
+                    "title": "pending issue",
+                    "description": "verification pending",
+                },
+            ]
+        },
+    )
+    assert created.status_code == 201
+    issues = created.json()["items"]
+    assert client.patch(
+        f"/v1/review-issue-batches/{first_batch['id']}",
+        json={
+            "status": "verifying",
+            "merged_sha": "merged-first",
+            "verify_task_id": verify_task_id,
+        },
+    ).status_code == 200
+    assert client.patch(
+        f"/v1/review-issue-batches/{first_batch['id']}/issues",
+        json={
+            "items": [
+                {
+                    "id": issues[0]["id"],
+                    "status": "accepted",
+                    "note": "guard added",
+                },
+                {
+                    "id": issues[1]["id"],
+                    "status": "not_accepted",
+                    "note": "no matching change",
+                },
+            ]
+        },
+    ).status_code == 200
+
+    second_review_task_id = create_task(client, "second review PR records")
+    second_batch = create_batch(
+        client,
+        second_review_task_id,
+        pr_number="77",
+        pr_url="https://gitlab.example.com/group/project/-/merge_requests/77",
+        review_head_sha="review-second",
+    ).json()
+    assert client.post(
+        f"/v1/review-issue-batches/{second_batch['id']}/issues",
+        json={
+            "items": [
+                {
+                    "severity": "info",
+                    "title": "second pass issue",
+                    "description": "found in a later review pass",
+                }
+            ]
+        },
+    ).status_code == 201
+
+    response = client.get(
+        "/v1/review-issues/pull-request",
+        params={
+            "provider": "gitlab",
+            "project_path": "group/project",
+            "pr_number": "77",
+            "limit": 200,
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["pull_request"] == {
+        "provider": "gitlab",
+        "project_path": "group/project",
+        "pr_number": "77",
+        "pr_url": "https://gitlab.example.com/group/project/-/merge_requests/77",
+    }
+    assert payload["total"] == 4
+    assert payload["summary"]["batch_total"] == 2
+    assert payload["summary"]["issue_total"] == 4
+    assert payload["summary"]["verification_status_counts"] == {
+        "unverified": 2,
+        "accepted": 1,
+        "not_accepted": 1,
+    }
+    assert payload["summary"]["batch_status_counts"]["verifying"] == 1
+    assert payload["summary"]["batch_status_counts"]["waiting_merge"] == 1
+    assert {item["review_head_sha"] for item in payload["items"]} == {
+        "review-first",
+        "review-second",
+    }
+    first_pass_items = [
+        item for item in payload["items"] if item["review_head_sha"] == "review-first"
+    ]
+    assert len(first_pass_items) == 3
+    assert all(item["merged_sha"] == "merged-first" for item in first_pass_items)
+    accepted = next(
+        item for item in payload["items"] if item["verification_status"] == "accepted"
+    )
+    assert accepted["verification_note"] == "guard added"
+    assert accepted["file_path"] == "src/accepted.py"
+    assert accepted["review_task"] == {
+        "id": review_task_id,
+        "status": "queued",
+        "session_id": None,
+    }
+    assert accepted["extract_task"]["id"] == extract_task_id
+    assert accepted["verify_task"]["id"] == verify_task_id
+    assert accepted["batch_status"] == "verifying"
+    assert accepted["batch_created_at"] is not None
+
+    for params, expected_total in [
+        ({"status": "accepted"}, 1),
+        ({"severity": "info"}, 1),
+        ({"batch_status": "waiting_merge"}, 1),
+        ({"commit_sha": "review-first"}, 3),
+        ({"commit_sha": "merged-first"}, 3),
+        ({"commit_sha": "review-second"}, 1),
+    ]:
+        filtered = client.get(
+            "/v1/review-issues/pull-request",
+            params={
+                "provider": "gitlab",
+                "project_path": "group/project",
+                "pr_number": "77",
+                **params,
+            },
+        )
+        assert filtered.status_code == 200
+        assert filtered.json()["total"] == expected_total
+
+    paged = client.get(
+        "/v1/review-issues/pull-request",
+        params={
+            "provider": "gitlab",
+            "project_path": "group/project",
+            "pr_number": "77",
+            "offset": 1,
+            "limit": 1,
+        },
+    )
+    assert paged.status_code == 200
+    assert paged.json()["total"] == 4
+    assert len(paged.json()["items"]) == 1
+
+
+def test_pull_request_issue_records_report_empty_and_missing_pull_requests():
+    client = build_client()
+    review_task_id = create_task(client, "review PR without findings")
+    batch = create_batch(client, review_task_id, pr_number="88").json()
+    assert client.post(
+        f"/v1/review-issue-batches/{batch['id']}/issues", json={"items": []}
+    ).status_code == 201
+
+    empty = client.get(
+        "/v1/review-issues/pull-request",
+        params={
+            "provider": "gitlab",
+            "project_path": "group/project",
+            "pr_number": "88",
+        },
+    )
+    assert empty.status_code == 200
+    assert empty.json()["items"] == []
+    assert empty.json()["total"] == 0
+    assert empty.json()["summary"]["batch_total"] == 1
+
+    missing = client.get(
+        "/v1/review-issues/pull-request",
+        params={
+            "provider": "gitlab",
+            "project_path": "group/project",
+            "pr_number": "404",
+        },
+    )
+    assert missing.status_code == 404
+    invalid = client.get(
+        "/v1/review-issues/pull-request",
+        params={
+            "provider": "gitlab",
+            "project_path": "group/project",
+            "pr_number": "88",
+            "commit_sha": " ",
+        },
+    )
+    assert invalid.status_code == 422

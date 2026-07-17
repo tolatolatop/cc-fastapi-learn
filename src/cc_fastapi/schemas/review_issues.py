@@ -6,6 +6,7 @@ from cc_fastapi.db.models import (
     ReviewBatchStatus,
     ReviewIssueSeverity,
     ReviewIssueVerificationStatus,
+    TaskStatus,
 )
 
 
@@ -186,3 +187,45 @@ class ReviewIssueStatisticsResponse(BaseModel):
     acceptance_rate: float | None
     verification_status_counts: dict[ReviewIssueVerificationStatus, int]
     severity_counts: dict[ReviewIssueSeverity, int]
+
+
+class ReviewPullRequestReferenceResponse(BaseModel):
+    provider: str
+    project_path: str
+    pr_number: str
+    pr_url: str | None
+
+
+class ReviewIssueTaskReferenceResponse(BaseModel):
+    id: str
+    status: TaskStatus | None
+    session_id: str | None
+
+
+class ReviewPullRequestIssueItemResponse(ReviewIssueResponse):
+    batch_status: ReviewBatchStatus
+    review_head_sha: str | None
+    merged_sha: str | None
+    review_workflow_run_id: str | None
+    batch_created_at: datetime
+    batch_extracted_at: datetime | None
+    batch_verified_at: datetime | None
+    batch_error_message: str | None
+    review_task: ReviewIssueTaskReferenceResponse
+    extract_task: ReviewIssueTaskReferenceResponse | None
+    verify_task: ReviewIssueTaskReferenceResponse | None
+
+
+class ReviewPullRequestIssueSummaryResponse(BaseModel):
+    batch_total: int
+    issue_total: int
+    batch_status_counts: dict[ReviewBatchStatus, int]
+    verification_status_counts: dict[ReviewIssueVerificationStatus, int]
+    severity_counts: dict[ReviewIssueSeverity, int]
+
+
+class ReviewPullRequestIssueListResponse(BaseModel):
+    pull_request: ReviewPullRequestReferenceResponse
+    items: list[ReviewPullRequestIssueItemResponse]
+    total: int
+    summary: ReviewPullRequestIssueSummaryResponse

@@ -21,9 +21,15 @@ from cc_fastapi.schemas.review_issues import (
     ReviewIssueResponse,
     ReviewIssueStatisticsResponse,
     ReviewIssueVerificationUpdateRequest,
+    ReviewIssueTaskReferenceResponse,
+    ReviewPullRequestIssueItemResponse,
+    ReviewPullRequestIssueListResponse,
+    ReviewPullRequestIssueSummaryResponse,
+    ReviewPullRequestReferenceResponse,
 )
 from cc_fastapi.services.review_issues import (
     ReviewIssueConflictError,
+    ReviewIssueFilterError,
     ReviewIssueNotFoundError,
     ReviewIssueReferenceError,
     ReviewIssueService,
@@ -232,6 +238,95 @@ def list_review_issues(
     return ReviewIssueListResponse(
         items=[ReviewIssueResponse.model_validate(item) for item in items],
         total=total,
+    )
+
+
+@issue_router.get("/pull-request", response_model=ReviewPullRequestIssueListResponse)
+def list_pull_request_review_issues(
+    provider: str = Query(max_length=32),
+    project_path: str = Query(max_length=255),
+    pr_number: str = Query(max_length=128),
+    severities: list[ReviewIssueSeverity] | None = Query(
+        default=None, alias="severity"
+    ),
+    verification_statuses: list[ReviewIssueVerificationStatus] | None = Query(
+        default=None, alias="status"
+    ),
+    batch_statuses: list[ReviewBatchStatus] | None = Query(
+        default=None, alias="batch_status"
+    ),
+    commit_sha: str | None = Query(default=None, max_length=128),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=200),
+    db: Session = Depends(get_db),
+) -> ReviewPullRequestIssueListResponse:
+    try:
+        records = reviews.list_pull_request_issue_records(
+            db,
+            provider=provider,
+            project_path=project_path,
+            pr_number=pr_number,
+            severities=severities,
+            verification_statuses=verification_statuses,
+            batch_statuses=batch_statuses,
+            commit_sha=commit_sha,
+            offset=offset,
+            limit=limit,
+        )
+    except ReviewIssueFilterError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+    if records is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="review pull request not found",
+        )
+
+    def task_reference(task_id: str | None) -> ReviewIssueTaskReferenceResponse | None:
+        if task_id is None:
+            return None
+        task = records.tasks.get(task_id)
+        return ReviewIssueTaskReferenceResponse(
+            id=task_id,
+            status=task.status if task else None,
+            session_id=task.session_id if task else None,
+        )
+
+    items = []
+    for issue, batch in records.items:
+        issue_values = ReviewIssueResponse.model_validate(issue).model_dump()
+        review_task = task_reference(batch.review_task_id)
+        if review_task is None:
+            raise RuntimeError("review issue batch is missing its review task")
+        items.append(
+            ReviewPullRequestIssueItemResponse(
+                **issue_values,
+                batch_status=batch.status,
+                review_head_sha=batch.review_head_sha,
+                merged_sha=batch.merged_sha,
+                review_workflow_run_id=batch.review_workflow_run_id,
+                batch_created_at=batch.created_at,
+                batch_extracted_at=batch.extracted_at,
+                batch_verified_at=batch.verified_at,
+                batch_error_message=batch.error_message,
+                review_task=review_task,
+                extract_task=task_reference(batch.extract_task_id),
+                verify_task=task_reference(batch.verify_task_id),
+            )
+        )
+
+    return ReviewPullRequestIssueListResponse(
+        pull_request=ReviewPullRequestReferenceResponse(
+            provider=records.latest_batch.provider,
+            project_path=records.latest_batch.project_path,
+            pr_number=records.latest_batch.pr_number,
+            pr_url=records.pr_url,
+        ),
+        items=items,
+        total=records.total,
+        summary=ReviewPullRequestIssueSummaryResponse(**records.summary),
     )
 
 
