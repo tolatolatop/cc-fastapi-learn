@@ -19,6 +19,7 @@ import {
   X,
   XCircle,
 } from 'lucide-react'
+import { Button, Form, Modal, Offcanvas, Table } from 'react-bootstrap'
 import { api } from './api'
 import Pagination from './Pagination'
 import type {
@@ -160,14 +161,6 @@ function ReviewEntryModal({ existingBatch, onClose, onSaved }: ReviewEntryModalP
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
 
-  useEffect(() => {
-    const onKey = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape' && !submitting) onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose, submitting])
-
   function updateIssue(key: string, values: Partial<IssueDraft>) {
     setIssues((current) => current.map((issue) => issue.key === key ? { ...issue, ...values } : issue))
   }
@@ -212,8 +205,16 @@ function ReviewEntryModal({ existingBatch, onClose, onSaved }: ReviewEntryModalP
   const validBatch = Boolean(workingBatch || (provider.trim() && projectPath.trim() && prNumber.trim() && reviewTaskId.trim()))
 
   return (
-    <div className="modal-backdrop review-modal-layer" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className="review-entry-modal" role="dialog" aria-modal="true" aria-labelledby="review-entry-title">
+    <Modal
+      show
+      centered
+      onHide={onClose}
+      backdrop={submitting ? 'static' : true}
+      keyboard={!submitting}
+      dialogClassName="review-entry-modal-dialog"
+      contentClassName="review-entry-modal"
+      aria-labelledby="review-entry-title"
+    >
         <div className="review-modal-head">
           <div>
             <p className="eyebrow">REVIEW INTAKE</p>
@@ -230,22 +231,22 @@ function ReviewEntryModal({ existingBatch, onClose, onSaved }: ReviewEntryModalP
               <div className="review-form-grid review-form-grid-primary">
                 <label className="field">
                   <span>代码平台</span>
-                  <select value={provider} onChange={(event) => setProvider(event.target.value)} required>
+                  <Form.Select value={provider} onChange={(event) => setProvider(event.target.value)} required>
                     <option value="gitlab">GitLab</option>
                     <option value="github">GitHub</option>
-                  </select>
+                  </Form.Select>
                 </label>
                 <label className="field review-project-field">
                   <span>代码仓库</span>
-                  <input value={projectPath} onChange={(event) => setProjectPath(event.target.value)} placeholder="group/project" required />
+                  <Form.Control value={projectPath} onChange={(event) => setProjectPath(event.target.value)} placeholder="group/project" required />
                 </label>
                 <label className="field">
                   <span>PR / MR 编号</span>
-                  <input value={prNumber} onChange={(event) => setPrNumber(event.target.value)} placeholder="42" required />
+                  <Form.Control value={prNumber} onChange={(event) => setPrNumber(event.target.value)} placeholder="42" required />
                 </label>
                 <label className="field review-task-field">
                   <span>原始检视任务 ID</span>
-                  <input value={reviewTaskId} onChange={(event) => setReviewTaskId(event.target.value)} placeholder="完整 Agent Task UUID" required />
+                  <Form.Control value={reviewTaskId} onChange={(event) => setReviewTaskId(event.target.value)} placeholder="完整 Agent Task UUID" required />
                 </label>
               </div>
             </section>
@@ -273,23 +274,23 @@ function ReviewEntryModal({ existingBatch, onClose, onSaved }: ReviewEntryModalP
                     <div className="review-form-grid review-advanced-grid">
                       <label className="field">
                         <span>检视版本 SHA</span>
-                        <input value={reviewHeadSha} onChange={(event) => setReviewHeadSha(event.target.value)} placeholder="可选" />
+                        <Form.Control value={reviewHeadSha} onChange={(event) => setReviewHeadSha(event.target.value)} placeholder="可选" />
                       </label>
                       <label className="field">
                         <span>提取任务 ID</span>
-                        <input value={extractTaskId} onChange={(event) => setExtractTaskId(event.target.value)} placeholder="可选" />
+                        <Form.Control value={extractTaskId} onChange={(event) => setExtractTaskId(event.target.value)} placeholder="可选" />
                       </label>
                       <label className="field">
                         <span>Workflow Run ID</span>
-                        <input value={workflowRunId} onChange={(event) => setWorkflowRunId(event.target.value)} placeholder="可选" />
+                        <Form.Control value={workflowRunId} onChange={(event) => setWorkflowRunId(event.target.value)} placeholder="可选" />
                       </label>
                       <label className="field">
                         <span>平台实例</span>
-                        <input value={instanceUrl} onChange={(event) => setInstanceUrl(event.target.value)} placeholder="例如 https://gitlab.example.com" />
+                        <Form.Control value={instanceUrl} onChange={(event) => setInstanceUrl(event.target.value)} placeholder="例如 https://gitlab.example.com" />
                       </label>
                       <label className="field review-wide-field">
                         <span>PR 地址</span>
-                        <input value={prUrl} onChange={(event) => setPrUrl(event.target.value)} placeholder="具体 PR / MR 页面的完整链接" />
+                        <Form.Control value={prUrl} onChange={(event) => setPrUrl(event.target.value)} placeholder="具体 PR / MR 页面的完整链接" />
                       </label>
                     </div>
                   </>
@@ -306,10 +307,7 @@ function ReviewEntryModal({ existingBatch, onClose, onSaved }: ReviewEntryModalP
             <div className="review-form-section-title">
               <span>问题</span>
               <div>
-                <label className="review-zero-toggle">
-                  <input type="checkbox" checked={noIssues} onChange={(event) => setNoIssues(event.target.checked)} />
-                  本次未发现问题
-                </label>
+                <Form.Check className="review-zero-toggle" type="checkbox" checked={noIssues} onChange={(event) => setNoIssues(event.target.checked)} label="本次未发现问题" />
                 {!noIssues && <button type="button" className="review-add-issue" onClick={() => setIssues((current) => [...current, newIssueDraft()])}><Plus size={14} />增加问题</button>}
               </div>
             </div>
@@ -327,33 +325,33 @@ function ReviewEntryModal({ existingBatch, onClose, onSaved }: ReviewEntryModalP
                     <div className={`review-issue-editor-grid ${advancedOpen ? 'has-advanced' : ''}`}>
                       <label className="field">
                         <span>等级</span>
-                        <select value={issue.severity} onChange={(event) => updateIssue(issue.key, { severity: event.target.value as ReviewIssueSeverity })}>
+                        <Form.Select value={issue.severity} onChange={(event) => updateIssue(issue.key, { severity: event.target.value as ReviewIssueSeverity })}>
                           {Object.entries(SEVERITY_META).map(([value, meta]) => <option value={value} key={value}>{meta.label}</option>)}
-                        </select>
+                        </Form.Select>
                       </label>
                       {advancedOpen && (
                         <label className="field">
                           <span>分类</span>
-                          <input value={issue.category} onChange={(event) => updateIssue(issue.key, { category: event.target.value })} placeholder="correctness / security" />
+                          <Form.Control value={issue.category} onChange={(event) => updateIssue(issue.key, { category: event.target.value })} placeholder="correctness / security" />
                         </label>
                       )}
                       <label className="field review-editor-title">
                         <span>问题摘要</span>
-                        <input value={issue.title} onChange={(event) => updateIssue(issue.key, { title: event.target.value })} placeholder="简洁描述问题" required />
+                        <Form.Control value={issue.title} onChange={(event) => updateIssue(issue.key, { title: event.target.value })} placeholder="简洁描述问题" required />
                       </label>
                       <label className="field review-editor-description">
                         <span>完整检视意见</span>
-                        <textarea value={issue.description} onChange={(event) => updateIssue(issue.key, { description: event.target.value })} placeholder="说明风险、触发条件和建议修改方式" rows={3} required />
+                        <Form.Control as="textarea" value={issue.description} onChange={(event) => updateIssue(issue.key, { description: event.target.value })} placeholder="说明风险、触发条件和建议修改方式" rows={3} required />
                       </label>
                       {advancedOpen && (
                         <>
                           <label className="field review-editor-path">
                             <span>文件</span>
-                            <input value={issue.filePath} onChange={(event) => updateIssue(issue.key, { filePath: event.target.value })} placeholder="src/example.py" />
+                            <Form.Control value={issue.filePath} onChange={(event) => updateIssue(issue.key, { filePath: event.target.value })} placeholder="src/example.py" />
                           </label>
                           <label className="field">
                             <span>行号</span>
-                            <input type="number" min={1} value={issue.lineNumber} onChange={(event) => updateIssue(issue.key, { lineNumber: event.target.value })} placeholder="可选" />
+                            <Form.Control type="number" min={1} value={issue.lineNumber} onChange={(event) => updateIssue(issue.key, { lineNumber: event.target.value })} placeholder="可选" />
                           </label>
                         </>
                       )}
@@ -370,16 +368,15 @@ function ReviewEntryModal({ existingBatch, onClose, onSaved }: ReviewEntryModalP
           <div className="review-modal-actions">
             <span>{noIssues ? '将写入 0 条问题' : `将写入 ${issues.length} 条问题`}</span>
             <div>
-              <button type="button" className="button button-quiet" onClick={onClose} disabled={submitting}>取消</button>
-              <button type="submit" className="button button-primary" disabled={!validBatch || !validIssues || submitting}>
+              <Button type="button" variant="outline-secondary" onClick={onClose} disabled={submitting}>取消</Button>
+              <Button type="submit" variant="primary" disabled={!validBatch || !validIssues || submitting}>
                 {submitting ? <RefreshCw size={16} className="spin" /> : <Check size={16} />}
                 {submitting ? '正在保存' : '保存检视结果'}
-              </button>
+              </Button>
             </div>
           </div>
         </form>
-      </section>
-    </div>
+    </Modal>
   )
 }
 
@@ -424,12 +421,6 @@ function ReviewBatchDrawer({ batch, onClose, onChanged, onOpenTask, onContinueCo
   useEffect(() => {
     loadDetail()
   }, [loadDetail])
-
-  useEffect(() => {
-    const onKey = (event: globalThis.KeyboardEvent) => event.key === 'Escape' && onClose()
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
 
   async function beginVerification(event: FormEvent) {
     event.preventDefault()
@@ -481,8 +472,7 @@ function ReviewBatchDrawer({ batch, onClose, onChanged, onOpenTask, onContinueCo
   const rejected = issues.filter((issue) => issue.verification_status === 'not_accepted').length
 
   return (
-    <div className="drawer-layer" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <aside className="detail-drawer review-detail-drawer" role="dialog" aria-modal="true" aria-labelledby="review-detail-title">
+    <Offcanvas show onHide={onClose} placement="end" className="detail-drawer review-detail-drawer" aria-labelledby="review-detail-title">
         <div className="drawer-head">
           <button className="icon-button" onClick={onClose} aria-label="关闭检视详情"><X size={19} /></button>
           <span className="drawer-record-id">BATCH-{detail.id.slice(0, 8).toUpperCase()}</span>
@@ -527,16 +517,16 @@ function ReviewBatchDrawer({ batch, onClose, onChanged, onOpenTask, onContinueCo
             <section className="review-next-step">
               <FileCode size={20} />
               <div><strong>等待问题提取结果</strong><p>录入问题列表后，批次会进入等待合入阶段。</p></div>
-              <button className="button button-primary" onClick={() => onContinueCollection(detail)}><Plus size={15} />录入问题</button>
+              <Button variant="primary" onClick={() => onContinueCollection(detail)}><Plus size={15} />录入问题</Button>
             </section>
           )}
 
           {detail.status === 'waiting_merge' && (
             <form className="review-merge-form" onSubmit={beginVerification}>
               <div className="review-merge-form-title"><GitMerge size={19} /><div><strong>{detail.issue_count ? '开始合入后验证' : '确认零问题批次已合入'}</strong><span>填写最终代码版本，建立本次验证基线。</span></div></div>
-              <label className="field"><span>合入版本 SHA</span><input value={mergedSha} onChange={(event) => setMergedSha(event.target.value)} placeholder="merged commit SHA" required /></label>
-              <label className="field"><span>验证任务 ID</span><input value={verifyTaskId} onChange={(event) => setVerifyTaskId(event.target.value)} placeholder="可选" /></label>
-              <button className="button button-primary" type="submit" disabled={!mergedSha.trim() || saving}>{saving ? <RefreshCw className="spin" size={15} /> : <GitMerge size={15} />}{detail.issue_count ? '进入验证' : '完成批次'}</button>
+              <label className="field"><span>合入版本 SHA</span><Form.Control value={mergedSha} onChange={(event) => setMergedSha(event.target.value)} placeholder="merged commit SHA" required /></label>
+              <label className="field"><span>验证任务 ID</span><Form.Control value={verifyTaskId} onChange={(event) => setVerifyTaskId(event.target.value)} placeholder="可选" /></label>
+              <Button variant="primary" type="submit" disabled={!mergedSha.trim() || saving}>{saving ? <RefreshCw className="spin" size={15} /> : <GitMerge size={15} />}{detail.issue_count ? '进入验证' : '完成批次'}</Button>
             </form>
           )}
 
@@ -565,15 +555,15 @@ function ReviewBatchDrawer({ batch, onClose, onChanged, onOpenTask, onContinueCo
                     {issue.verification_note && <div className="review-verification-note"><span>验证依据</span>{issue.verification_note}</div>}
                     {detail.status === 'verifying' && issue.verification_status === 'unverified' && decision?.issueId !== issue.id && (
                       <div className="review-decision-actions">
-                        <button onClick={() => { setDecision({ issueId: issue.id, status: 'accepted' }); setDecisionNote('') }}><Check size={14} />已修复，接受</button>
-                        <button onClick={() => { setDecision({ issueId: issue.id, status: 'not_accepted' }); setDecisionNote('') }}><XCircle size={14} />未发现修复</button>
+                        <Button variant="outline-success" size="sm" onClick={() => { setDecision({ issueId: issue.id, status: 'accepted' }); setDecisionNote('') }}><Check size={14} />已修复，接受</Button>
+                        <Button variant="outline-danger" size="sm" onClick={() => { setDecision({ issueId: issue.id, status: 'not_accepted' }); setDecisionNote('') }}><XCircle size={14} />未发现修复</Button>
                       </div>
                     )}
                     {decision?.issueId === issue.id && (
                       <form className={`review-decision-form decision-${decision.status}`} onSubmit={saveDecision}>
                         <strong>{decision.status === 'accepted' ? '记录为已接受' : '记录为未接受'}</strong>
-                        <textarea value={decisionNote} onChange={(event) => setDecisionNote(event.target.value)} rows={2} placeholder="可选：填写判断依据" autoFocus />
-                        <div><button type="button" onClick={() => setDecision(null)}>取消</button><button type="submit" disabled={saving}>{saving ? '正在保存' : '确认结论'}</button></div>
+                        <Form.Control as="textarea" value={decisionNote} onChange={(event) => setDecisionNote(event.target.value)} rows={2} placeholder="可选：填写判断依据" autoFocus />
+                        <div><Button type="button" variant="link" size="sm" onClick={() => setDecision(null)}>取消</Button><Button type="submit" variant={decision.status === 'accepted' ? 'success' : 'danger'} size="sm" disabled={saving}>{saving ? '正在保存' : '确认结论'}</Button></div>
                       </form>
                     )}
                   </article>
@@ -582,8 +572,7 @@ function ReviewBatchDrawer({ batch, onClose, onChanged, onOpenTask, onContinueCo
             )}
           </section>
         </div>
-      </aside>
-    </div>
+    </Offcanvas>
   )
 }
 
@@ -690,7 +679,7 @@ export default function ReviewIssuesPage({ onOpenSettings, onOpenTask }: ReviewI
           <h1>检视统计</h1>
           <p>观察检视意见是否真正进入了合入代码。</p>
         </div>
-        <button className="button button-primary review-entry-button" onClick={() => setEntryOpen(true)}><Plus size={17} />录入检视</button>
+        <Button variant="primary" className="review-entry-button" onClick={() => setEntryOpen(true)}><Plus size={17} />录入检视</Button>
       </section>
 
       <section className="review-signal-rail" aria-label="检视问题采纳轨道">
@@ -724,9 +713,9 @@ export default function ReviewIssuesPage({ onOpenSettings, onOpenTask }: ReviewI
         <div className="review-panel-head">
           <div><p className="eyebrow">COLLECTION LEDGER</p><h2>回收批次</h2><span>找到 {total.toLocaleString('zh-CN')} 条记录</span></div>
           <div className="review-filter-tools">
-            <label className="review-search-field"><Search size={16} /><input value={projectSearch} onChange={(event) => setProjectSearch(event.target.value)} placeholder="仓库 group/project" aria-label="按仓库筛选" />{projectSearch && <button onClick={() => setProjectSearch('')} aria-label="清除仓库筛选"><X size={13} /></button>}</label>
-            <label className="review-pr-filter"><GitPullRequest size={15} /><input value={prSearch} onChange={(event) => setPrSearch(event.target.value)} placeholder="PR 编号" aria-label="按 PR 编号筛选" /></label>
-            <label className="review-status-filter"><select value={statusFilter} onChange={(event) => { setStatusFilter(event.target.value as ReviewBatchStatus | 'all'); setPage(1) }} aria-label="按回收状态筛选"><option value="all">全部状态</option>{Object.entries(BATCH_STATUS_META).map(([value, meta]) => <option value={value} key={value}>{meta.label}</option>)}</select></label>
+            <label className="review-search-field"><Search size={16} /><Form.Control value={projectSearch} onChange={(event) => setProjectSearch(event.target.value)} placeholder="仓库 group/project" aria-label="按仓库筛选" />{projectSearch && <button onClick={() => setProjectSearch('')} aria-label="清除仓库筛选"><X size={13} /></button>}</label>
+            <label className="review-pr-filter"><GitPullRequest size={15} /><Form.Control value={prSearch} onChange={(event) => setPrSearch(event.target.value)} placeholder="PR 编号" aria-label="按 PR 编号筛选" /></label>
+            <label className="review-status-filter"><Form.Select value={statusFilter} onChange={(event) => { setStatusFilter(event.target.value as ReviewBatchStatus | 'all'); setPage(1) }} aria-label="按回收状态筛选"><option value="all">全部状态</option>{Object.entries(BATCH_STATUS_META).map(([value, meta]) => <option value={value} key={value}>{meta.label}</option>)}</Form.Select></label>
             <button className="icon-button" onClick={() => loadData(true)} aria-label="刷新检视统计"><RefreshCw size={16} className={refreshing ? 'spin' : ''} /></button>
           </div>
         </div>
@@ -735,11 +724,11 @@ export default function ReviewIssuesPage({ onOpenSettings, onOpenTask }: ReviewI
           {loading ? (
             <div className="state-message"><RefreshCw size={24} className="spin" /><strong>正在读取检视统计</strong><p>加载回收批次和采纳结果…</p></div>
           ) : error ? (
-            <div className="state-message error-state"><CircleAlert size={26} /><strong>无法读取检视数据</strong><p>{error}</p><div>{error === 'invalid api token' && <button className="button button-quiet" onClick={onOpenSettings}><KeyRound size={16} />填写 Token</button>}<button className="button button-primary" onClick={() => loadData()}><RefreshCw size={16} />重试连接</button></div></div>
+            <div className="state-message error-state"><CircleAlert size={26} /><strong>无法读取检视数据</strong><p>{error}</p><div>{error === 'invalid api token' && <Button variant="outline-secondary" onClick={onOpenSettings}><KeyRound size={16} />填写 Token</Button>}<Button variant="primary" onClick={() => loadData()}><RefreshCw size={16} />重试连接</Button></div></div>
           ) : batches.length === 0 ? (
-            <div className="state-message review-empty-state"><ShieldCheck size={27} /><strong>{statistics.batch_total ? '没有匹配的回收批次' : '还没有检视统计数据'}</strong><p>{statistics.batch_total ? '调整仓库、PR 或状态筛选后再试。' : '录入第一份检视结果，开始观察问题采纳情况。'}</p>{!statistics.batch_total && <button className="button button-primary" onClick={() => setEntryOpen(true)}><Plus size={16} />录入检视</button>}</div>
+            <div className="state-message review-empty-state"><ShieldCheck size={27} /><strong>{statistics.batch_total ? '没有匹配的回收批次' : '还没有检视统计数据'}</strong><p>{statistics.batch_total ? '调整仓库、PR 或状态筛选后再试。' : '录入第一份检视结果，开始观察问题采纳情况。'}</p>{!statistics.batch_total && <Button variant="primary" onClick={() => setEntryOpen(true)}><Plus size={16} />录入检视</Button>}</div>
           ) : (
-            <table className="review-batch-table">
+            <Table hover className="review-batch-table">
               <thead><tr><th>仓库 / PR</th><th>回收阶段</th><th>问题</th><th>检视版本</th><th>创建时间</th><th>来源任务</th><th><span className="sr-only">操作</span></th></tr></thead>
               <tbody>{batches.map((batch) => (
                 <tr key={batch.id} tabIndex={0} onClick={() => setSelected(batch)} onKeyDown={(event) => handleRowKey(event, batch)}>
@@ -752,7 +741,7 @@ export default function ReviewIssuesPage({ onOpenSettings, onOpenTask }: ReviewI
                   <td><button className="row-action" onClick={(event) => { event.stopPropagation(); setSelected(batch) }} aria-label={`查看 ${batch.project_path} PR ${batch.pr_number}`}><ChevronRight size={17} /></button></td>
                 </tr>
               ))}</tbody>
-            </table>
+            </Table>
           )}
         </div>
 

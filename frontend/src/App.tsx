@@ -24,6 +24,7 @@ import {
   Webhook,
   X,
 } from 'lucide-react'
+import { Button, Form, Modal, Offcanvas, Table } from 'react-bootstrap'
 import { api } from './api'
 import Pagination from './Pagination'
 import ReviewIssuesPage from './ReviewIssuesPage'
@@ -123,14 +124,6 @@ function CreateTaskModal({ queues, onClose, onCreated }: CreateTaskModalProps) {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
 
-  useEffect(() => {
-    const onKey = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape' && !submitting) onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose, submitting])
-
   async function submit(event: FormEvent) {
     event.preventDefault()
     if (!prompt.trim()) return
@@ -156,8 +149,16 @@ function CreateTaskModal({ queues, onClose, onCreated }: CreateTaskModalProps) {
   }
 
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className="create-modal" role="dialog" aria-modal="true" aria-labelledby="create-title">
+    <Modal
+      show
+      centered
+      onHide={onClose}
+      backdrop={submitting ? 'static' : true}
+      keyboard={!submitting}
+      dialogClassName="create-modal-dialog"
+      contentClassName="create-modal"
+      aria-labelledby="create-title"
+    >
         <div className="modal-head">
           <div>
             <p className="eyebrow">NEW DISPATCH</p>
@@ -172,7 +173,8 @@ function CreateTaskModal({ queues, onClose, onCreated }: CreateTaskModalProps) {
         <form onSubmit={submit}>
           <label className="field prompt-field">
             <span>任务指令</span>
-            <textarea
+            <Form.Control
+              as="textarea"
               autoFocus
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
@@ -186,7 +188,7 @@ function CreateTaskModal({ queues, onClose, onCreated }: CreateTaskModalProps) {
           <div className="form-grid">
             <label className="field">
               <span>目标队列</span>
-              <select value={queueName} onChange={(event) => setQueueName(event.target.value)}>
+              <Form.Select value={queueName} onChange={(event) => setQueueName(event.target.value)}>
                 {queues.length ? (
                   queues.map((queue) => (
                     <option key={queue.name} value={queue.name}>
@@ -196,15 +198,15 @@ function CreateTaskModal({ queues, onClose, onCreated }: CreateTaskModalProps) {
                 ) : (
                   <option value="default">default · 默认</option>
                 )}
-              </select>
+              </Form.Select>
             </label>
             <label className="field">
               <span>优先级</span>
-              <select value={priority} onChange={(event) => setPriority(Number(event.target.value))}>
+              <Form.Select value={priority} onChange={(event) => setPriority(Number(event.target.value))}>
                 <option value={10}>高 · 优先处理</option>
                 <option value={0}>标准</option>
                 <option value={-10}>低 · 空闲处理</option>
-              </select>
+              </Form.Select>
             </label>
           </div>
 
@@ -219,11 +221,11 @@ function CreateTaskModal({ queues, onClose, onCreated }: CreateTaskModalProps) {
               <div className="form-grid">
                 <label className="field">
                   <span>模型覆盖</span>
-                  <input value={model} onChange={(event) => setModel(event.target.value)} placeholder="留空使用服务默认模型" />
+                  <Form.Control value={model} onChange={(event) => setModel(event.target.value)} placeholder="留空使用服务默认模型" />
                 </label>
                 <label className="field">
                   <span>最多尝试</span>
-                  <input
+                  <Form.Control
                     type="number"
                     min={1}
                     max={20}
@@ -233,31 +235,15 @@ function CreateTaskModal({ queues, onClose, onCreated }: CreateTaskModalProps) {
                 </label>
                 <label className="field">
                   <span>来源标签</span>
-                  <input value={source} onChange={(event) => setSource(event.target.value)} placeholder="console" />
+                  <Form.Control value={source} onChange={(event) => setSource(event.target.value)} placeholder="console" />
                 </label>
               </div>
               <div className="switch-row">
-                <button
-                  type="button"
-                  className={`switch ${agentMode ? 'is-on' : ''}`}
-                  role="switch"
-                  aria-checked={agentMode}
-                  onClick={() => setAgentMode((value) => !value)}
-                >
-                  <span />
-                </button>
+                <Form.Check type="switch" className="console-switch" checked={agentMode} onChange={(event) => setAgentMode(event.target.checked)} aria-label="切换 Agent 模式" />
                 <div><strong>Agent 模式</strong><small>允许模型自主调用工具完成目标</small></div>
               </div>
               <div className="switch-row">
-                <button
-                  type="button"
-                  className={`switch ${unattended ? 'is-on' : ''}`}
-                  role="switch"
-                  aria-checked={unattended}
-                  onClick={() => setUnattended((value) => !value)}
-                >
-                  <span />
-                </button>
+                <Form.Check type="switch" className="console-switch" checked={unattended} onChange={(event) => setUnattended(event.target.checked)} aria-label="切换无人值守" />
                 <div><strong>无人值守</strong><small>无需中途确认，持续运行到任务结束</small></div>
               </div>
             </div>
@@ -266,15 +252,14 @@ function CreateTaskModal({ queues, onClose, onCreated }: CreateTaskModalProps) {
           {error && <div className="inline-error"><CircleAlert size={16} />{error}</div>}
 
           <div className="modal-actions">
-            <button type="button" className="button button-quiet" onClick={onClose} disabled={submitting}>取消</button>
-            <button type="submit" className="button button-primary" disabled={!prompt.trim() || submitting}>
+            <Button type="button" variant="outline-secondary" onClick={onClose} disabled={submitting}>取消</Button>
+            <Button type="submit" variant="primary" disabled={!prompt.trim() || submitting}>
               {submitting ? <RefreshCw className="spin" size={17} /> : <Plus size={18} />}
               {submitting ? '正在下发' : '下发任务'}
-            </button>
+            </Button>
           </div>
         </form>
-      </section>
-    </div>
+    </Modal>
   )
 }
 
@@ -294,8 +279,7 @@ function SettingsModal({ onClose, onSaved }: SettingsModalProps) {
   }
 
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <Modal show centered onHide={onClose} dialogClassName="settings-modal-dialog" contentClassName="settings-modal" aria-labelledby="settings-title">
         <div className="modal-head compact">
           <div>
             <p className="eyebrow">CONNECTION</p>
@@ -308,17 +292,16 @@ function SettingsModal({ onClose, onSaved }: SettingsModalProps) {
             <span>API Token</span>
             <div className="input-with-icon">
               <KeyRound size={16} />
-              <input type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="未启用鉴权时可留空" />
+              <Form.Control type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="未启用鉴权时可留空" />
             </div>
             <small>仅保存在当前浏览器的本地存储中。</small>
           </label>
           <div className="modal-actions">
-            <button type="button" className="button button-quiet" onClick={onClose}>取消</button>
-            <button type="submit" className="button button-primary"><Check size={17} />保存并重连</button>
+            <Button type="button" variant="outline-secondary" onClick={onClose}>取消</Button>
+            <Button type="submit" variant="primary"><Check size={17} />保存并重连</Button>
           </div>
         </form>
-      </section>
-    </div>
+    </Modal>
   )
 }
 
@@ -371,15 +354,8 @@ function DetailDrawer({ task, logs, context, loading, now, onClose, onCancel, on
     setPromptExpanded(false)
   }, [task.id])
 
-  useEffect(() => {
-    const onKey = (event: globalThis.KeyboardEvent) => event.key === 'Escape' && onClose()
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
   return (
-    <div className="drawer-layer" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <aside className="detail-drawer" role="dialog" aria-modal="true" aria-labelledby="detail-title">
+    <Offcanvas show onHide={onClose} placement="end" className="detail-drawer" aria-labelledby="detail-title">
         <div className="drawer-head">
           <button className="icon-button" onClick={onClose} aria-label="关闭详情"><X size={19} /></button>
           <div className="drawer-head-actions">
@@ -519,18 +495,17 @@ function DetailDrawer({ task, logs, context, loading, now, onClose, onCancel, on
 
         {(canCancel || canRetry) && (
           <div className="drawer-footer">
-            {canCancel && <button className="button button-danger" onClick={() => onCancel(task.id)}><Ban size={16} />取消任务</button>}
+            {canCancel && <Button variant="outline-danger" onClick={() => onCancel(task.id)}><Ban size={16} />取消任务</Button>}
             {canRetry && (
-              <button className="button button-retry" onClick={() => onRetry(task.id)} disabled={retrying}>
+              <Button variant="primary" onClick={() => onRetry(task.id)} disabled={retrying}>
                 <RefreshCw size={16} className={retrying ? 'spin' : ''} />
                 {retrying ? '正在创建' : '重新执行'}
-              </button>
+              </Button>
             )}
             <p>{canRetry ? '将复制当前配置，并创建一个新的排队任务。' : '已开始的 Agent 操作可能需要短暂时间才能停止。'}</p>
           </div>
         )}
-      </aside>
-    </div>
+    </Offcanvas>
   )
 }
 
@@ -788,7 +763,7 @@ function App() {
           <div className="top-actions">
             <span className="last-sync"><RefreshCw size={13} className={activeView === 'tasks' && refreshing ? 'spin' : ''} />{activeView === 'tasks' ? '5 秒自动同步' : activeView === 'webhooks' ? '10 秒自动同步' : '15 秒自动同步'}</span>
             <button className="icon-button" onClick={() => setSettingsOpen(true)} aria-label="连接设置"><Settings size={18} /></button>
-            {activeView === 'tasks' && <button className="button button-primary top-create" onClick={() => setCreateOpen(true)}><Plus size={18} />新建任务</button>}
+            {activeView === 'tasks' && <Button variant="primary" className="top-create" onClick={() => setCreateOpen(true)}><Plus size={18} />新建任务</Button>}
           </div>
         </header>
 
@@ -801,7 +776,7 @@ function App() {
               <h1>任务编排台</h1>
               <p>下发任务，观察队列，定位每一次异常。</p>
             </div>
-            <button className="button mobile-create" onClick={() => setCreateOpen(true)}><Plus size={18} />新建任务</button>
+            <Button variant="primary" className="mobile-create" onClick={() => setCreateOpen(true)}><Plus size={18} />新建任务</Button>
           </section>
 
           <section className="queue-rail" id="queue-rail" aria-label="队列实时状态">
@@ -859,15 +834,15 @@ function App() {
               <div className="toolbar-tools">
                 <label className="search-box">
                   <Search size={16} />
-                  <input value={search} onChange={(event) => { setSearch(event.target.value); setTaskPage(1) }} placeholder="搜索指令或 ID" aria-label="搜索任务" />
+                  <Form.Control value={search} onChange={(event) => { setSearch(event.target.value); setTaskPage(1) }} placeholder="搜索指令或 ID" aria-label="搜索任务" />
                   {search && <button onClick={() => { setSearch(''); setTaskPage(1) }} aria-label="清除搜索"><X size={14} /></button>}
                 </label>
                 <label className="queue-select">
                   <ListFilter size={16} />
-                  <select value={queueFilter} onChange={(event) => { setQueueFilter(event.target.value); setTaskPage(1) }} aria-label="筛选队列">
+                  <Form.Select value={queueFilter} onChange={(event) => { setQueueFilter(event.target.value); setTaskPage(1) }} aria-label="筛选队列">
                     <option value="all">全部队列</option>
                     {displayQueues.map((queue) => <option key={queue.name} value={queue.name}>{queue.name}</option>)}
-                  </select>
+                  </Form.Select>
                 </label>
                 <button className="icon-button toolbar-refresh" onClick={() => loadDashboard(true)} aria-label="立即刷新"><RefreshCw size={17} className={refreshing ? 'spin' : ''} /></button>
               </div>
@@ -882,8 +857,8 @@ function App() {
                   <strong>无法读取任务</strong>
                   <p>{error}</p>
                   <div>
-                    {error === 'invalid api token' && <button className="button button-quiet" onClick={() => setSettingsOpen(true)}><KeyRound size={16} />填写 Token</button>}
-                    <button className="button button-primary" onClick={() => loadDashboard()}><RefreshCw size={16} />重试连接</button>
+                    {error === 'invalid api token' && <Button variant="outline-secondary" onClick={() => setSettingsOpen(true)}><KeyRound size={16} />填写 Token</Button>}
+                    <Button variant="primary" onClick={() => loadDashboard()}><RefreshCw size={16} />重试连接</Button>
                   </div>
                 </div>
               ) : tasks.length === 0 ? (
@@ -891,10 +866,10 @@ function App() {
                   <Layers3 size={26} />
                   <strong>{counts.all ? '没有符合条件的任务' : '队列还是空的'}</strong>
                   <p>{counts.all ? '调整状态、队列或搜索条件后再试。' : '下发第一个任务，worker 会自动接管执行。'}</p>
-                  {!counts.all && <button className="button button-primary" onClick={() => setCreateOpen(true)}><Plus size={17} />新建任务</button>}
+                  {!counts.all && <Button variant="primary" onClick={() => setCreateOpen(true)}><Plus size={17} />新建任务</Button>}
                 </div>
               ) : (
-                <table className="task-table">
+                <Table hover className="task-table">
                   <thead>
                     <tr><th>任务</th><th>状态</th><th>队列</th><th>创建时间</th><th>耗时</th><th>尝试</th><th><span className="sr-only">操作</span></th></tr>
                   </thead>
@@ -913,7 +888,7 @@ function App() {
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                </Table>
               )}
             </div>
 

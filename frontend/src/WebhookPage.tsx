@@ -17,6 +17,7 @@ import {
   Webhook,
   X,
 } from 'lucide-react'
+import { Button, Form, Offcanvas, Table } from 'react-bootstrap'
 import { api } from './api'
 import Pagination from './Pagination'
 import type { TaskStatus, WebhookTrigger } from './types'
@@ -107,15 +108,8 @@ interface WebhookDetailProps {
 function WebhookDetail({ record, taskStatus, onClose, onOpenTask }: WebhookDetailProps) {
   const summary = payloadSummary(record.payload)
 
-  useEffect(() => {
-    const onKey = (event: globalThis.KeyboardEvent) => event.key === 'Escape' && onClose()
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
   return (
-    <div className="drawer-layer" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <aside className="detail-drawer webhook-detail-drawer" role="dialog" aria-modal="true" aria-labelledby="webhook-detail-title">
+    <Offcanvas show onHide={onClose} placement="end" className="detail-drawer webhook-detail-drawer" aria-labelledby="webhook-detail-title">
         <div className="drawer-head">
           <button className="icon-button" onClick={onClose} aria-label="关闭 Webhook 详情"><X size={19} /></button>
           <span className="drawer-record-id">HOOK-{String(record.id).padStart(5, '0')}</span>
@@ -157,7 +151,7 @@ function WebhookDetail({ record, taskStatus, onClose, onOpenTask }: WebhookDetai
             <section className="linked-task-card">
               <div className="linked-task-icon"><Layers3 size={18} /></div>
               <div><span>关联 Agent 任务{taskStatus ? ` · ${TASK_STATUS_LABEL[taskStatus]}` : ''}</span><strong>TASK-{record.task_id.slice(0, 8).toUpperCase()}</strong></div>
-              <button className="button button-primary" onClick={() => onOpenTask(record.task_id!)}>查看任务<ExternalLink size={14} /></button>
+              <Button variant="primary" onClick={() => onOpenTask(record.task_id!)}>查看任务<ExternalLink size={14} /></Button>
             </section>
           ) : (
             <section className="workflow-skip-card">
@@ -171,8 +165,7 @@ function WebhookDetail({ record, taskStatus, onClose, onOpenTask }: WebhookDetai
             <pre className="code-block webhook-payload">{JSON.stringify(record.payload, null, 2)}</pre>
           </section>
         </div>
-      </aside>
-    </div>
+    </Offcanvas>
   )
 }
 
@@ -250,9 +243,9 @@ export default function WebhookPage({ onOpenTask, onOpenSettings }: WebhookPageP
           <h1>Webhook 档案</h1>
           <p>检索每次外部触发，追溯它创建的 Agent 任务。</p>
         </div>
-        <button className="button button-quiet webhook-refresh" onClick={() => loadRecords(true)}>
+        <Button variant="outline-secondary" className="webhook-refresh" onClick={() => loadRecords(true)}>
           <RefreshCw size={16} className={refreshing ? 'spin' : ''} />刷新记录
-        </button>
+        </Button>
       </section>
 
       <section className="ingress-rail" aria-label="Webhook 处理流程">
@@ -286,7 +279,7 @@ export default function WebhookPage({ onOpenTask, onOpenSettings }: WebhookPageP
           <div className="webhook-search-tools">
             <label className="webhook-search">
               <Search size={18} />
-              <input
+              <Form.Control
                 value={search}
                 onChange={(event) => { setSearch(event.target.value); setPage(1) }}
                 placeholder="搜索项目、分支、UUID 或任务 ID"
@@ -296,10 +289,10 @@ export default function WebhookPage({ onOpenTask, onOpenSettings }: WebhookPageP
             </label>
             <label className="webhook-event-filter">
               <GitPullRequest size={16} />
-              <select value={eventFilter} onChange={(event) => { setEventFilter(event.target.value); setPage(1) }} aria-label="筛选事件类型">
+              <Form.Select value={eventFilter} onChange={(event) => { setEventFilter(event.target.value); setPage(1) }} aria-label="筛选事件类型">
                 <option value="all">全部事件</option>
                 {eventTypes.map((eventType) => <option key={eventType} value={eventType}>{eventType}</option>)}
-              </select>
+              </Form.Select>
             </label>
           </div>
         </div>
@@ -316,8 +309,8 @@ export default function WebhookPage({ onOpenTask, onOpenSettings }: WebhookPageP
             <div className="state-message error-state">
               <CircleAlert size={26} /><strong>无法读取 Webhook 记录</strong><p>{error}</p>
               <div>
-                {error === 'invalid api token' && <button className="button button-quiet" onClick={onOpenSettings}><KeyRound size={16} />填写 Token</button>}
-                <button className="button button-primary" onClick={() => loadRecords()}><RefreshCw size={16} />重试连接</button>
+                {error === 'invalid api token' && <Button variant="outline-secondary" onClick={onOpenSettings}><KeyRound size={16} />填写 Token</Button>}
+                <Button variant="primary" onClick={() => loadRecords()}><RefreshCw size={16} />重试连接</Button>
               </div>
             </div>
           ) : records.length === 0 ? (
@@ -327,7 +320,7 @@ export default function WebhookPage({ onOpenTask, onOpenSettings }: WebhookPageP
               <p>{summaryTotal ? '尝试搜索项目名、分支、UUID 或关联任务 ID。' : '在 GitLab 中配置 Webhook 后，收到的事件会归档在这里。'}</p>
             </div>
           ) : (
-            <table className="webhook-table">
+            <Table hover className="webhook-table">
               <thead><tr><th>接收时间</th><th>事件</th><th>项目 / 分支</th><th>事件标识</th><th>关联任务</th><th><span className="sr-only">操作</span></th></tr></thead>
               <tbody>
                 {records.map((record) => {
@@ -354,7 +347,7 @@ export default function WebhookPage({ onOpenTask, onOpenSettings }: WebhookPageP
                   )
                 })}
               </tbody>
-            </table>
+            </Table>
           )}
         </div>
 

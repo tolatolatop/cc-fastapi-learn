@@ -39,6 +39,8 @@ npm run dev
 ```
 
 Vite 开发服务器会将 `/api` 请求代理到后端。生产镜像使用 Nginx 提供静态资源，并通过同源 `/api` 反向代理访问 Compose 中的 `app` 服务。
+基础交互组件使用 React-Bootstrap，颜色、字号和圆角集中配置在
+`frontend/src/bootstrap-theme.scss`；队列、Webhook 和检视轨道等业务可视化仍保留在自定义样式中。
 
 ## GitLab Webhook
 
