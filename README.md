@@ -66,6 +66,32 @@ GET /v1/internal/gitlab/merge-request-tasks?project_path=group/project&merge_req
 
 接口支持 `offset`、`limit`，并与任务 API 一样通过 `X-API-Token` 使用 `API_TOKEN` 鉴权。
 
+## 检视问题统计 API
+
+检视结果回收使用 `review_issue_batches` 记录一次回收和合入后验证流程，使用
+`review_issues` 保存 Agent 提取的问题。接口只承担自动化数据采集与统计，不提供问题管理操作台。
+控制台侧边栏的“检视统计”页面可查看采纳率、筛选回收批次、录入批次及问题，并在 PR 合入后
+记录 `accepted`、`not_accepted` 验证结论。
+
+```text
+POST  /v1/review-issue-batches
+GET   /v1/review-issue-batches
+GET   /v1/review-issue-batches/{batch_id}
+PATCH /v1/review-issue-batches/{batch_id}
+POST  /v1/review-issue-batches/{batch_id}/issues
+PATCH /v1/review-issue-batches/{batch_id}/issues
+
+GET   /v1/review-issues
+GET   /v1/review-issues/{issue_id}
+PATCH /v1/review-issues/{issue_id}
+GET   /v1/review-issues/summary
+```
+
+创建批次后，批量写入提取结果会把批次推进到 `waiting_merge`；设置 `merged_sha` 并进入
+`verifying` 后，可以逐条或批量写入 `accepted`、`not_accepted` 验证结果。全部问题完成验证时，
+批次自动变为 `completed`。零问题批次同样可以完成回收并计入汇总。列表接口支持按仓库、PR、
+状态、等级和创建时间筛选，汇总接口返回问题总数、已验证数、接受数、采纳率和等级分布。
+
 ## 列表分页
 
 任务和 Webhook 列表均使用服务端分页，默认每页 20 条，单页最大 200 条：

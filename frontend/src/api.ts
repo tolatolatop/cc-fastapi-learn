@@ -1,10 +1,21 @@
 import type {
+  CreateReviewIssueBatchPayload,
+  CreateReviewIssuePayload,
   CreateTaskPayload,
   QueueListResponse,
+  ReviewBatchStatus,
+  ReviewIssue,
+  ReviewIssueBatch,
+  ReviewIssueBatchListResponse,
+  ReviewIssueListResponse,
+  ReviewIssueSeverity,
+  ReviewIssueStatistics,
+  ReviewIssueVerificationStatus,
   TaskContext,
   TaskItem,
   TaskListResponse,
   TaskLogListResponse,
+  UpdateReviewIssueBatchPayload,
   WebhookTriggerListResponse,
 } from './types'
 
@@ -23,6 +34,33 @@ interface WebhookListOptions {
   limit?: number
   eventType?: string
   query?: string
+}
+
+interface ReviewBatchListOptions {
+  offset?: number
+  limit?: number
+  provider?: string
+  projectPath?: string
+  prNumber?: string
+  statuses?: ReviewBatchStatus[]
+}
+
+interface ReviewIssueListOptions {
+  offset?: number
+  limit?: number
+  batchId?: string
+  provider?: string
+  projectPath?: string
+  prNumber?: string
+  severities?: ReviewIssueSeverity[]
+  statuses?: ReviewIssueVerificationStatus[]
+  category?: string
+}
+
+interface ReviewStatisticsOptions {
+  provider?: string
+  projectPath?: string
+  prNumber?: string
 }
 
 function queryPath(path: string, values: Array<[string, string | number | undefined]>) {
@@ -93,4 +131,69 @@ export const api = {
     request<{ task_id: string; status: string }>(`/v1/agent-tasks/${id}/cancel`, { method: 'POST' }),
   retryTask: (id: string) =>
     request<{ task_id: string; status: string; queue_name: string }>(`/v1/agent-tasks/${id}/retry`, { method: 'POST' }),
+  listReviewBatches: ({
+    offset = 0,
+    limit = 20,
+    provider,
+    projectPath,
+    prNumber,
+    statuses = [],
+  }: ReviewBatchListOptions = {}) => request<ReviewIssueBatchListResponse>(queryPath('/v1/review-issue-batches', [
+    ['offset', offset],
+    ['limit', limit],
+    ['provider', provider],
+    ['project_path', projectPath],
+    ['pr_number', prNumber],
+    ...statuses.map((status): [string, string] => ['status', status]),
+  ])),
+  getReviewBatch: (id: string) => request<ReviewIssueBatch>(`/v1/review-issue-batches/${id}`),
+  createReviewBatch: (payload: CreateReviewIssueBatchPayload) =>
+    request<ReviewIssueBatch>('/v1/review-issue-batches', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateReviewBatch: (id: string, payload: UpdateReviewIssueBatchPayload) =>
+    request<ReviewIssueBatch>(`/v1/review-issue-batches/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  createReviewIssues: (batchId: string, items: CreateReviewIssuePayload[]) =>
+    request<ReviewIssueListResponse>(`/v1/review-issue-batches/${batchId}/issues`, {
+      method: 'POST',
+      body: JSON.stringify({ items }),
+    }),
+  listReviewIssues: ({
+    offset = 0,
+    limit = 20,
+    batchId,
+    provider,
+    projectPath,
+    prNumber,
+    severities = [],
+    statuses = [],
+    category,
+  }: ReviewIssueListOptions = {}) => request<ReviewIssueListResponse>(queryPath('/v1/review-issues', [
+    ['offset', offset],
+    ['limit', limit],
+    ['batch_id', batchId],
+    ['provider', provider],
+    ['project_path', projectPath],
+    ['pr_number', prNumber],
+    ...severities.map((severity): [string, string] => ['severity', severity]),
+    ...statuses.map((status): [string, string] => ['status', status]),
+    ['category', category],
+  ])),
+  updateReviewIssue: (
+    id: string,
+    payload: { status: Exclude<ReviewIssueVerificationStatus, 'unverified'>; note?: string | null },
+  ) => request<ReviewIssue>(`/v1/review-issues/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  }),
+  getReviewStatistics: ({ provider, projectPath, prNumber }: ReviewStatisticsOptions = {}) =>
+    request<ReviewIssueStatistics>(queryPath('/v1/review-issues/summary', [
+      ['provider', provider],
+      ['project_path', projectPath],
+      ['pr_number', prNumber],
+    ])),
 }

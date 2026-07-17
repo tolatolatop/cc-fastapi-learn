@@ -2,7 +2,18 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.mysql import JSON as MySQLJSON
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
@@ -39,6 +50,29 @@ class WorkflowStepStatus(StrEnum):
     SKIPPED = "skipped"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+
+
+class ReviewBatchStatus(StrEnum):
+    COLLECTING = "collecting"
+    WAITING_MERGE = "waiting_merge"
+    VERIFYING = "verifying"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class ReviewIssueSeverity(StrEnum):
+    CRITICAL = "critical"
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+    INFO = "info"
+
+
+class ReviewIssueVerificationStatus(StrEnum):
+    UNVERIFIED = "unverified"
+    ACCEPTED = "accepted"
+    NOT_ACCEPTED = "not_accepted"
 
 
 class AgentTask(Base):
@@ -267,3 +301,99 @@ class WorkflowResourceLock(Base):
     project_path: Mapped[str] = mapped_column(String(255), primary_key=True)
     resource_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class ReviewIssueBatch(Base):
+    """One collection and post-merge verification pass for a review task."""
+
+    __tablename__ = "review_issue_batches"
+    __table_args__ = (
+        CheckConstraint("issue_count >= 0", name="ck_review_issue_batches_issue_count_nonnegative"),
+        Index(
+            "ix_review_issue_batches_pull_request",
+            "provider",
+            "project_path",
+            "pr_number",
+            "created_at",
+        ),
+        Index("ix_review_issue_batches_status_created", "status", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    instance_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    project_path: Mapped[str] = mapped_column(String(255), nullable=False)
+    pr_number: Mapped[str] = mapped_column(String(128), nullable=False)
+    pr_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    review_workflow_run_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("workflow_runs.id"), nullable=True, index=True
+    )
+    review_task_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agent_tasks.id"), nullable=False, unique=True, index=True
+    )
+    extract_task_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("agent_tasks.id"), nullable=True, unique=True, index=True
+    )
+    verify_task_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("agent_tasks.id"), nullable=True, unique=True, index=True
+    )
+    review_head_sha: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    merged_sha: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    status: Mapped[ReviewBatchStatus] = mapped_column(
+        Enum(ReviewBatchStatus, native_enum=False, length=32),
+        nullable=False,
+        default=ReviewBatchStatus.COLLECTING,
+    )
+    issue_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    extracted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    issues: Mapped[list["ReviewIssue"]] = relationship("ReviewIssue", back_populates="batch")
+
+
+class ReviewIssue(Base):
+    """A structured issue extracted from an agent's pull-request review."""
+
+    __tablename__ = "review_issues"
+    __table_args__ = (
+        UniqueConstraint("batch_id", "issue_no", name="uq_review_issues_batch_issue_no"),
+        CheckConstraint("issue_no > 0", name="ck_review_issues_issue_no_positive"),
+        CheckConstraint(
+            "line_number IS NULL OR line_number > 0",
+            name="ck_review_issues_line_number_positive",
+        ),
+        Index(
+            "ix_review_issues_statistics",
+            "verification_status",
+            "severity",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    batch_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("review_issue_batches.id"), nullable=False, index=True
+    )
+    issue_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    severity: Mapped[ReviewIssueSeverity] = mapped_column(
+        Enum(ReviewIssueSeverity, native_enum=False, length=32), nullable=False
+    )
+    category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    file_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    line_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    verification_status: Mapped[ReviewIssueVerificationStatus] = mapped_column(
+        Enum(ReviewIssueVerificationStatus, native_enum=False, length=32),
+        nullable=False,
+        default=ReviewIssueVerificationStatus.UNVERIFIED,
+    )
+    verification_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    batch: Mapped[ReviewIssueBatch] = relationship("ReviewIssueBatch", back_populates="issues")

@@ -9,6 +9,7 @@ import {
   Clock3,
   Copy,
   Ellipsis,
+  GitPullRequest,
   KeyRound,
   Layers3,
   ListFilter,
@@ -25,6 +26,7 @@ import {
 } from 'lucide-react'
 import { api } from './api'
 import Pagination from './Pagination'
+import ReviewIssuesPage from './ReviewIssuesPage'
 import type { CreateTaskPayload, QueueItem, TaskContext, TaskItem, TaskLog, TaskStatus } from './types'
 import WebhookPage from './WebhookPage'
 
@@ -533,7 +535,11 @@ function DetailDrawer({ task, logs, context, loading, now, onClose, onCancel, on
 }
 
 function App() {
-  const [activeView, setActiveView] = useState<'tasks' | 'webhooks'>(() => window.location.hash === '#/webhooks' ? 'webhooks' : 'tasks')
+  const [activeView, setActiveView] = useState<'tasks' | 'webhooks' | 'reviews'>(() => {
+    if (window.location.hash === '#/webhooks') return 'webhooks'
+    if (window.location.hash === '#/reviews') return 'reviews'
+    return 'tasks'
+  })
   const [tasks, setTasks] = useState<TaskItem[]>([])
   const [total, setTotal] = useState(0)
   const [counts, setCounts] = useState({ all: 0, queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0, abandoned: 0 })
@@ -656,7 +662,11 @@ function App() {
   }, [toast])
 
   useEffect(() => {
-    const onHashChange = () => setActiveView(window.location.hash === '#/webhooks' ? 'webhooks' : 'tasks')
+    const onHashChange = () => {
+      if (window.location.hash === '#/webhooks') setActiveView('webhooks')
+      else if (window.location.hash === '#/reviews') setActiveView('reviews')
+      else setActiveView('tasks')
+    }
     window.addEventListener('hashchange', onHashChange)
     return () => window.removeEventListener('hashchange', onHashChange)
   }, [])
@@ -714,9 +724,9 @@ function App() {
     }
   }
 
-  function navigate(view: 'tasks' | 'webhooks') {
+  function navigate(view: 'tasks' | 'webhooks' | 'reviews') {
     setActiveView(view)
-    window.location.hash = view === 'webhooks' ? '/webhooks' : '/tasks'
+    window.location.hash = view === 'webhooks' ? '/webhooks' : view === 'reviews' ? '/reviews' : '/tasks'
     setSidebarOpen(false)
   }
 
@@ -739,6 +749,9 @@ function App() {
           <button className={`nav-item ${activeView === 'tasks' ? 'active' : ''}`} onClick={() => navigate('tasks')}><Layers3 size={18} /><span>任务调度</span><b>{counts.all}</b></button>
           <button className={`nav-item ${activeView === 'webhooks' ? 'active' : ''}`} onClick={() => navigate('webhooks')}>
             <Webhook size={18} /><span>Webhook 档案</span>
+          </button>
+          <button className={`nav-item ${activeView === 'reviews' ? 'active' : ''}`} onClick={() => navigate('reviews')}>
+            <GitPullRequest size={18} /><span>检视统计</span>
           </button>
           <button className="nav-item" onClick={showQueueRail}>
             <Activity size={18} /><span>队列状态</span>
@@ -771,15 +784,15 @@ function App() {
       <main>
         <header className="topbar">
           <button className="mobile-menu" onClick={() => setSidebarOpen(true)} aria-label="打开导航"><Menu size={20} /></button>
-          <div className="breadcrumb"><span>控制台</span><ChevronRight size={14} /><strong>{activeView === 'tasks' ? '任务调度' : 'Webhook 档案'}</strong></div>
+          <div className="breadcrumb"><span>控制台</span><ChevronRight size={14} /><strong>{activeView === 'tasks' ? '任务调度' : activeView === 'webhooks' ? 'Webhook 档案' : '检视统计'}</strong></div>
           <div className="top-actions">
-            <span className="last-sync"><RefreshCw size={13} className={activeView === 'tasks' && refreshing ? 'spin' : ''} />{activeView === 'tasks' ? '5 秒自动同步' : '10 秒自动同步'}</span>
+            <span className="last-sync"><RefreshCw size={13} className={activeView === 'tasks' && refreshing ? 'spin' : ''} />{activeView === 'tasks' ? '5 秒自动同步' : activeView === 'webhooks' ? '10 秒自动同步' : '15 秒自动同步'}</span>
             <button className="icon-button" onClick={() => setSettingsOpen(true)} aria-label="连接设置"><Settings size={18} /></button>
             {activeView === 'tasks' && <button className="button button-primary top-create" onClick={() => setCreateOpen(true)}><Plus size={18} />新建任务</button>}
           </div>
         </header>
 
-        <div className={`workspace ${activeView === 'webhooks' ? 'webhook-workspace' : ''}`}>
+        <div className={`workspace ${activeView === 'webhooks' ? 'webhook-workspace' : activeView === 'reviews' ? 'review-workspace' : ''}`}>
           {activeView === 'tasks' ? (
           <>
           <section className="page-heading">
@@ -919,8 +932,10 @@ function App() {
             )}
           </section>
           </>
-          ) : (
+          ) : activeView === 'webhooks' ? (
             <WebhookPage key={connectionRevision} onOpenTask={(taskId) => loadDetail(taskId)} onOpenSettings={() => setSettingsOpen(true)} />
+          ) : (
+            <ReviewIssuesPage key={connectionRevision} onOpenTask={(taskId) => loadDetail(taskId)} onOpenSettings={() => setSettingsOpen(true)} />
           )}
         </div>
       </main>

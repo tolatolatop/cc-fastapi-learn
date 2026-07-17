@@ -103,3 +103,98 @@ export interface WebhookTriggerListResponse {
     event_types: string[]
   }
 }
+
+export type ReviewBatchStatus = 'collecting' | 'waiting_merge' | 'verifying' | 'completed' | 'failed' | 'cancelled'
+export type ReviewIssueSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info'
+export type ReviewIssueVerificationStatus = 'unverified' | 'accepted' | 'not_accepted'
+
+export interface ReviewIssueBatch {
+  id: string
+  provider: string
+  instance_url: string | null
+  project_path: string
+  pr_number: string
+  pr_url: string | null
+  review_workflow_run_id: string | null
+  review_task_id: string
+  extract_task_id: string | null
+  verify_task_id: string | null
+  review_head_sha: string | null
+  merged_sha: string | null
+  status: ReviewBatchStatus
+  issue_count: number
+  error_message: string | null
+  created_at: string
+  extracted_at: string | null
+  verified_at: string | null
+  updated_at: string
+}
+
+export interface ReviewIssueBatchListResponse {
+  items: ReviewIssueBatch[]
+  total: number
+}
+
+export interface ReviewIssue {
+  id: string
+  batch_id: string
+  issue_no: number
+  severity: ReviewIssueSeverity
+  category: string | null
+  title: string
+  description: string
+  file_path: string | null
+  line_number: number | null
+  verification_status: ReviewIssueVerificationStatus
+  verification_note: string | null
+  created_at: string
+  verified_at: string | null
+  updated_at: string
+}
+
+export interface ReviewIssueListResponse {
+  items: ReviewIssue[]
+  total: number
+}
+
+export interface ReviewIssueStatistics {
+  batch_total: number
+  zero_issue_batches: number
+  batch_status_counts: Record<ReviewBatchStatus, number>
+  issue_total: number
+  verified_issues: number
+  accepted_issues: number
+  acceptance_rate: number | null
+  verification_status_counts: Record<ReviewIssueVerificationStatus, number>
+  severity_counts: Record<ReviewIssueSeverity, number>
+}
+
+export interface CreateReviewIssueBatchPayload {
+  provider: string
+  instance_url?: string
+  project_path: string
+  pr_number: string
+  pr_url?: string
+  review_workflow_run_id?: string
+  review_task_id: string
+  extract_task_id?: string
+  verify_task_id?: string
+  review_head_sha?: string
+}
+
+export interface UpdateReviewIssueBatchPayload {
+  status?: ReviewBatchStatus
+  extract_task_id?: string | null
+  verify_task_id?: string | null
+  merged_sha?: string | null
+  error_message?: string | null
+}
+
+export interface CreateReviewIssuePayload {
+  severity: ReviewIssueSeverity
+  category?: string
+  title: string
+  description: string
+  file_path?: string
+  line_number?: number
+}
