@@ -397,3 +397,30 @@ class ReviewIssue(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
 
     batch: Mapped[ReviewIssueBatch] = relationship("ReviewIssueBatch", back_populates="issues")
+
+
+class Repository(Base):
+    """A manually managed platform/repository catalog entry."""
+
+    __tablename__ = "repositories"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "project_path",
+            name="uq_repositories_provider_project_path",
+        ),
+        Index("ix_repositories_updated", "updated_at", "id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    project_path: Mapped[str] = mapped_column(String(255), nullable=False)
+    tags: Mapped[list[str]] = mapped_column(
+        MySQLJSON().with_variant(JSON, "sqlite"), nullable=False, default=list
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
