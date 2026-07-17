@@ -4,6 +4,7 @@ import logging
 from fastapi import FastAPI
 
 from cc_fastapi.api.internal import router as internal_router
+from cc_fastapi.api.review_dashboard import router as review_dashboard_router
 from cc_fastapi.api.review_issues import batch_router as review_issue_batches_router
 from cc_fastapi.api.review_issues import issue_router as review_issues_router
 from cc_fastapi.api.tasks import router as tasks_router
@@ -56,6 +57,7 @@ app = FastAPI(title=settings.app_name, lifespan=lifespan)
 app.include_router(tasks_router)
 app.include_router(webhooks_router)
 app.include_router(internal_router)
+app.include_router(review_dashboard_router)
 app.include_router(review_issue_batches_router)
 app.include_router(review_issues_router)
 

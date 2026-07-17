@@ -3,6 +3,9 @@ import type {
   CreateReviewIssuePayload,
   CreateTaskPayload,
   QueueListResponse,
+  ReviewDashboardOutcome,
+  ReviewDashboardPullRequestDetail,
+  ReviewDashboardResponse,
   ReviewBatchStatus,
   ReviewIssue,
   ReviewIssueBatch,
@@ -55,12 +58,26 @@ interface ReviewIssueListOptions {
   severities?: ReviewIssueSeverity[]
   statuses?: ReviewIssueVerificationStatus[]
   category?: string
+  createdFrom?: string
+  createdTo?: string
+  batchCreatedFrom?: string
+  batchCreatedTo?: string
 }
 
 interface ReviewStatisticsOptions {
   provider?: string
   projectPath?: string
   prNumber?: string
+}
+
+interface ReviewDashboardOptions {
+  offset?: number
+  limit?: number
+  provider?: string
+  projectPath?: string
+  createdFrom?: string
+  createdTo?: string
+  outcome?: ReviewDashboardOutcome
 }
 
 function queryPath(path: string, values: Array<[string, string | number | undefined]>) {
@@ -172,6 +189,10 @@ export const api = {
     severities = [],
     statuses = [],
     category,
+    createdFrom,
+    createdTo,
+    batchCreatedFrom,
+    batchCreatedTo,
   }: ReviewIssueListOptions = {}) => request<ReviewIssueListResponse>(queryPath('/v1/review-issues', [
     ['offset', offset],
     ['limit', limit],
@@ -182,6 +203,10 @@ export const api = {
     ...severities.map((severity): [string, string] => ['severity', severity]),
     ...statuses.map((status): [string, string] => ['status', status]),
     ['category', category],
+    ['created_from', createdFrom],
+    ['created_to', createdTo],
+    ['batch_created_from', batchCreatedFrom],
+    ['batch_created_to', batchCreatedTo],
   ])),
   updateReviewIssue: (
     id: string,
@@ -192,6 +217,29 @@ export const api = {
   }),
   getReviewStatistics: ({ provider, projectPath, prNumber }: ReviewStatisticsOptions = {}) =>
     request<ReviewIssueStatistics>(queryPath('/v1/review-issues/summary', [
+      ['provider', provider],
+      ['project_path', projectPath],
+      ['pr_number', prNumber],
+    ])),
+  getReviewDashboard: ({
+    offset = 0,
+    limit = 20,
+    provider,
+    projectPath,
+    createdFrom,
+    createdTo,
+    outcome = 'all',
+  }: ReviewDashboardOptions = {}) => request<ReviewDashboardResponse>(queryPath('/v1/review-dashboard', [
+    ['offset', offset],
+    ['limit', limit],
+    ['provider', provider],
+    ['project_path', projectPath],
+    ['created_from', createdFrom],
+    ['created_to', createdTo],
+    ['outcome', outcome],
+  ])),
+  getReviewDashboardPullRequest: (provider: string, projectPath: string, prNumber: string) =>
+    request<ReviewDashboardPullRequestDetail>(queryPath('/v1/review-dashboard/pull-request', [
       ['provider', provider],
       ['project_path', projectPath],
       ['pr_number', prNumber],

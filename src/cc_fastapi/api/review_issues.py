@@ -207,6 +207,8 @@ def list_review_issues(
     category: str | None = Query(default=None, max_length=64),
     created_from: datetime | None = None,
     created_to: datetime | None = None,
+    batch_created_from: datetime | None = None,
+    batch_created_to: datetime | None = None,
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -222,6 +224,8 @@ def list_review_issues(
         category=category,
         created_from=created_from,
         created_to=created_to,
+        batch_created_from=batch_created_from,
+        batch_created_to=batch_created_to,
         offset=offset,
         limit=limit,
     )

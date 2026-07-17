@@ -198,3 +198,73 @@ export interface CreateReviewIssuePayload {
   file_path?: string
   line_number?: number
 }
+
+export type ReviewDashboardOutcome = 'all' | 'accepted' | 'unhandled' | 'pending'
+
+export interface ReviewDashboardSummary {
+  pull_request_total: number
+  batch_total: number
+  issue_total: number
+  accepted_issues: number
+  merged_unhandled_issues: number
+  pending_issues: number
+  acceptance_rate: number | null
+}
+
+export interface ReviewDashboardTrendPoint {
+  date: string
+  issue_total: number
+  accepted_issues: number
+  merged_unhandled_issues: number
+  pending_issues: number
+}
+
+export interface ReviewDashboardRepository {
+  provider: string
+  project_path: string
+  pull_request_total: number
+  issue_total: number
+}
+
+export interface ReviewDashboardPullRequest {
+  provider: string
+  project_path: string
+  pr_number: string
+  pr_url: string | null
+  latest_batch_id: string
+  latest_batch_status: ReviewBatchStatus
+  batch_total: number
+  issue_total: number
+  accepted_issues: number
+  merged_unhandled_issues: number
+  pending_issues: number
+  latest_activity_at: string
+  task_total: number
+  task_status_counts: Record<TaskStatus, number>
+}
+
+export interface ReviewDashboardTask {
+  id: string
+  batch_id: string
+  role: 'review' | 'extract' | 'verify'
+  status: TaskStatus
+  session_id: string | null
+  created_at: string
+  started_at: string | null
+  finished_at: string | null
+  error_message: string | null
+}
+
+export interface ReviewDashboardResponse {
+  summary: ReviewDashboardSummary
+  timeline: ReviewDashboardTrendPoint[]
+  repositories: ReviewDashboardRepository[]
+  items: ReviewDashboardPullRequest[]
+  total: number
+}
+
+export interface ReviewDashboardPullRequestDetail {
+  pull_request: ReviewDashboardPullRequest
+  batches: ReviewIssueBatch[]
+  tasks: ReviewDashboardTask[]
+}

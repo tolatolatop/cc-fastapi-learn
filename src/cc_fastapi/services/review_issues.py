@@ -228,6 +228,8 @@ class ReviewIssueService:
         category: str | None,
         created_from: datetime | None,
         created_to: datetime | None,
+        batch_created_from: datetime | None,
+        batch_created_to: datetime | None,
         offset: int,
         limit: int,
     ) -> tuple[list[ReviewIssue], int]:
@@ -250,6 +252,10 @@ class ReviewIssueService:
             filters.append(ReviewIssue.created_at >= created_from)
         if created_to is not None:
             filters.append(ReviewIssue.created_at <= created_to)
+        if batch_created_from is not None:
+            filters.append(ReviewIssueBatch.created_at >= batch_created_from)
+        if batch_created_to is not None:
+            filters.append(ReviewIssueBatch.created_at <= batch_created_to)
 
         base_query = select(ReviewIssue).join(
             ReviewIssueBatch, ReviewIssueBatch.id == ReviewIssue.batch_id
