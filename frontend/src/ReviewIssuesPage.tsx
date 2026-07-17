@@ -13,6 +13,7 @@ import {
   RefreshCw,
   Search,
   Server,
+  Settings,
   ShieldCheck,
   Trash2,
   X,
@@ -154,6 +155,7 @@ function ReviewEntryModal({ existingBatch, onClose, onSaved }: ReviewEntryModalP
   const [reviewHeadSha, setReviewHeadSha] = useState(existingBatch?.review_head_sha || '')
   const [issues, setIssues] = useState<IssueDraft[]>([newIssueDraft()])
   const [noIssues, setNoIssues] = useState(false)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
   const [workingBatch, setWorkingBatch] = useState(existingBatch)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
@@ -245,29 +247,60 @@ function ReviewEntryModal({ existingBatch, onClose, onSaved }: ReviewEntryModalP
                   <span>原始检视任务 ID</span>
                   <input value={reviewTaskId} onChange={(event) => setReviewTaskId(event.target.value)} placeholder="完整 Agent Task UUID" required />
                 </label>
-                <label className="field">
-                  <span>检视版本 SHA</span>
-                  <input value={reviewHeadSha} onChange={(event) => setReviewHeadSha(event.target.value)} placeholder="可选" />
-                </label>
-                <label className="field">
-                  <span>提取任务 ID</span>
-                  <input value={extractTaskId} onChange={(event) => setExtractTaskId(event.target.value)} placeholder="可选" />
-                </label>
-                <label className="field">
-                  <span>Workflow Run ID</span>
-                  <input value={workflowRunId} onChange={(event) => setWorkflowRunId(event.target.value)} placeholder="可选" />
-                </label>
-                <label className="field">
-                  <span>平台实例</span>
-                  <input value={instanceUrl} onChange={(event) => setInstanceUrl(event.target.value)} placeholder="https://gitlab.example.com" />
-                </label>
-                <label className="field review-wide-field">
-                  <span>PR 地址</span>
-                  <input value={prUrl} onChange={(event) => setPrUrl(event.target.value)} placeholder="可选，用于从列表跳回代码平台" />
-                </label>
               </div>
             </section>
           )}
+
+          <section className="review-advanced-wrap">
+            <button
+              type="button"
+              className="review-advanced-toggle"
+              aria-expanded={advancedOpen}
+              onClick={() => setAdvancedOpen((value) => !value)}
+            >
+              <Settings size={17} />
+              <span><strong>高级选项</strong><small>版本、关联任务、平台链接与代码位置</small></span>
+              <ChevronRight size={17} className={advancedOpen ? 'is-open' : ''} />
+            </button>
+            {advancedOpen && (
+              <div className="review-advanced-panel">
+                {!existingBatch && (
+                  <>
+                    <div className="review-advanced-panel-head">
+                      <strong>批次追溯信息</strong>
+                      <span>这些字段便于回看任务和代码版本，不影响问题数量与采纳率。</span>
+                    </div>
+                    <div className="review-form-grid review-advanced-grid">
+                      <label className="field">
+                        <span>检视版本 SHA</span>
+                        <input value={reviewHeadSha} onChange={(event) => setReviewHeadSha(event.target.value)} placeholder="可选" />
+                      </label>
+                      <label className="field">
+                        <span>提取任务 ID</span>
+                        <input value={extractTaskId} onChange={(event) => setExtractTaskId(event.target.value)} placeholder="可选" />
+                      </label>
+                      <label className="field">
+                        <span>Workflow Run ID</span>
+                        <input value={workflowRunId} onChange={(event) => setWorkflowRunId(event.target.value)} placeholder="可选" />
+                      </label>
+                      <label className="field">
+                        <span>平台实例</span>
+                        <input value={instanceUrl} onChange={(event) => setInstanceUrl(event.target.value)} placeholder="例如 https://gitlab.example.com" />
+                      </label>
+                      <label className="field review-wide-field">
+                        <span>PR 地址</span>
+                        <input value={prUrl} onChange={(event) => setPrUrl(event.target.value)} placeholder="具体 PR / MR 页面的完整链接" />
+                      </label>
+                    </div>
+                  </>
+                )}
+                <div className="review-advanced-issue-note">
+                  <FileCode size={15} />
+                  <span>已显示问题分类、文件路径和行号字段。</span>
+                </div>
+              </div>
+            )}
+          </section>
 
           <section className="review-form-section review-issues-form-section">
             <div className="review-form-section-title">
@@ -291,17 +324,19 @@ function ReviewEntryModal({ existingBatch, onClose, onSaved }: ReviewEntryModalP
                       <span>ISSUE {String(index + 1).padStart(2, '0')}</span>
                       {issues.length > 1 && <button type="button" onClick={() => setIssues((current) => current.filter((item) => item.key !== issue.key))} aria-label={`删除问题 ${index + 1}`}><Trash2 size={15} /></button>}
                     </header>
-                    <div className="review-issue-editor-grid">
+                    <div className={`review-issue-editor-grid ${advancedOpen ? 'has-advanced' : ''}`}>
                       <label className="field">
                         <span>等级</span>
                         <select value={issue.severity} onChange={(event) => updateIssue(issue.key, { severity: event.target.value as ReviewIssueSeverity })}>
                           {Object.entries(SEVERITY_META).map(([value, meta]) => <option value={value} key={value}>{meta.label}</option>)}
                         </select>
                       </label>
-                      <label className="field">
-                        <span>分类</span>
-                        <input value={issue.category} onChange={(event) => updateIssue(issue.key, { category: event.target.value })} placeholder="correctness / security" />
-                      </label>
+                      {advancedOpen && (
+                        <label className="field">
+                          <span>分类</span>
+                          <input value={issue.category} onChange={(event) => updateIssue(issue.key, { category: event.target.value })} placeholder="correctness / security" />
+                        </label>
+                      )}
                       <label className="field review-editor-title">
                         <span>问题摘要</span>
                         <input value={issue.title} onChange={(event) => updateIssue(issue.key, { title: event.target.value })} placeholder="简洁描述问题" required />
@@ -310,14 +345,18 @@ function ReviewEntryModal({ existingBatch, onClose, onSaved }: ReviewEntryModalP
                         <span>完整检视意见</span>
                         <textarea value={issue.description} onChange={(event) => updateIssue(issue.key, { description: event.target.value })} placeholder="说明风险、触发条件和建议修改方式" rows={3} required />
                       </label>
-                      <label className="field review-editor-path">
-                        <span>文件</span>
-                        <input value={issue.filePath} onChange={(event) => updateIssue(issue.key, { filePath: event.target.value })} placeholder="src/example.py" />
-                      </label>
-                      <label className="field">
-                        <span>行号</span>
-                        <input type="number" min={1} value={issue.lineNumber} onChange={(event) => updateIssue(issue.key, { lineNumber: event.target.value })} placeholder="可选" />
-                      </label>
+                      {advancedOpen && (
+                        <>
+                          <label className="field review-editor-path">
+                            <span>文件</span>
+                            <input value={issue.filePath} onChange={(event) => updateIssue(issue.key, { filePath: event.target.value })} placeholder="src/example.py" />
+                          </label>
+                          <label className="field">
+                            <span>行号</span>
+                            <input type="number" min={1} value={issue.lineNumber} onChange={(event) => updateIssue(issue.key, { lineNumber: event.target.value })} placeholder="可选" />
+                          </label>
+                        </>
+                      )}
                     </div>
                   </article>
                 ))}
