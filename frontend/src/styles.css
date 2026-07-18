@@ -4323,6 +4323,7 @@ main {
   letter-spacing: 0.1em;
   text-align: left;
   text-transform: uppercase;
+  vertical-align: middle;
 }
 
 .webhook-table th:first-child,
@@ -4354,6 +4355,7 @@ main {
   padding: 0 12px;
   color: #596569;
   font-size: 0.625rem;
+  vertical-align: middle;
 }
 
 .webhook-time,
