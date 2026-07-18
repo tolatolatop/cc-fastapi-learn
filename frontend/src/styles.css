@@ -2205,10 +2205,9 @@ main {
   gap: 8px;
 }
 
-.search-box,
-.queue-select {
+.search-box {
   display: flex;
-  height: 35px;
+  height: 41px;
   align-items: center;
   gap: 7px;
   padding: 0 10px;
@@ -2218,8 +2217,7 @@ main {
   border-radius: 7px;
 }
 
-.search-box:focus-within,
-.queue-select:focus-within {
+.search-box:focus-within {
   border-color: #8fa6f9;
   box-shadow: 0 0 0 3px rgba(49, 95, 244, 0.08);
 }
@@ -2247,19 +2245,19 @@ main {
   border: 0;
 }
 
-.queue-select select {
-  max-width: 92px;
-  padding: 0 24px 0 0;
-  color: #596569;
-  background-color: transparent;
-  border: 0;
-  outline: 0;
-  font-size: 0.625rem;
+.queue-select {
+  display: block;
+  width: 132px;
+  margin: 0;
+}
+
+.queue-select .form-select {
+  height: 41px;
 }
 
 .toolbar-refresh {
-  width: 35px;
-  height: 35px;
+  width: 41px;
+  height: 41px;
 }
 
 .task-list-wrap {
@@ -2552,14 +2550,7 @@ main {
 }
 
 .pagination-size .form-select {
-  height: 30px;
-  padding: 0 22px 0 8px;
-  color: #5f6b6f;
-  background: var(--white);
-  border: 1px solid #d4dadd;
-  border-radius: 6px;
-  font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 0.5625rem;
+  width: 84px;
 }
 
 .state-message {
@@ -2684,10 +2675,13 @@ main {
   font-weight: 600;
 }
 
-.field .form-control,
-.field .form-select {
+.field .form-control {
   min-height: 42px;
   font-size: 0.6875rem;
+}
+
+.field .form-select {
+  min-height: 42px;
 }
 
 .field textarea.form-control {
@@ -3744,7 +3738,7 @@ main {
 
   .toolbar-tools {
     display: grid;
-    grid-template-columns: 1fr 112px 35px;
+    grid-template-columns: 1fr 132px 41px;
   }
 
   .search-box input {
@@ -4203,10 +4197,9 @@ main {
   gap: 9px;
 }
 
-.webhook-search,
-.webhook-event-filter {
+.webhook-search {
   display: flex;
-  height: 43px;
+  height: 41px;
   align-items: center;
   gap: 9px;
   padding: 0 13px;
@@ -4217,8 +4210,7 @@ main {
   transition: border-color 140ms ease, box-shadow 140ms ease;
 }
 
-.webhook-search:focus-within,
-.webhook-event-filter:focus-within {
+.webhook-search:focus-within {
   border-color: #8fa6f9;
   box-shadow: 0 0 0 3px rgba(49, 95, 244, 0.08);
 }
@@ -4246,15 +4238,14 @@ main {
   border: 0;
 }
 
-.webhook-event-filter select {
+.webhook-event-filter {
+  display: block;
   min-width: 0;
-  flex: 1;
-  padding: 0 24px 0 0;
-  color: #586468;
-  background-color: transparent;
-  border: 0;
-  outline: 0;
-  font-size: 0.625rem;
+  margin: 0;
+}
+
+.webhook-event-filter .form-select {
+  height: 41px;
 }
 
 .webhook-event-kind {
@@ -5287,10 +5278,9 @@ main {
 }
 
 .review-search-field,
-.review-pr-filter,
-.review-status-filter {
+.review-pr-filter {
   display: flex;
-  height: 35px;
+  height: 41px;
   align-items: center;
   gap: 7px;
   padding: 0 10px;
@@ -5301,8 +5291,7 @@ main {
 }
 
 .review-search-field:focus-within,
-.review-pr-filter:focus-within,
-.review-status-filter:focus-within {
+.review-pr-filter:focus-within {
   border-color: #8fa6f9;
   box-shadow: 0 0 0 3px rgba(49, 95, 244, 0.08);
 }
@@ -5317,18 +5306,19 @@ main {
   font-size: 0.5625rem;
 }
 
-.review-status-filter select {
-  padding: 0 22px 0 0;
-  color: #3f4b4f;
-  background-color: transparent;
-  border: 0;
-  outline: 0;
-  font-size: 0.5625rem;
+.review-status-filter {
+  display: block;
+  margin: 0;
 }
 
 .review-search-field input { width: 148px; }
 .review-pr-filter input { width: 69px; }
-.review-status-filter select { width: 82px; }
+.review-status-filter .form-select { width: 128px; height: 41px; }
+
+.review-filter-tools > .icon-button {
+  width: 41px;
+  height: 41px;
+}
 
 .review-search-field button {
   display: grid;
@@ -6341,7 +6331,7 @@ main {
 
   .review-filter-tools {
     display: grid;
-    grid-template-columns: 1fr 110px 104px 36px;
+    grid-template-columns: 1fr 110px 128px 41px;
   }
 
   .review-search-field input,
@@ -6415,7 +6405,7 @@ main {
   }
 
   .review-filter-tools {
-    grid-template-columns: 1fr 94px 103px 36px;
+    grid-template-columns: 1fr 94px 128px 41px;
   }
 
   .review-batch-table {
@@ -6577,30 +6567,26 @@ main {
   }
 
   .review-filter-tools {
-    grid-template-columns: 1fr 36px;
+    grid-template-columns: minmax(0, 1fr) 128px 41px;
   }
 
-  .review-pr-filter,
-  .review-status-filter {
-    grid-row: 2;
+  .review-search-field {
+    grid-column: 1 / 3;
+    grid-row: 1;
   }
 
   .review-pr-filter {
     grid-column: 1;
+    grid-row: 2;
   }
 
   .review-status-filter {
     grid-column: 2;
-    overflow: hidden;
-    padding: 0 5px;
-  }
-
-  .review-status-filter select {
-    width: 88px;
+    grid-row: 2;
   }
 
   .review-filter-tools > .icon-button {
-    grid-column: 2;
+    grid-column: 3;
     grid-row: 1;
   }
 

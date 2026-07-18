@@ -8,7 +8,6 @@ import {
   ExternalLink,
   GitBranch,
   Github,
-  GitPullRequest,
   KeyRound,
   Layers3,
   RefreshCw,
@@ -299,14 +298,12 @@ export default function WebhookPage({ onOpenTask, onOpenSettings }: WebhookPageP
               {search && <button onClick={() => { setSearch(''); setPage(1) }} aria-label="清除搜索"><X size={15} /></button>}
             </label>
             <label className="webhook-event-filter">
-              <Server size={16} />
               <Form.Select value={providerFilter} onChange={(event) => { setProviderFilter(event.target.value); setPage(1) }} aria-label="筛选 Webhook 平台">
                 <option value="all">全部平台</option>
                 {providers.map((provider) => <option key={provider} value={provider}>{provider === 'github' ? 'GitHub' : provider === 'gitlab' ? 'GitLab' : provider}</option>)}
               </Form.Select>
             </label>
             <label className="webhook-event-filter">
-              <GitPullRequest size={16} />
               <Form.Select value={eventFilter} onChange={(event) => { setEventFilter(event.target.value); setPage(1) }} aria-label="筛选事件类型">
                 <option value="all">全部事件</option>
                 {eventTypes.map((eventType) => <option key={eventType} value={eventType}>{eventType}</option>)}

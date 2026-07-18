@@ -13,7 +13,6 @@ import {
   KeyRound,
   Layers3,
   LibraryBig,
-  ListFilter,
   Menu,
   Plus,
   Radio,
@@ -845,7 +844,6 @@ function App() {
                   {search && <button onClick={() => { setSearch(''); setTaskPage(1) }} aria-label="清除搜索"><X size={14} /></button>}
                 </label>
                 <label className="queue-select">
-                  <ListFilter size={16} />
                   <Form.Select value={queueFilter} onChange={(event) => { setQueueFilter(event.target.value); setTaskPage(1) }} aria-label="筛选队列">
                     <option value="all">全部队列</option>
                     {displayQueues.map((queue) => <option key={queue.name} value={queue.name}>{queue.name}</option>)}
