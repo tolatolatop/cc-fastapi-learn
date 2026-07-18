@@ -49,7 +49,7 @@ services:
       dockerfile: Dockerfile
     container_name: cc-agent-console
     ports:
-      - "${FRONTEND_PORT:-18080}:80"
+      - "${FRONTEND_HOST:-0.0.0.0}:${FRONTEND_PORT:-18080}:80"
     depends_on:
       - app
     restart: unless-stopped
