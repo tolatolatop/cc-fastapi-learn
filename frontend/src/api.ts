@@ -3,6 +3,9 @@ import type {
   CreateReviewIssuePayload,
   CreateTaskPayload,
   QueueListResponse,
+  RepositoryBulkTagsUpdateResponse,
+  RepositoryItem,
+  RepositoryOverviewResponse,
   ReviewDashboardOutcome,
   ReviewDashboardPullRequestDetail,
   ReviewDashboardResponse,
@@ -75,9 +78,18 @@ interface ReviewDashboardOptions {
   limit?: number
   provider?: string
   projectPath?: string
+  tag?: string
   createdFrom?: string
   createdTo?: string
   outcome?: ReviewDashboardOutcome
+}
+
+interface RepositoryOverviewOptions {
+  offset?: number
+  limit?: number
+  provider?: string
+  query?: string
+  tags?: string[]
 }
 
 function queryPath(path: string, values: Array<[string, string | number | undefined]>) {
@@ -226,6 +238,7 @@ export const api = {
     limit = 20,
     provider,
     projectPath,
+    tag,
     createdFrom,
     createdTo,
     outcome = 'all',
@@ -234,6 +247,7 @@ export const api = {
     ['limit', limit],
     ['provider', provider],
     ['project_path', projectPath],
+    ['tag', tag],
     ['created_from', createdFrom],
     ['created_to', createdTo],
     ['outcome', outcome],
@@ -244,4 +258,27 @@ export const api = {
       ['project_path', projectPath],
       ['pr_number', prNumber],
     ])),
+  listRepositoryOverview: ({
+    offset = 0,
+    limit = 20,
+    provider,
+    query,
+    tags = [],
+  }: RepositoryOverviewOptions = {}) => request<RepositoryOverviewResponse>(queryPath('/v1/repositories/overview', [
+    ['offset', offset],
+    ['limit', limit],
+    ['provider', provider],
+    ['q', query],
+    ...tags.map((tag): [string, string] => ['tag', tag]),
+  ])),
+  replaceRepositoryTags: (repositoryId: string, tags: string[]) =>
+    request<RepositoryItem>(`/v1/repositories/${repositoryId}/tags`, {
+      method: 'PUT',
+      body: JSON.stringify({ tags }),
+    }),
+  bulkUpdateRepositoryTags: (payload: { repository_ids: string[]; add_tags: string[]; remove_tags: string[] }) =>
+    request<RepositoryBulkTagsUpdateResponse>('/v1/repositories/tags', {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
 }

@@ -84,6 +84,7 @@ const EMPTY_DASHBOARD: ReviewDashboardResponse = {
   },
   timeline: [],
   repositories: [],
+  tags: [],
   items: [],
   total: 0,
 }
@@ -393,6 +394,7 @@ export default function ReviewDashboardPage({ onOpenSettings, onOpenTask }: Revi
   const [to, setTo] = useState(() => daysAgo(0))
   const [preset, setPreset] = useState<'7' | '30' | '90' | 'custom'>('30')
   const [repository, setRepository] = useState('')
+  const [tag, setTag] = useState('')
   const [outcome, setOutcome] = useState<ReviewDashboardOutcome>('all')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
@@ -412,6 +414,7 @@ export default function ReviewDashboardPage({ onOpenSettings, onOpenTask }: Revi
         offset: (page - 1) * pageSize,
         limit: pageSize,
         ...selectedRepository,
+        tag: tag || undefined,
         ...bounds,
         outcome,
       })
@@ -425,7 +428,7 @@ export default function ReviewDashboardPage({ onOpenSettings, onOpenTask }: Revi
       setLoading(false)
       setRefreshing(false)
     }
-  }, [bounds, outcome, page, pageSize, repository])
+  }, [bounds, outcome, page, pageSize, repository, tag])
 
   useEffect(() => {
     loadDashboard()
@@ -478,6 +481,7 @@ export default function ReviewDashboardPage({ onOpenSettings, onOpenTask }: Revi
         <label className="review-dashboard-date"><span>从</span><Form.Control type="date" value={from} max={to} onChange={(event) => { setFrom(event.target.value); setPreset('custom'); setPage(1) }} /></label>
         <label className="review-dashboard-date"><span>到</span><Form.Control type="date" value={to} min={from} max={daysAgo(0)} onChange={(event) => { setTo(event.target.value); setPreset('custom'); setPage(1) }} /></label>
         <label className="review-dashboard-repository"><span>仓库</span><Form.Select value={repository} onChange={(event) => { setRepository(event.target.value); setPage(1) }}><option value="">全部仓库</option>{dashboard.repositories.map((item) => <option key={repositoryKey(item.provider, item.project_path)} value={repositoryKey(item.provider, item.project_path)}>{item.project_path} · {item.issue_total} 个问题</option>)}</Form.Select></label>
+        <label className="review-dashboard-tag"><span>Tag</span><Form.Select value={tag} onChange={(event) => { setTag(event.target.value); setPage(1) }}><option value="">全部 Tags</option>{(dashboard.tags || []).map((item) => <option key={item} value={item}>{item}</option>)}</Form.Select></label>
         <button className="icon-button" onClick={() => loadDashboard(true)} aria-label="刷新聚合看板"><RefreshCw size={17} className={refreshing ? 'spin' : ''} /></button>
       </section>
 
@@ -523,7 +527,7 @@ export default function ReviewDashboardPage({ onOpenSettings, onOpenTask }: Revi
               {loading ? (
                 <div className="state-message"><RefreshCw size={24} className="spin" /><strong>正在汇总 PR</strong><p>关联问题结论和检查任务…</p></div>
               ) : dashboard.items.length === 0 ? (
-                <div className="state-message"><ShieldCheck size={26} /><strong>没有匹配的 PR</strong><p>调整时间、仓库或问题结论后再试。</p></div>
+                <div className="state-message"><ShieldCheck size={26} /><strong>没有匹配的 PR</strong><p>调整时间、仓库、Tag 或问题结论后再试。</p></div>
               ) : (
                 <>
                   <Table hover className="review-pr-table">

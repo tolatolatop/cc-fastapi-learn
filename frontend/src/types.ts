@@ -259,6 +259,7 @@ export interface ReviewDashboardResponse {
   summary: ReviewDashboardSummary
   timeline: ReviewDashboardTrendPoint[]
   repositories: ReviewDashboardRepository[]
+  tags: string[]
   items: ReviewDashboardPullRequest[]
   total: number
 }
@@ -267,4 +268,41 @@ export interface ReviewDashboardPullRequestDetail {
   pull_request: ReviewDashboardPullRequest
   batches: ReviewIssueBatch[]
   tasks: ReviewDashboardTask[]
+}
+
+export interface RepositoryItem {
+  id: string
+  provider: string
+  project_path: string
+  web_url: string | null
+  tags: string[]
+  created_at: string
+  updated_at: string
+}
+
+export interface RepositoryReviewStatistics {
+  review_total: number
+  issue_total: number
+  accepted_issues: number
+  unhandled_issues: number
+  pending_issues: number
+}
+
+export interface RepositoryOverviewItem extends RepositoryItem {
+  review_statistics: RepositoryReviewStatistics
+}
+
+export interface RepositoryOverviewResponse {
+  items: RepositoryOverviewItem[]
+  total: number
+  summary: RepositoryReviewStatistics & {
+    repository_total: number
+    providers: string[]
+    tags: string[]
+  }
+}
+
+export interface RepositoryBulkTagsUpdateResponse {
+  items: RepositoryItem[]
+  total: number
 }

@@ -12,6 +12,7 @@ import {
   GitPullRequest,
   KeyRound,
   Layers3,
+  LibraryBig,
   ListFilter,
   Menu,
   Plus,
@@ -27,6 +28,7 @@ import {
 import { Button, Form, Modal, Offcanvas, Table } from 'react-bootstrap'
 import { api } from './api'
 import Pagination from './Pagination'
+import RepositoryPage from './RepositoryPage'
 import ReviewWorkspace from './ReviewWorkspace'
 import type { CreateTaskPayload, QueueItem, TaskContext, TaskItem, TaskLog, TaskStatus } from './types'
 import WebhookPage from './WebhookPage'
@@ -510,9 +512,10 @@ function DetailDrawer({ task, logs, context, loading, now, onClose, onCancel, on
 }
 
 function App() {
-  const [activeView, setActiveView] = useState<'tasks' | 'webhooks' | 'reviews'>(() => {
+  const [activeView, setActiveView] = useState<'tasks' | 'webhooks' | 'reviews' | 'repositories'>(() => {
     if (window.location.hash === '#/webhooks') return 'webhooks'
     if (window.location.hash === '#/reviews') return 'reviews'
+    if (window.location.hash === '#/repositories') return 'repositories'
     return 'tasks'
   })
   const [tasks, setTasks] = useState<TaskItem[]>([])
@@ -640,6 +643,7 @@ function App() {
     const onHashChange = () => {
       if (window.location.hash === '#/webhooks') setActiveView('webhooks')
       else if (window.location.hash === '#/reviews') setActiveView('reviews')
+      else if (window.location.hash === '#/repositories') setActiveView('repositories')
       else setActiveView('tasks')
     }
     window.addEventListener('hashchange', onHashChange)
@@ -699,9 +703,9 @@ function App() {
     }
   }
 
-  function navigate(view: 'tasks' | 'webhooks' | 'reviews') {
+  function navigate(view: 'tasks' | 'webhooks' | 'reviews' | 'repositories') {
     setActiveView(view)
-    window.location.hash = view === 'webhooks' ? '/webhooks' : view === 'reviews' ? '/reviews' : '/tasks'
+    window.location.hash = view === 'webhooks' ? '/webhooks' : view === 'reviews' ? '/reviews' : view === 'repositories' ? '/repositories' : '/tasks'
     setSidebarOpen(false)
   }
 
@@ -727,6 +731,9 @@ function App() {
           </button>
           <button className={`nav-item ${activeView === 'reviews' ? 'active' : ''}`} onClick={() => navigate('reviews')}>
             <GitPullRequest size={18} /><span>检视看板</span>
+          </button>
+          <button className={`nav-item ${activeView === 'repositories' ? 'active' : ''}`} onClick={() => navigate('repositories')}>
+            <LibraryBig size={18} /><span>仓库管理</span>
           </button>
           <button className="nav-item" onClick={showQueueRail}>
             <Activity size={18} /><span>队列状态</span>
@@ -759,7 +766,7 @@ function App() {
       <main>
         <header className="topbar">
           <button className="mobile-menu" onClick={() => setSidebarOpen(true)} aria-label="打开导航"><Menu size={20} /></button>
-          <div className="breadcrumb"><span>控制台</span><ChevronRight size={14} /><strong>{activeView === 'tasks' ? '任务调度' : activeView === 'webhooks' ? 'Webhook 档案' : '检视看板'}</strong></div>
+          <div className="breadcrumb"><span>控制台</span><ChevronRight size={14} /><strong>{activeView === 'tasks' ? '任务调度' : activeView === 'webhooks' ? 'Webhook 档案' : activeView === 'repositories' ? '仓库管理' : '检视看板'}</strong></div>
           <div className="top-actions">
             <span className="last-sync"><RefreshCw size={13} className={activeView === 'tasks' && refreshing ? 'spin' : ''} />{activeView === 'tasks' ? '5 秒自动同步' : activeView === 'webhooks' ? '10 秒自动同步' : '15 秒自动同步'}</span>
             <button className="icon-button" onClick={() => setSettingsOpen(true)} aria-label="连接设置"><Settings size={18} /></button>
@@ -767,7 +774,7 @@ function App() {
           </div>
         </header>
 
-        <div className={`workspace ${activeView === 'webhooks' ? 'webhook-workspace' : activeView === 'reviews' ? 'review-workspace' : ''}`}>
+        <div className={`workspace ${activeView === 'webhooks' ? 'webhook-workspace' : activeView === 'reviews' ? 'review-workspace' : activeView === 'repositories' ? 'repository-workspace' : ''}`}>
           {activeView === 'tasks' ? (
           <>
           <section className="page-heading">
@@ -909,6 +916,8 @@ function App() {
           </>
           ) : activeView === 'webhooks' ? (
             <WebhookPage key={connectionRevision} onOpenTask={(taskId) => loadDetail(taskId)} onOpenSettings={() => setSettingsOpen(true)} />
+          ) : activeView === 'repositories' ? (
+            <RepositoryPage key={connectionRevision} onOpenSettings={() => setSettingsOpen(true)} />
           ) : (
             <ReviewWorkspace key={connectionRevision} onOpenTask={(taskId) => loadDetail(taskId)} onOpenSettings={() => setSettingsOpen(true)} />
           )}
