@@ -89,6 +89,28 @@ export interface WebhookTrigger {
   task_id: string | null
   task_status: TaskStatus | null
   payload: Record<string, unknown>
+  parsed_payload: {
+    provider: string
+    event_type: string
+    event_kind: string
+    repository: {
+      project_path: string
+      web_url: string | null
+    } | null
+    actor: {
+      display_name: string
+      username: string | null
+    } | null
+    ref: string | null
+    change_request: {
+      resource_type: string
+      number: string
+      action: string | null
+      source_branch: string | null
+      target_branch: string | null
+      head_sha: string | null
+    } | null
+  } | null
   created_at: string
   workflow_run_id: string | null
   workflow_status: 'planning' | 'running' | 'skipped' | 'succeeded' | 'failed' | 'superseded' | null

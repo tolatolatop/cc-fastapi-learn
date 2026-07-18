@@ -4,6 +4,7 @@ from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from cc_fastapi.core.webhook_payloads import WebhookPayload
 from cc_fastapi.db.models import (
     AgentTask,
     TaskStatus,
@@ -19,8 +20,7 @@ from cc_fastapi.db.models import (
 )
 from cc_fastapi.workflows import WorkflowEngine, build_default_workflow_engine
 from cc_fastapi.workflows.base import WorkflowEvent, WorkflowTemplateError
-from cc_fastapi.workflows.github_prompt import github_pull_request_correlation
-from cc_fastapi.workflows.gitlab_prompt import gitlab_merge_request_correlation
+from cc_fastapi.workflows.correlations import change_request_correlation
 
 
 WebhookTemplateError = WorkflowTemplateError
@@ -68,11 +68,13 @@ class WebhookService:
         )
         db.add(run)
         db.flush()
-        correlation = None
-        if trigger.provider == "gitlab":
-            correlation = gitlab_merge_request_correlation(trigger.payload_json)
-        elif trigger.provider == "github":
-            correlation = github_pull_request_correlation(trigger.payload_json)
+        correlation = change_request_correlation(
+            WebhookPayload.from_payload(
+                trigger.provider,
+                trigger.event_type,
+                trigger.payload_json,
+            )
+        )
         if correlation is not None:
             db.add(
                 WorkflowCorrelation(

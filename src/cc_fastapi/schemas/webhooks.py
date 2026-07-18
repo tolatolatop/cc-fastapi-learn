@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from cc_fastapi.db.models import TaskStatus, WorkflowRunStatus
 
@@ -25,6 +25,43 @@ class GitHubWebhookResponse(WebhookResponse):
     pass
 
 
+class WebhookRepositoryResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    project_path: str
+    web_url: str | None
+
+
+class WebhookActorResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    display_name: str
+    username: str | None
+
+
+class WebhookChangeRequestResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    resource_type: str
+    number: str
+    action: str | None
+    source_branch: str | None
+    target_branch: str | None
+    head_sha: str | None
+
+
+class WebhookPayloadResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    provider: str
+    event_type: str
+    event_kind: str
+    repository: WebhookRepositoryResponse | None
+    actor: WebhookActorResponse | None
+    ref: str | None
+    change_request: WebhookChangeRequestResponse | None
+
+
 class WebhookTriggerItemResponse(BaseModel):
     id: int
     provider: str
@@ -35,6 +72,7 @@ class WebhookTriggerItemResponse(BaseModel):
     task_id: str | None
     task_status: TaskStatus | None
     payload: dict[str, Any]
+    parsed_payload: WebhookPayloadResponse | None
     created_at: datetime
     workflow_run_id: str | None
     workflow_status: WorkflowRunStatus | None

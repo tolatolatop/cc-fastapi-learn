@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
+from cc_fastapi.core.webhook_payloads import WebhookPayload
 from cc_fastapi.db.models import TaskStatus
 
 
@@ -34,6 +35,14 @@ class WorkflowEvent:
     webhook_uuid: str | None = None
     instance_url: str | None = None
     config: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def webhook_payload(self) -> WebhookPayload | None:
+        return WebhookPayload.from_payload(
+            self.provider,
+            self.event_type,
+            self.payload,
+        )
 
 
 @dataclass(frozen=True)

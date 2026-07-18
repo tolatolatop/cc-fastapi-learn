@@ -336,11 +336,13 @@ class MergeKnowledgeWorkflow(Workflow):
     priority = 100
 
     def matches(self, event: WorkflowEvent) -> bool:
-        attributes = event.payload.get("object_attributes", {})
+        parsed = event.webhook_payload
+        change_request = parsed.change_request if parsed else None
         return (
             event.provider == "gitlab"
-            and event.payload.get("object_kind") == "merge_request"
-            and attributes.get("action") == "merge"
+            and change_request is not None
+            and change_request.resource_type == "merge_request"
+            and change_request.action == "merge"
         )
 
     def before(self, event: WorkflowEvent) -> WorkflowPlan:

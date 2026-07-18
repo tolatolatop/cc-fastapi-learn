@@ -276,6 +276,15 @@ def test_gitlab_webhook_renders_prompt_creates_task_and_records_metadata():
     assert listed.json()["items"][0]["task_id"] == body["task_id"]
     assert listed.json()["items"][0]["task_status"] == "queued"
     assert listed.json()["items"][0]["payload"] == payload
+    assert listed.json()["items"][0]["parsed_payload"] == {
+        "provider": "gitlab",
+        "event_type": "Push Hook",
+        "event_kind": "push",
+        "repository": {"project_path": "group/project", "web_url": None},
+        "actor": None,
+        "ref": "feature-1",
+        "change_request": None,
+    }
     assert listed.json()["items"][0]["workflow_run_id"] == body["workflow_run_id"]
     assert listed.json()["items"][0]["workflow_status"] == "running"
 
@@ -707,12 +716,15 @@ def test_duplicate_legacy_trigger_is_adopted_into_workflow():
         )
         trigger = WebhookTrigger(
             provider="gitlab",
-            event_type="Push Hook",
+            event_type="Merge Request Hook",
             event_uuid="legacy-event",
             webhook_uuid="legacy-webhook",
             instance_url="https://gitlab.example.com",
             task_id=task.id,
-            payload_json=gitlab_payload(),
+            payload_json=gitlab_merge_request_payload(
+                merge_request_iid=33,
+                action="open",
+            ),
         )
         db.add(trigger)
         db.flush()
@@ -740,6 +752,16 @@ def test_duplicate_legacy_trigger_is_adopted_into_workflow():
         assert run is not None
         assert run.context_json == {"legacy_adopted": True}
         assert run.webhook_trigger_id == trigger.id
+        correlation = db.scalar(
+            select(WorkflowCorrelation).where(
+                WorkflowCorrelation.workflow_run_id == run.id
+            )
+        )
+        assert correlation is not None
+        assert correlation.provider == "gitlab"
+        assert correlation.resource_type == "merge_request"
+        assert correlation.project_path == "group/project"
+        assert correlation.resource_id == "33"
 
 
 def test_gitlab_webhook_rejects_invalid_token_without_creating_records():

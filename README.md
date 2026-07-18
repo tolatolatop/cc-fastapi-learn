@@ -63,6 +63,10 @@ GitHub 使用对应的 `GITHUB_WEBHOOK_SECRET`、`GITHUB_WEBHOOK_PROMPT_TEMPLATE
 两个平台的 Jinja 模板都可直接读取 Payload 顶层字段，并额外提供 `payload`、`event_type` 和
 `webhook`。控制台支持按平台、事件类型、项目、分支、投递 UUID 或关联任务 ID 检索归档。
 
+服务始终原样归档平台 Payload，并通过只读的 `WebhookPayload` 投影统一解析仓库、操作者、分支及
+PR/MR 基本信息。平台差异集中在 GitHub/GitLab Adapter；仓库同步、工作流关联和控制台摘要只读取
+标准化投影。Webhook 列表响应中的 `parsed_payload` 提供这份投影，`payload` 字段仍保留原始内容。
+
 ## 工作流扩展
 
 Webhook 事件由工作流注册表匹配，经过 `before` 规划后创建零个、一个或多个任务；任务进入终态后执行 `after_task`。运行、步骤和任务关联分别保存在 `workflow_runs`、`workflow_step_runs` 和 `workflow_task_links` 中。

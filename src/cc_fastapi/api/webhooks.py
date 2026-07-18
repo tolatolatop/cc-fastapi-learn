@@ -10,10 +10,12 @@ from sqlalchemy.orm import Session
 
 from cc_fastapi.api.dependencies import require_token
 from cc_fastapi.core.config import get_settings
+from cc_fastapi.core.webhook_payloads import WebhookPayload
 from cc_fastapi.db.session import get_db
 from cc_fastapi.schemas.webhooks import (
     GitLabWebhookResponse,
     GitHubWebhookResponse,
+    WebhookPayloadResponse,
     WebhookTriggerItemResponse,
     WebhookTriggerListResponse,
     WebhookTriggerListSummaryResponse,
@@ -25,6 +27,17 @@ from cc_fastapi.services.webhooks import WebhookService, WebhookTemplateError
 router = APIRouter(prefix="/v1/webhooks", tags=["webhooks"])
 webhooks = WebhookService()
 logger = logging.getLogger(__name__)
+
+
+def _webhook_payload_response(
+    provider: str,
+    event_type: str,
+    payload: dict[str, Any],
+) -> WebhookPayloadResponse | None:
+    parsed_payload = WebhookPayload.from_payload(provider, event_type, payload)
+    if parsed_payload is None:
+        return None
+    return WebhookPayloadResponse.model_validate(parsed_payload)
 
 
 def require_gitlab_token(x_gitlab_token: str | None = Header(default=None, alias="X-Gitlab-Token")) -> None:
@@ -215,6 +228,11 @@ def list_webhook_triggers(
                 task_id=item.task_id,
                 task_status=task_status,
                 payload=item.payload_json,
+                parsed_payload=_webhook_payload_response(
+                    item.provider,
+                    item.event_type,
+                    item.payload_json,
+                ),
                 created_at=item.created_at,
                 workflow_run_id=workflow_runs[item.id].id if workflow_runs[item.id] else None,
                 workflow_status=workflow_runs[item.id].status if workflow_runs[item.id] else None,

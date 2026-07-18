@@ -55,40 +55,14 @@ function formatWebhookTime(value: string) {
   }
 }
 
-function objectValue(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
-}
-
-function stringValue(value: unknown) {
-  return typeof value === 'string' ? value : ''
-}
-
-function payloadSummary(payload: Record<string, unknown>, eventType = 'event') {
-  const project = objectValue(payload.project)
-  const repository = objectValue(payload.repository)
-  const attributes = objectValue(payload.object_attributes)
-  const user = objectValue(payload.user)
-  const sender = objectValue(payload.sender)
-  const pullRequest = objectValue(payload.pull_request)
-  const pullRequestHead = objectValue(pullRequest?.head)
-  const projectName = stringValue(project?.path_with_namespace)
-    || stringValue(project?.name)
-    || stringValue(repository?.full_name)
-    || stringValue(repository?.name)
-    || '未提供项目'
-  const rawRef = stringValue(payload.ref)
-    || stringValue(attributes?.source_branch)
-    || stringValue(attributes?.ref)
-    || stringValue(pullRequestHead?.ref)
-  const ref = rawRef.replace(/^refs\/(heads|tags)\//, '') || '—'
-  const actor = stringValue(payload.user_name)
-    || stringValue(payload.user_username)
-    || stringValue(user?.name)
-    || stringValue(user?.username)
-    || stringValue(sender?.login)
-    || '—'
-  const kind = stringValue(payload.object_kind) || stringValue(payload.event_name) || eventType
-  return { projectName, ref, actor, kind }
+function payloadSummary(record: WebhookTrigger) {
+  const parsed = record.parsed_payload
+  return {
+    projectName: parsed?.repository?.project_path || '未提供项目',
+    ref: parsed?.ref || '—',
+    actor: parsed?.actor?.display_name || '—',
+    kind: parsed?.event_kind || record.event_type,
+  }
 }
 
 function eventTone(eventType: string) {
@@ -112,7 +86,7 @@ interface WebhookDetailProps {
 }
 
 function WebhookDetail({ record, taskStatus, onClose, onOpenTask }: WebhookDetailProps) {
-  const summary = payloadSummary(record.payload, record.event_type)
+  const summary = payloadSummary(record)
 
   return (
     <Offcanvas show onHide={onClose} placement="end" className="detail-drawer webhook-detail-drawer" aria-labelledby="webhook-detail-title">
@@ -339,7 +313,7 @@ export default function WebhookPage({ onOpenTask, onOpenSettings }: WebhookPageP
               <thead><tr><th>接收时间</th><th>事件</th><th>项目 / 分支</th><th>事件标识</th><th>关联任务</th><th><span className="sr-only">操作</span></th></tr></thead>
               <tbody>
                 {records.map((record) => {
-                  const summary = payloadSummary(record.payload, record.event_type)
+                  const summary = payloadSummary(record)
                   const received = formatWebhookTime(record.created_at)
                   return (
                     <tr key={record.id} tabIndex={0} onClick={() => setSelected(record)} onKeyDown={(event) => handleRowKey(event, record)}>
