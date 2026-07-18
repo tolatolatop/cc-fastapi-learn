@@ -6,6 +6,7 @@ import type {
   RepositoryBulkTagsUpdateResponse,
   RepositoryItem,
   RepositoryOverviewResponse,
+  RepositorySyncResponse,
   ReviewDashboardOutcome,
   ReviewDashboardPullRequestDetail,
   ReviewDashboardResponse,
@@ -273,6 +274,9 @@ export const api = {
     ['q', query],
     ...tags.map((tag): [string, string] => ['tag', tag]),
   ])),
+  syncRepositories: () => request<RepositorySyncResponse>('/v1/repositories/sync', {
+    method: 'POST',
+  }),
   replaceRepositoryTags: (repositoryId: string, tags: string[]) =>
     request<RepositoryItem>(`/v1/repositories/${repositoryId}/tags`, {
       method: 'PUT',

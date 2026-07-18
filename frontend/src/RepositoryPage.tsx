@@ -10,6 +10,7 @@ import {
   Search,
   Server,
   Tags,
+  Webhook,
   X,
 } from 'lucide-react'
 import { Button, Form, Modal, Table } from 'react-bootstrap'
@@ -241,7 +242,8 @@ export default function RepositoryPage({ onOpenSettings }: RepositoryPageProps) 
   const [pageSize, setPageSize] = useState(20)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [tagModal, setTagModal] = useState<{ repositories: RepositoryOverviewItem[]; bulk: boolean } | null>(null)
-  const [notice, setNotice] = useState('')
+  const [syncing, setSyncing] = useState(false)
+  const [notice, setNotice] = useState<{ message: string; tone: 'success' | 'error' } | null>(null)
 
   const loadRepositories = useCallback(async (silent = false) => {
     if (silent) setRefreshing(true)
@@ -286,9 +288,28 @@ export default function RepositoryPage({ onOpenSettings }: RepositoryPageProps) 
 
   useEffect(() => {
     if (!notice) return
-    const timer = window.setTimeout(() => setNotice(''), 3500)
+    const timer = window.setTimeout(() => setNotice(null), notice.tone === 'error' ? 5000 : 3500)
     return () => window.clearTimeout(timer)
   }, [notice])
+
+  async function syncRepositories() {
+    setSyncing(true)
+    setNotice(null)
+    try {
+      const response = await api.syncRepositories()
+      setNotice({
+        message: response.total
+          ? `已同步 ${response.total} 个 Webhook 仓库`
+          : '仓库目录已是最新',
+        tone: 'success',
+      })
+      await loadRepositories(true)
+    } catch (requestError) {
+      setNotice({ message: `同步失败：${messageFrom(requestError)}`, tone: 'error' })
+    } finally {
+      setSyncing(false)
+    }
+  }
 
   function toggleSelected(id: string) {
     setSelectedIds((current) => {
@@ -317,6 +338,7 @@ export default function RepositoryPage({ onOpenSettings }: RepositoryPageProps) 
         </div>
         <div className="repository-page-actions">
           {selectedRepositories.length > 0 && <Button variant="outline-primary" onClick={() => setTagModal({ repositories: selectedRepositories, bulk: selectedRepositories.length > 1 })}><Tags size={16} />{selectedRepositories.length > 1 ? '批量管理 Tags' : '管理 Tags'} <span>{selectedRepositories.length}</span></Button>}
+          <Button variant="primary" onClick={syncRepositories} disabled={syncing} aria-busy={syncing}>{syncing ? <RefreshCw size={16} className="spin" /> : <Webhook size={16} />}{syncing ? '正在同步' : '同步 Webhook 仓库'}</Button>
           <button className="icon-button" onClick={() => loadRepositories(true)} aria-label="刷新仓库"><RefreshCw size={17} className={refreshing ? 'spin' : ''} /></button>
         </div>
       </section>
@@ -385,8 +407,8 @@ export default function RepositoryPage({ onOpenSettings }: RepositoryPageProps) 
         {!loading && !error && overview.items.length > 0 && <div className="panel-footer"><Pagination page={page} pageSize={pageSize} total={overview.total} itemLabel="仓库" onPageChange={setPage} onPageSizeChange={(value) => { setPageSize(value); setPage(1) }} /><span className="panel-source"><Server size={13} />仓库目录与检视数据聚合</span></div>}
       </section>
 
-      {tagModal && <TagManagerModal repositories={tagModal.repositories} availableTags={summary.tags} bulk={tagModal.bulk} onClose={() => setTagModal(null)} onSaved={(message) => { setTagModal(null); setSelectedIds(new Set()); setNotice(message); loadRepositories(true) }} />}
-      {notice && <div className="toast"><Check size={17} />{notice}</div>}
+      {tagModal && <TagManagerModal repositories={tagModal.repositories} availableTags={summary.tags} bulk={tagModal.bulk} onClose={() => setTagModal(null)} onSaved={(message) => { setTagModal(null); setSelectedIds(new Set()); setNotice({ message, tone: 'success' }); loadRepositories(true) }} />}
+      {notice && <div className={`toast ${notice.tone === 'error' ? 'error-toast' : ''}`} role={notice.tone === 'error' ? 'alert' : 'status'}>{notice.tone === 'error' ? <CircleAlert size={17} /> : <Check size={17} />}{notice.message}</div>}
     </>
   )
 }

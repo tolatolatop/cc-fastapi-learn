@@ -329,3 +329,8 @@ export interface RepositoryBulkTagsUpdateResponse {
   items: RepositoryItem[]
   total: number
 }
+
+export interface RepositorySyncResponse {
+  items: RepositoryItem[]
+  total: number
+}
