@@ -101,6 +101,7 @@ export interface WebhookTriggerListResponse {
   summary: {
     total: number
     event_types: string[]
+    providers: string[]
   }
 }
 

@@ -7,6 +7,7 @@ import {
   Copy,
   ExternalLink,
   GitBranch,
+  Github,
   GitPullRequest,
   KeyRound,
   Layers3,
@@ -63,31 +64,37 @@ function stringValue(value: unknown) {
   return typeof value === 'string' ? value : ''
 }
 
-function payloadSummary(payload: Record<string, unknown>) {
+function payloadSummary(payload: Record<string, unknown>, eventType = 'event') {
   const project = objectValue(payload.project)
   const repository = objectValue(payload.repository)
   const attributes = objectValue(payload.object_attributes)
   const user = objectValue(payload.user)
+  const sender = objectValue(payload.sender)
+  const pullRequest = objectValue(payload.pull_request)
+  const pullRequestHead = objectValue(pullRequest?.head)
   const projectName = stringValue(project?.path_with_namespace)
     || stringValue(project?.name)
+    || stringValue(repository?.full_name)
     || stringValue(repository?.name)
     || '未提供项目'
   const rawRef = stringValue(payload.ref)
     || stringValue(attributes?.source_branch)
     || stringValue(attributes?.ref)
+    || stringValue(pullRequestHead?.ref)
   const ref = rawRef.replace(/^refs\/(heads|tags)\//, '') || '—'
   const actor = stringValue(payload.user_name)
     || stringValue(payload.user_username)
     || stringValue(user?.name)
     || stringValue(user?.username)
+    || stringValue(sender?.login)
     || '—'
-  const kind = stringValue(payload.object_kind) || stringValue(payload.event_name) || 'event'
+  const kind = stringValue(payload.object_kind) || stringValue(payload.event_name) || eventType
   return { projectName, ref, actor, kind }
 }
 
 function eventTone(eventType: string) {
   const normalized = eventType.toLowerCase()
-  if (normalized.includes('merge')) return 'merge'
+  if (normalized.includes('merge') || normalized.includes('pull')) return 'merge'
   if (normalized.includes('pipeline') || normalized.includes('job')) return 'pipeline'
   if (normalized.includes('tag')) return 'tag'
   return 'push'
@@ -106,7 +113,7 @@ interface WebhookDetailProps {
 }
 
 function WebhookDetail({ record, taskStatus, onClose, onOpenTask }: WebhookDetailProps) {
-  const summary = payloadSummary(record.payload)
+  const summary = payloadSummary(record.payload, record.event_type)
 
   return (
     <Offcanvas show onHide={onClose} placement="end" className="detail-drawer webhook-detail-drawer" aria-labelledby="webhook-detail-title">
@@ -129,7 +136,7 @@ function WebhookDetail({ record, taskStatus, onClose, onOpenTask }: WebhookDetai
               <div><dt>事件类型</dt><dd>{record.event_type}</dd></div>
               <div><dt>触发用户</dt><dd>{summary.actor}</dd></div>
               <div><dt>对象类型</dt><dd>{summary.kind}</dd></div>
-              <div className="wide"><dt>GitLab 实例</dt><dd className="mono-wrap">{record.instance_url || '—'}</dd></div>
+              <div className="wide"><dt>平台实例</dt><dd className="mono-wrap">{record.instance_url || '—'}</dd></div>
             </dl>
           </section>
 
@@ -179,12 +186,14 @@ export default function WebhookPage({ onOpenTask, onOpenSettings }: WebhookPageP
   const [total, setTotal] = useState(0)
   const [summaryTotal, setSummaryTotal] = useState(0)
   const [eventTypes, setEventTypes] = useState<string[]>([])
+  const [providers, setProviders] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [eventFilter, setEventFilter] = useState('all')
+  const [providerFilter, setProviderFilter] = useState('all')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [selected, setSelected] = useState<WebhookTrigger | null>(null)
@@ -197,12 +206,14 @@ export default function WebhookPage({ onOpenTask, onOpenSettings }: WebhookPageP
         offset: (page - 1) * pageSize,
         limit: pageSize,
         eventType: eventFilter === 'all' ? undefined : eventFilter,
+        provider: providerFilter === 'all' ? undefined : providerFilter,
         query: debouncedSearch.trim() || undefined,
       })
       setRecords(response.items)
       setTotal(response.total)
       setSummaryTotal(response.summary.total)
       setEventTypes(response.summary.event_types)
+      setProviders(response.summary.providers)
       setError('')
       setSelected((current) => current ? response.items.find((item) => item.id === current.id) || current : null)
       const lastPage = Math.max(1, Math.ceil(response.total / pageSize))
@@ -213,7 +224,7 @@ export default function WebhookPage({ onOpenTask, onOpenSettings }: WebhookPageP
       setLoading(false)
       setRefreshing(false)
     }
-  }, [debouncedSearch, eventFilter, page, pageSize])
+  }, [debouncedSearch, eventFilter, page, pageSize, providerFilter])
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(search), 300)
@@ -250,12 +261,12 @@ export default function WebhookPage({ onOpenTask, onOpenSettings }: WebhookPageP
 
       <section className="ingress-rail" aria-label="Webhook 处理流程">
         <div className="ingress-source">
-          <div className="gitlab-glyph">GL</div>
-          <div><span>事件来源</span><strong>GitLab</strong></div>
+          <div className="provider-glyphs" aria-hidden="true"><span>GL</span><span><Github size={14} /></span></div>
+          <div><span>事件来源</span><strong>GitLab + GitHub</strong></div>
         </div>
         <div className="ingress-route">
           <div className="route-line"><i /><i /><i /></div>
-          <span>POST /v1/webhooks/gitlab</span>
+          <span>POST /v1/webhooks/&#123;provider&#125;</span>
         </div>
         <div className="ingress-gateway">
           <div className="gateway-rings"><Webhook size={18} /></div>
@@ -288,6 +299,13 @@ export default function WebhookPage({ onOpenTask, onOpenSettings }: WebhookPageP
               {search && <button onClick={() => { setSearch(''); setPage(1) }} aria-label="清除搜索"><X size={15} /></button>}
             </label>
             <label className="webhook-event-filter">
+              <Server size={16} />
+              <Form.Select value={providerFilter} onChange={(event) => { setProviderFilter(event.target.value); setPage(1) }} aria-label="筛选 Webhook 平台">
+                <option value="all">全部平台</option>
+                {providers.map((provider) => <option key={provider} value={provider}>{provider === 'github' ? 'GitHub' : provider === 'gitlab' ? 'GitLab' : provider}</option>)}
+              </Form.Select>
+            </label>
+            <label className="webhook-event-filter">
               <GitPullRequest size={16} />
               <Form.Select value={eventFilter} onChange={(event) => { setEventFilter(event.target.value); setPage(1) }} aria-label="筛选事件类型">
                 <option value="all">全部事件</option>
@@ -299,7 +317,7 @@ export default function WebhookPage({ onOpenTask, onOpenSettings }: WebhookPageP
 
         <div className="webhook-results-meta">
           <span>找到 <strong>{total.toLocaleString('zh-CN')}</strong> 条记录</span>
-          {(search || eventFilter !== 'all') && <button onClick={() => { setSearch(''); setEventFilter('all'); setPage(1) }}>清除检索条件</button>}
+          {(search || eventFilter !== 'all' || providerFilter !== 'all') && <button onClick={() => { setSearch(''); setEventFilter('all'); setProviderFilter('all'); setPage(1) }}>清除检索条件</button>}
         </div>
 
         <div className="webhook-list-wrap">
@@ -317,19 +335,19 @@ export default function WebhookPage({ onOpenTask, onOpenSettings }: WebhookPageP
             <div className="state-message webhook-empty">
               <Webhook size={27} />
               <strong>{summaryTotal ? '没有匹配的触发记录' : '还没有收到 Webhook'}</strong>
-              <p>{summaryTotal ? '尝试搜索项目名、分支、UUID 或关联任务 ID。' : '在 GitLab 中配置 Webhook 后，收到的事件会归档在这里。'}</p>
+              <p>{summaryTotal ? '尝试搜索项目名、分支、UUID 或关联任务 ID。' : '在 GitLab 或 GitHub 中配置 Webhook 后，收到的事件会归档在这里。'}</p>
             </div>
           ) : (
             <Table hover className="webhook-table">
               <thead><tr><th>接收时间</th><th>事件</th><th>项目 / 分支</th><th>事件标识</th><th>关联任务</th><th><span className="sr-only">操作</span></th></tr></thead>
               <tbody>
                 {records.map((record) => {
-                  const summary = payloadSummary(record.payload)
+                  const summary = payloadSummary(record.payload, record.event_type)
                   const received = formatWebhookTime(record.created_at)
                   return (
                     <tr key={record.id} tabIndex={0} onClick={() => setSelected(record)} onKeyDown={(event) => handleRowKey(event, record)}>
                       <td><div className="webhook-time"><strong>{received.time}</strong><span>{received.date} · #{record.id}</span></div></td>
-                      <td><span className={`event-chip event-${eventTone(record.event_type)}`}><i />{record.event_type}</span></td>
+                      <td><div className="webhook-event-kind"><small>{record.provider}</small><span className={`event-chip event-${eventTone(record.event_type)}`}><i />{record.event_type}</span></div></td>
                       <td><div className="webhook-subject"><strong>{summary.projectName}</strong><span><GitBranch size={12} />{summary.ref}<i /> <UserRound size={11} />{summary.actor}</span></div></td>
                       <td><div className="webhook-ids"><code title={record.event_uuid || ''}>{compactId(record.event_uuid)}</code><span title={record.webhook_uuid || ''}>{compactId(record.webhook_uuid)}</span></div></td>
                       <td>

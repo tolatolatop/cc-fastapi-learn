@@ -6,7 +6,7 @@
 
 系统把一次外部事件拆成四层概念：
 
-1. **Webhook Trigger**：服务实际收到的一次外部投递，保留原始 Payload 和 GitLab 标识。
+1. **Webhook Trigger**：服务实际收到的一次外部投递，保留原始 Payload 和平台投递标识。
 2. **Workflow Run**：系统针对该事件做出的一次业务决策，例如跳过、创建检视任务或替换旧分析。
 3. **Workflow Step Run**：一次工作流中的可审计步骤，例如 `before`、`after_task:<task_id>`、Retry 或 Supersede。
 4. **Agent Task**：最终由 Worker 执行的 Agent 调用，有独立的队列、状态、重试次数、上下文和结果。
@@ -47,12 +47,12 @@ flowchart LR
 
 | 字段 | 含义 |
 | --- | --- |
-| `provider` | 事件来源，例如 `gitlab` |
-| `event_type` | GitLab Header 中的事件类型，例如 `Merge Request Hook` |
+| `provider` | 事件来源，例如 `gitlab`、`github` |
+| `event_type` | 平台 Header 中的事件类型，例如 `Merge Request Hook`、`pull_request` |
 | `payload` | 原始事件 Payload |
 | `event_uuid` | 事件标识，用于追踪 |
 | `webhook_uuid` | Webhook 投递标识，用于幂等去重 |
-| `instance_url` | GitLab 实例地址 |
+| `instance_url` | GitLab、GitHub 或 GitHub Enterprise Server 实例地址 |
 | `config` | 本次运行配置，例如 Prompt 模板路径、目标队列 |
 
 事件、配置和工作流上下文分别持久化到 `workflow_runs.payload`、`config` 和 `context`，任务完成后仍可重建 `after_task` 所需的输入。
@@ -61,7 +61,9 @@ flowchart LR
 
 注册表按 `priority` 从高到低检查 `matches(event)`，第一个匹配项获胜。`name + version` 必须唯一。
 
-当前 `GitLabPromptTaskWorkflow` 的优先级是 `-1000`，它是 GitLab 事件的兜底工作流。新增更具体的工作流使用默认优先级 `0` 或更高值，即可在兜底工作流之前匹配。
+当前 `GitLabPromptTaskWorkflow` 和 `GitHubPromptTaskWorkflow` 的优先级都是 `-1000`，分别是
+各平台事件的兜底工作流。两者复用 `WebhookPromptTaskWorkflow` 的模板渲染和任务元数据逻辑。
+新增更具体的工作流使用默认优先级 `0` 或更高值，即可在平台兜底工作流之前匹配。
 
 ### `before()` 与 `WorkflowPlan`
 
@@ -168,6 +170,12 @@ GitLab Merge Request 的映射示例：
 gitlab + merge_request + group/project + 123
 ```
 
+GitHub Pull Request 使用同样的业务键结构：
+
+```text
+github + pull_request + octo-org/octo-repo + 123
+```
+
 表上有同字段顺序的组合索引，用于快速查询同一 MR 的历史 Workflow 和 Task；同一 Run 的重复关联由唯一约束阻止。未来可以使用相同机制关联 Issue、Commit 或 Pipeline。
 
 ### `workflow_resource_locks`
@@ -214,7 +222,7 @@ PostgreSQL/MySQL 使用 `SELECT ... FOR UPDATE` 行锁。SQLite 不支持行级 
 
 Step 使用 `running`、`skipped`、`succeeded`、`failed`，描述单个步骤，而不是整个 Workflow 的结论。
 
-## 5. GitLab MR Update 的替换机制
+## 5. PR 更新的替换机制
 
 GitLab MR Payload 满足以下条件时会建立关联：
 
@@ -223,6 +231,10 @@ object_kind == "merge_request"
 project.path_with_namespace 存在
 object_attributes.iid 存在
 ```
+
+GitHub `pull_request` Payload 在 `repository.full_name` 与 PR `number` 存在时建立关联；
+`action == "synchronize"` 与 GitLab 的 `object_attributes.action == "update"` 一样，会替换同一 PR
+尚未完成的旧工作流。
 
 当 `object_attributes.action == "update"` 时，当前 Plan 同时声明该关联为 `supersede_correlations`。
 
@@ -367,6 +379,8 @@ X-API-Token: <API_TOKEN>
 | `workflows/registry.py` | 优先级匹配和版本查找 |
 | `workflows/engine.py` | 持久化、任务编排、后处理、Retry、Supersede |
 | `workflows/gitlab_prompt.py` | 默认 GitLab Prompt 工作流和 MR 关联提取 |
+| `workflows/github_prompt.py` | 默认 GitHub Prompt 工作流和 PR 关联提取 |
+| `workflows/prompt_task.py` | 多平台 Prompt 模板渲染与任务规划公共层 |
 | `services/webhooks.py` | Webhook 幂等、事务提交和兼容旧记录 |
 | `services/queue.py` | Task 状态机、队列领取、取消和自动重试 |
 | `services/worker.py` | Agent 执行、协作取消和终态回调 |

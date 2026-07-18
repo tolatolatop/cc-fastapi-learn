@@ -3972,21 +3972,42 @@ main {
   border-right: 1px solid #374245;
 }
 
-.gitlab-glyph {
-  display: grid;
+.provider-glyphs {
+  position: relative;
   width: 36px;
   height: 36px;
   flex: 0 0 auto;
+}
+
+.provider-glyphs > span {
+  position: absolute;
+  display: grid;
+  width: 27px;
+  height: 27px;
   place-items: center;
   color: #fff5ed;
   background: #e85d26;
   border: 1px solid #f07747;
-  border-radius: 10px 10px 12px 12px;
-  box-shadow: 0 7px 17px rgba(232, 93, 38, 0.21);
+  border-radius: 8px;
+  box-shadow: 0 6px 14px rgba(232, 93, 38, 0.18);
   font-family: 'Space Grotesk Variable', sans-serif;
-  font-size: 0.625rem;
+  font-size: 0.5rem;
   font-weight: 700;
   letter-spacing: -0.04em;
+}
+
+.provider-glyphs > span:first-child {
+  top: 0;
+  left: 0;
+}
+
+.provider-glyphs > span:last-child {
+  right: 0;
+  bottom: 0;
+  color: #eef1f2;
+  background: #11191c;
+  border-color: #536064;
+  box-shadow: 0 6px 14px rgba(7, 12, 14, 0.3);
 }
 
 .ingress-source > div:last-child,
@@ -3997,7 +4018,7 @@ main {
   flex-direction: column;
 }
 
-.ingress-source span,
+.ingress-source > div:last-child span,
 .ingress-gateway span,
 .ingress-target span {
   color: #778488;
@@ -4177,8 +4198,8 @@ main {
 
 .webhook-search-tools {
   display: grid;
-  width: min(660px, 66%);
-  grid-template-columns: minmax(250px, 1fr) 175px;
+  width: min(790px, 72%);
+  grid-template-columns: minmax(230px, 1fr) 145px 175px;
   gap: 9px;
 }
 
@@ -4234,6 +4255,23 @@ main {
   border: 0;
   outline: 0;
   font-size: 0.625rem;
+}
+
+.webhook-event-kind {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.webhook-event-kind > small {
+  color: #879397;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 0.4375rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
 }
 
 .webhook-results-meta {
@@ -4783,9 +4821,14 @@ main {
     padding: 0 13px;
   }
 
-  .gitlab-glyph {
+  .provider-glyphs {
     width: 32px;
     height: 32px;
+  }
+
+  .provider-glyphs > span {
+    width: 24px;
+    height: 24px;
   }
 
   .ingress-route {
@@ -4801,7 +4844,7 @@ main {
     height: 38px;
   }
 
-  .ingress-source span,
+  .ingress-source > div:last-child span,
   .ingress-gateway span {
     display: none;
   }
@@ -4829,7 +4872,11 @@ main {
 
   .webhook-search-tools {
     width: 100%;
-    grid-template-columns: 1fr 128px;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .webhook-search {
+    grid-column: 1 / -1;
   }
 
   .webhook-results-meta {

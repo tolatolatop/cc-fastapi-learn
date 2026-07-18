@@ -39,6 +39,7 @@ interface WebhookListOptions {
   offset?: number
   limit?: number
   eventType?: string
+  provider?: string
   query?: string
 }
 
@@ -142,10 +143,11 @@ export const api = {
     ['q', query],
   ])),
   listQueues: () => request<QueueListResponse>('/v1/agent-tasks/queues/available'),
-  listWebhooks: ({ offset = 0, limit = 20, eventType, query }: WebhookListOptions = {}) => request<WebhookTriggerListResponse>(queryPath('/v1/webhooks', [
+  listWebhooks: ({ offset = 0, limit = 20, eventType, provider, query }: WebhookListOptions = {}) => request<WebhookTriggerListResponse>(queryPath('/v1/webhooks', [
     ['offset', offset],
     ['limit', limit],
     ['event_type', eventType],
+    ['provider', provider],
     ['q', query],
   ])),
   getTask: (id: string) => request<TaskItem>(`/v1/agent-tasks/${id}`),

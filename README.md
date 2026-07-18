@@ -42,23 +42,40 @@ Vite 开发服务器会将 `/api` 请求代理到后端。生产镜像使用 Ngi
 基础交互组件使用 React-Bootstrap，颜色、字号和圆角集中配置在
 `frontend/src/bootstrap-theme.scss`；队列、Webhook 和检视轨道等业务可视化仍保留在自定义样式中。
 
-## GitLab Webhook
+## GitLab 与 GitHub Webhook
 
 服务端接收地址：
 
 ```text
 POST /v1/webhooks/gitlab
+POST /v1/webhooks/github
 ```
 
 可通过 `GITLAB_WEBHOOK_SECRET`、`GITLAB_WEBHOOK_PROMPT_TEMPLATE_PATH` 和 `GITLAB_WEBHOOK_QUEUE_NAME` 配置验证密钥、任务提示模板文件及目标队列。默认模板位于 `config/templates/gitlab_webhook_prompt.j2`。控制台中的“Webhook 档案”页面可按项目、分支、事件 UUID、Webhook UUID 或关联任务 ID 检索最近的触发记录，并查看原始 Payload。
+
+GitHub 使用对应的 `GITHUB_WEBHOOK_SECRET`、`GITHUB_WEBHOOK_PROMPT_TEMPLATE_PATH` 和
+`GITHUB_WEBHOOK_QUEUE_NAME`。在 GitHub Webhook 设置中选择 `application/json`，把 Payload URL
+指向 `/v1/webhooks/github`，并让 Secret 与 `GITHUB_WEBHOOK_SECRET` 保持一致。服务按原始请求体校验
+`X-Hub-Signature-256`，使用 `X-GitHub-Delivery` 去重；GitHub Enterprise Server 实例地址从
+`X-GitHub-Enterprise-Host` 记录，普通 GitHub 记录为 `https://github.com`。默认 Prompt 模板位于
+`config/templates/github_webhook_prompt.j2`。
+
+两个平台的 Jinja 模板都可直接读取 Payload 顶层字段，并额外提供 `payload`、`event_type` 和
+`webhook`。控制台支持按平台、事件类型、项目、分支、投递 UUID 或关联任务 ID 检索归档。
 
 ## 工作流扩展
 
 Webhook 事件由工作流注册表匹配，经过 `before` 规划后创建零个、一个或多个任务；任务进入终态后执行 `after_task`。运行、步骤和任务关联分别保存在 `workflow_runs`、`workflow_step_runs` 和 `workflow_task_links` 中。
 
-当前默认工作流是 `GitLabPromptTaskWorkflow`，负责读取 Jinja 模板、拼接 Prompt 并创建 Agent Task。新增业务工作流时继承 `Workflow`，实现 `matches()` 与 `before()`，需要后处理时覆盖 `after_task()`，然后在 `build_default_workflow_engine()` 中注册。默认 GitLab 工作流的优先级最低，因此具体事件工作流会优先匹配。
+当前 `GitLabPromptTaskWorkflow` 和 `GitHubPromptTaskWorkflow` 都基于平台无关的
+`WebhookPromptTaskWorkflow`，负责读取 Jinja 模板、拼接 Prompt 并创建 Agent Task。新增平台时增加
+入口鉴权、平台工作流和配置即可复用统一的触发、幂等、归档和列表逻辑。具体事件工作流使用更高
+优先级注册后，会先于平台兜底工作流匹配。
 
 GitLab Merge Request 事件会按“项目路径 + MR IID”写入 `workflow_correlations`。收到 `object_attributes.action=update` 的事件时，新工作流会在同一事务内取消该 MR 尚在排队或执行中的旧任务，并把旧工作流标记为 `superseded`；已完成的历史任务不会被修改。
+
+GitHub Pull Request 事件会按“仓库全名 + PR 编号”写入同一关联表；收到 `action=synchronize`
+时采用相同的替换规则。
 
 内部服务可按 MR 精确读取关联任务的输入、结果、上下文和工作流信息：
 
@@ -100,7 +117,7 @@ GET   /v1/review-issues/summary
 
 ```text
 GET /v1/agent-tasks?offset=0&limit=20&status=queued&queue=default&q=prompt
-GET /v1/webhooks?offset=0&limit=20&event_type=Push%20Hook&q=project
+GET /v1/webhooks?offset=0&limit=20&provider=github&event_type=pull_request&q=project
 ```
 
 响应中的 `total` 是当前筛选条件下的记录总数，`summary` 提供不受筛选影响的全局状态、队列或事件类型摘要。任务接口可重复传递 `status` 参数以同时查询多个状态。
