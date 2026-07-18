@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from cc_fastapi.db.models import TaskStatus, WorkflowRunStatus
 
 
-class GitLabWebhookResponse(BaseModel):
+class WebhookResponse(BaseModel):
     webhook_id: int
     task_id: str | None
     status: TaskStatus | None
@@ -15,6 +15,14 @@ class GitLabWebhookResponse(BaseModel):
     workflow_run_id: str
     workflow_status: WorkflowRunStatus
     skip_reason: str | None
+
+
+class GitLabWebhookResponse(WebhookResponse):
+    pass
+
+
+class GitHubWebhookResponse(WebhookResponse):
+    pass
 
 
 class WebhookTriggerItemResponse(BaseModel):
@@ -36,6 +44,7 @@ class WebhookTriggerItemResponse(BaseModel):
 class WebhookTriggerListSummaryResponse(BaseModel):
     total: int
     event_types: list[str]
+    providers: list[str]
 
 
 class WebhookTriggerListResponse(BaseModel):

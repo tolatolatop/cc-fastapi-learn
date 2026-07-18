@@ -1,4 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
+import hmac
+import json
 from threading import Barrier
 
 from fastapi import FastAPI
@@ -49,6 +52,14 @@ def webhook_settings(monkeypatch, tmp_path):
         encoding="utf-8",
     )
     monkeypatch.setenv("GITLAB_WEBHOOK_PROMPT_TEMPLATE_PATH", str(template))
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "github-secret")
+    monkeypatch.setenv("GITHUB_WEBHOOK_QUEUE_NAME", "hooks")
+    github_template = tmp_path / "github_webhook_prompt.j2"
+    github_template.write_text(
+        "Review {{ event_type }} for {{ repository.full_name }} by {{ sender.login }}",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GITHUB_WEBHOOK_PROMPT_TEMPLATE_PATH", str(github_template))
     monkeypatch.setenv("API_TOKEN", "")
     get_settings.cache_clear()
     get_queue_config.cache_clear()
@@ -111,6 +122,52 @@ def gitlab_payload(index: int = 1):
         "project": {"path_with_namespace": "group/project"},
         "commits": [{"id": f"commit-{index}"}],
     }
+
+
+def github_payload(index: int = 1):
+    return {
+        "ref": f"refs/heads/feature-{index}",
+        "repository": {"full_name": "octo-org/octo-repo"},
+        "sender": {"login": "octocat"},
+        "commits": [{"id": f"commit-{index}"}],
+    }
+
+
+def github_pull_request_payload(*, number: int = 7, action: str = "opened"):
+    return {
+        "action": action,
+        "number": number,
+        "repository": {"full_name": "octo-org/octo-repo"},
+        "sender": {"login": "octocat"},
+        "pull_request": {
+            "number": number,
+            "head": {"ref": f"feature-{number}", "sha": f"head-{number}"},
+            "base": {"ref": "main"},
+        },
+    }
+
+
+def post_github_webhook(
+    client: TestClient,
+    payload: dict,
+    *,
+    event_type: str = "push",
+    delivery_id: str | None = "github-delivery-1",
+    secret: str = "github-secret",
+    **header_overrides: str,
+):
+    raw_body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "X-GitHub-Event": event_type,
+        "X-GitHub-Hook-ID": "321",
+        "X-Hub-Signature-256": "sha256="
+        + hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest(),
+    }
+    if delivery_id is not None:
+        headers["X-GitHub-Delivery"] = delivery_id
+    headers.update(header_overrides)
+    return client.post("/v1/webhooks/github", headers=headers, content=raw_body)
 
 
 def gitlab_merge_request_payload(
@@ -243,6 +300,143 @@ def test_gitlab_webhook_reuses_task_for_duplicate_webhook_uuid(webhook_settings)
         assert db.scalar(select(func.count()).select_from(WebhookDeduplicationKey)) == 1
         assert db.scalar(select(func.count()).select_from(WorkflowRun)) == 1
         assert db.scalar(select(func.count()).select_from(WorkflowTaskLink)) == 1
+
+
+def test_github_webhook_verifies_signature_creates_task_and_records_metadata():
+    client, session_factory = build_client()
+    payload = github_payload()
+
+    response = post_github_webhook(client, payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "queued"
+    assert body["queue_name"] == "hooks"
+    assert body["deduplicated"] is False
+    with session_factory() as db:
+        task = db.get(AgentTask, body["task_id"])
+        trigger = db.get(WebhookTrigger, body["webhook_id"])
+        run = db.get(WorkflowRun, body["workflow_run_id"])
+        assert task is not None
+        assert trigger is not None
+        assert run is not None
+        assert task.payload["prompt"] == "Review push for octo-org/octo-repo by octocat"
+        assert task.metadata_json == {
+            "trigger": "github_webhook",
+            "github": {
+                "event_type": "push",
+                "event_uuid": "github-delivery-1",
+                "webhook_uuid": "github-delivery-1",
+                "instance_url": "https://github.com",
+                "delivery_id": "github-delivery-1",
+                "hook_id": "321",
+            },
+        }
+        assert trigger.provider == "github"
+        assert trigger.event_uuid == "github-delivery-1"
+        assert trigger.webhook_uuid == "github-delivery-1"
+        assert trigger.instance_url == "https://github.com"
+        assert trigger.payload_json == payload
+        assert run.workflow_name == "github_prompt_task"
+        assert run.provider == "github"
+        assert run.webhook_trigger_id == trigger.id
+
+
+def test_github_webhook_reuses_task_for_duplicate_delivery_id():
+    client, session_factory = build_client()
+
+    first = post_github_webhook(client, github_payload(1), delivery_id="same-delivery")
+    duplicate = post_github_webhook(client, github_payload(2), delivery_id="same-delivery")
+
+    assert first.status_code == 200
+    assert duplicate.status_code == 200
+    assert duplicate.json()["deduplicated"] is True
+    assert duplicate.json()["webhook_id"] == first.json()["webhook_id"]
+    assert duplicate.json()["task_id"] == first.json()["task_id"]
+    with session_factory() as db:
+        assert db.scalar(select(func.count()).select_from(AgentTask)) == 1
+        assert db.scalar(select(func.count()).select_from(WebhookTrigger)) == 1
+        assert db.scalar(select(func.count()).select_from(WebhookDeduplicationKey)) == 1
+
+
+def test_github_delivery_ids_are_scoped_separately_from_gitlab_webhook_uuids():
+    client, session_factory = build_client()
+    shared_id = "shared-provider-id"
+
+    gitlab = client.post(
+        "/v1/webhooks/gitlab",
+        headers=gitlab_headers(**{"X-Gitlab-Webhook-UUID": shared_id}),
+        json=gitlab_payload(),
+    )
+    github = post_github_webhook(client, github_payload(), delivery_id=shared_id)
+
+    assert gitlab.status_code == 200
+    assert github.status_code == 200
+    assert github.json()["deduplicated"] is False
+    assert github.json()["task_id"] != gitlab.json()["task_id"]
+    with session_factory() as db:
+        assert db.scalar(select(func.count()).select_from(WebhookDeduplicationKey)) == 2
+
+
+def test_github_pull_request_synchronize_supersedes_active_workflow():
+    client, session_factory = build_client()
+    opened = post_github_webhook(
+        client,
+        github_pull_request_payload(action="opened"),
+        event_type="pull_request",
+        delivery_id="pr-opened",
+    )
+    synchronized = post_github_webhook(
+        client,
+        github_pull_request_payload(action="synchronize"),
+        event_type="pull_request",
+        delivery_id="pr-synchronize",
+    )
+
+    assert opened.status_code == 200
+    assert synchronized.status_code == 200
+    with session_factory() as db:
+        old_task = db.get(AgentTask, opened.json()["task_id"])
+        old_run = db.get(WorkflowRun, opened.json()["workflow_run_id"])
+        new_run = db.get(WorkflowRun, synchronized.json()["workflow_run_id"])
+        assert old_task is not None and old_task.status == TaskStatus.CANCELLED
+        assert old_run is not None and old_run.status == WorkflowRunStatus.SUPERSEDED
+        assert new_run is not None and new_run.status == WorkflowRunStatus.RUNNING
+        correlations = list(db.scalars(select(WorkflowCorrelation).order_by(WorkflowCorrelation.id)))
+        assert len(correlations) == 2
+        assert all(item.provider == "github" for item in correlations)
+        assert all(item.resource_type == "pull_request" for item in correlations)
+        assert all(item.project_path == "octo-org/octo-repo" for item in correlations)
+        assert all(item.resource_id == "7" for item in correlations)
+
+
+def test_github_webhook_rejects_invalid_signature_without_creating_records():
+    client, session_factory = build_client()
+
+    response = post_github_webhook(client, github_payload(), secret="wrong-secret")
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "invalid github webhook signature"
+    with session_factory() as db:
+        assert db.scalar(select(func.count()).select_from(AgentTask)) == 0
+        assert db.scalar(select(func.count()).select_from(WebhookTrigger)) == 0
+        assert db.scalar(select(func.count()).select_from(WorkflowRun)) == 0
+
+
+def test_github_webhook_records_enterprise_instance_url():
+    client, session_factory = build_client()
+
+    response = post_github_webhook(
+        client,
+        github_payload(),
+        **{"X-GitHub-Enterprise-Host": "github.example.com"},
+    )
+
+    assert response.status_code == 200
+    with session_factory() as db:
+        trigger = db.get(WebhookTrigger, response.json()["webhook_id"])
+        assert trigger is not None
+        assert trigger.instance_url == "https://github.example.com"
 
 
 def test_gitlab_prompt_workflow_completes_after_task_success():
@@ -622,6 +816,7 @@ def test_list_webhook_triggers_supports_pagination():
     assert response.json()["summary"] == {
         "total": 3,
         "event_types": ["Merge Request Hook", "Push Hook"],
+        "providers": ["gitlab"],
     }
 
     searched = client.get("/v1/webhooks", params={"q": "feature-1"})
@@ -633,6 +828,19 @@ def test_list_webhook_triggers_supports_pagination():
     assert filtered.status_code == 200
     assert filtered.json()["total"] == 1
     assert filtered.json()["items"][0]["event_type"] == "Merge Request Hook"
+
+
+def test_list_webhook_triggers_filters_by_provider():
+    client, _ = build_client()
+    client.post("/v1/webhooks/gitlab", headers=gitlab_headers(), json=gitlab_payload())
+    post_github_webhook(client, github_payload())
+
+    response = client.get("/v1/webhooks", params={"provider": "github"})
+
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+    assert response.json()["items"][0]["provider"] == "github"
+    assert response.json()["summary"]["providers"] == ["github", "gitlab"]
 
 
 def test_list_webhook_triggers_uses_api_token(monkeypatch):
