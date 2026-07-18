@@ -400,7 +400,7 @@ class ReviewIssue(Base):
 
 
 class Repository(Base):
-    """A manually managed platform/repository catalog entry."""
+    """A platform/repository catalog entry."""
 
     __tablename__ = "repositories"
     __table_args__ = (

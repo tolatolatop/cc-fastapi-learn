@@ -152,6 +152,11 @@ class RepositoryBulkTagsUpdateResponse(BaseModel):
     total: int
 
 
+class RepositorySyncResponse(BaseModel):
+    items: list[RepositoryResponse]
+    total: int
+
+
 class RepositoryReviewStatisticsResponse(BaseModel):
     review_total: int
     issue_total: int

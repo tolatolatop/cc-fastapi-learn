@@ -9,7 +9,7 @@ from cc_fastapi.api.repositories import router as repository_router
 from cc_fastapi.api.review_issues import batch_router, issue_router
 from cc_fastapi.api.tasks import router as task_router
 from cc_fastapi.core.config import get_settings
-from cc_fastapi.db.models import Base
+from cc_fastapi.db.models import Base, WebhookTrigger
 from cc_fastapi.db.session import get_db
 
 
@@ -41,6 +41,7 @@ def build_client() -> TestClient:
     app.include_router(batch_router)
     app.include_router(issue_router)
     app.include_router(repository_router)
+    app.state.testing_session = testing_session
 
     def override_db():
         db = testing_session()
@@ -51,6 +52,24 @@ def build_client() -> TestClient:
 
     app.dependency_overrides[get_db] = override_db
     return TestClient(app)
+
+
+def create_webhook_trigger(
+    client: TestClient,
+    *,
+    provider: str,
+    payload: dict,
+    event_type: str = "push",
+) -> None:
+    with client.app.state.testing_session() as db:
+        db.add(
+            WebhookTrigger(
+                provider=provider,
+                event_type=event_type,
+                payload_json=payload,
+            )
+        )
+        db.commit()
 
 
 def create_task(client: TestClient, prompt: str) -> str:
@@ -171,6 +190,93 @@ def test_repository_list_filters_tags_and_paginates():
     assert len(paged.json()["items"]) == 1
 
 
+def test_repository_sync_adds_distinct_webhook_repositories_with_empty_tags():
+    client = build_client()
+    existing = client.post(
+        "/v1/repositories",
+        json={
+            "provider": "gitlab",
+            "project_path": "group/existing",
+            "web_url": "https://gitlab.example.com/group/existing",
+            "tags": ["keep-me"],
+        },
+    ).json()
+    create_webhook_trigger(
+        client,
+        provider="gitlab",
+        payload={
+            "project": {
+                "path_with_namespace": "Group/Existing",
+                "web_url": "https://new.example.com/group/existing",
+            }
+        },
+    )
+    create_webhook_trigger(
+        client,
+        provider=" GitLab ",
+        payload={
+            "project": {
+                "path_with_namespace": "/Group/New-API/",
+                "web_url": "https://gitlab.example.com/Group/New-API/",
+            }
+        },
+    )
+    create_webhook_trigger(
+        client,
+        provider="gitlab",
+        payload={"project": {"path_with_namespace": "group/new-api"}},
+        event_type="Merge Request Hook",
+    )
+    create_webhook_trigger(
+        client,
+        provider="github",
+        payload={
+            "repository": {
+                "full_name": "Octo-Org/Frontend",
+                "html_url": "https://github.com/Octo-Org/Frontend/",
+            }
+        },
+    )
+    create_webhook_trigger(client, provider="github", payload={"repository": {}})
+    create_webhook_trigger(
+        client,
+        provider="unsupported",
+        payload={"repository": {"full_name": "org/ignored"}},
+    )
+
+    synced = client.post("/v1/repositories/sync")
+
+    assert synced.status_code == 200
+    assert synced.json()["total"] == 2
+    by_key = {
+        (item["provider"], item["project_path"]): item
+        for item in synced.json()["items"]
+    }
+    assert set(by_key) == {
+        ("gitlab", "group/new-api"),
+        ("github", "octo-org/frontend"),
+    }
+    assert all(item["tags"] == [] for item in by_key.values())
+    assert (
+        by_key[("gitlab", "group/new-api")]["web_url"]
+        == "https://gitlab.example.com/Group/New-API"
+    )
+    assert (
+        by_key[("github", "octo-org/frontend")]["web_url"]
+        == "https://github.com/Octo-Org/Frontend"
+    )
+
+    listed = client.get("/v1/repositories", params={"limit": 200}).json()
+    assert listed["total"] == 3
+    unchanged = next(item for item in listed["items"] if item["id"] == existing["id"])
+    assert unchanged["tags"] == ["keep-me"]
+    assert unchanged["web_url"] == "https://gitlab.example.com/group/existing"
+
+    repeated = client.post("/v1/repositories/sync")
+    assert repeated.status_code == 200
+    assert repeated.json() == {"items": [], "total": 0}
+
+
 @pytest.mark.parametrize(
     ("payload", "expected_status"),
     [
@@ -225,6 +331,7 @@ def test_repository_api_requires_configured_token(monkeypatch):
     client = build_client()
 
     assert client.get("/v1/repositories").status_code == 401
+    assert client.post("/v1/repositories/sync").status_code == 401
     authorized = client.get(
         "/v1/repositories",
         headers={"X-API-Token": "repository-secret"},

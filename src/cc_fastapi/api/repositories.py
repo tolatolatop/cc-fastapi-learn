@@ -13,6 +13,7 @@ from cc_fastapi.schemas.repositories import (
     RepositoryOverviewListResponse,
     RepositoryOverviewSummaryResponse,
     RepositoryResponse,
+    RepositorySyncResponse,
     RepositoryTagsReplaceRequest,
     RepositoryUpdateRequest,
 )
@@ -56,6 +57,17 @@ def create_repository(
         _raise_service_error(exc)
         raise AssertionError("unreachable")
     return RepositoryResponse.model_validate(repository)
+
+
+@router.post("/sync", response_model=RepositorySyncResponse)
+def sync_repositories_from_webhooks(
+    db: Session = Depends(get_db),
+) -> RepositorySyncResponse:
+    items = repositories.sync_from_webhooks(db)
+    return RepositorySyncResponse(
+        items=[RepositoryResponse.model_validate(item) for item in items],
+        total=len(items),
+    )
 
 
 @router.get("", response_model=RepositoryListResponse)

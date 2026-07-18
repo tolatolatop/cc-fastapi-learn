@@ -67,6 +67,16 @@ GitHub 使用对应的 `GITHUB_WEBHOOK_SECRET`、`GITHUB_WEBHOOK_PROMPT_TEMPLATE
 PR/MR 基本信息。平台差异集中在 GitHub/GitLab Adapter；仓库同步、工作流关联和控制台摘要只读取
 标准化投影。Webhook 列表响应中的 `parsed_payload` 提供这份投影，`payload` 字段仍保留原始内容。
 
+已归档的 GitLab/GitHub Webhook 仓库可同步到仓库管理目录：
+
+```text
+POST /v1/repositories/sync
+```
+
+接口按平台和仓库路径去重，只创建尚未登记的仓库，并将新仓库的 Tags 初始化为空；已有仓库及
+其 Tags 不会被修改。同步接口与其他仓库 API 一样使用 `X-API-Token` 鉴权，也可通过控制台
+“仓库管理”页面右上角的“同步 Webhook 仓库”按钮触发。
+
 ## 工作流扩展
 
 Webhook 事件由工作流注册表匹配，经过 `before` 规划后创建零个、一个或多个任务；任务进入终态后执行 `after_task`。运行、步骤和任务关联分别保存在 `workflow_runs`、`workflow_step_runs` 和 `workflow_task_links` 中。

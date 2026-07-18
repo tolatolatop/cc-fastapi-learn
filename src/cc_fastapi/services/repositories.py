@@ -1,3 +1,4 @@
+from dataclasses import replace
 from typing import Any
 
 from sqlalchemy import and_, case, func, or_, select
@@ -9,11 +10,13 @@ from cc_fastapi.core.repository_values import (
     normalize_repository_search,
     normalize_repository_tags,
 )
+from cc_fastapi.core.webhook_payloads import WebhookPayload, WebhookRepository
 from cc_fastapi.db.models import (
     Repository,
     ReviewIssue,
     ReviewIssueBatch,
     ReviewIssueVerificationStatus,
+    WebhookTrigger,
     utc_now,
 )
 
@@ -61,6 +64,58 @@ class RepositoryService:
             ) from exc
         db.refresh(repository)
         return repository
+
+    def sync_from_webhooks(self, db: Session) -> list[Repository]:
+        discovered: dict[tuple[str, str], WebhookRepository] = {}
+        webhook_rows = db.execute(
+            select(
+                WebhookTrigger.provider,
+                WebhookTrigger.event_type,
+                WebhookTrigger.payload_json,
+            ).order_by(WebhookTrigger.created_at.desc(), WebhookTrigger.id.desc())
+        ).tuples()
+        for provider, event_type, payload in webhook_rows:
+            if not isinstance(payload, dict):
+                continue
+            parsed_payload = WebhookPayload.from_payload(provider, event_type, payload)
+            if parsed_payload is None or parsed_payload.repository is None:
+                continue
+            repository = parsed_payload.repository
+            key = (parsed_payload.provider, repository.project_path)
+            current = discovered.setdefault(key, repository)
+            if current.web_url is None and repository.web_url is not None:
+                discovered[key] = replace(current, web_url=repository.web_url)
+
+        for attempt in range(2):
+            existing = set(
+                db.execute(
+                    select(Repository.provider, Repository.project_path)
+                ).tuples()
+            )
+            created = [
+                Repository(
+                    provider=key[0],
+                    project_path=repository.project_path,
+                    web_url=repository.web_url,
+                    tags=[],
+                )
+                for key, repository in discovered.items()
+                if key not in existing
+            ]
+            if not created:
+                return []
+            db.add_all(created)
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                if attempt == 0:
+                    continue
+                raise
+            for repository in created:
+                db.refresh(repository)
+            return created
+        return []
 
     @staticmethod
     def get(db: Session, repository_id: str) -> Repository | None:
