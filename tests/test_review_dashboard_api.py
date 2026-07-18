@@ -8,6 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from cc_fastapi.api.review_dashboard import router as dashboard_router
+from cc_fastapi.api.repositories import router as repository_router
 from cc_fastapi.api.review_issues import batch_router, issue_router
 from cc_fastapi.api.tasks import router as task_router
 from cc_fastapi.core.config import get_settings
@@ -51,6 +52,7 @@ def build_client() -> TestClient:
     app.include_router(task_router)
     app.include_router(batch_router)
     app.include_router(issue_router)
+    app.include_router(repository_router)
     app.include_router(dashboard_router)
 
     def override_db():
@@ -77,14 +79,15 @@ def create_batch(
     review_task_id: str,
     extract_task_id: str | None = None,
     verify_task_id: str | None = None,
+    project_path: str = "group/project",
 ) -> dict:
     response = client.post(
         "/v1/review-issue-batches",
         json={
             "provider": "gitlab",
-            "project_path": "group/project",
+            "project_path": project_path,
             "pr_number": pr_number,
-            "pr_url": f"https://gitlab.example.com/group/project/-/merge_requests/{pr_number}",
+            "pr_url": f"https://gitlab.example.com/{project_path}/-/merge_requests/{pr_number}",
             "review_task_id": review_task_id,
             "extract_task_id": extract_task_id,
             "review_head_sha": f"review-{pr_number}",
@@ -268,3 +271,66 @@ def test_review_dashboard_validates_dates_and_paginates_pull_requests():
         },
     )
     assert missing.status_code == 404
+
+
+def test_review_dashboard_filters_by_repository_tag():
+    client = build_client()
+    repositories = [
+        ("group/project", ["core", "重点项目"]),
+        ("group/other", ["frontend"]),
+    ]
+    for project_path, tags in repositories:
+        created = client.post(
+            "/v1/repositories",
+            json={
+                "provider": "gitlab",
+                "project_path": project_path,
+                "tags": tags,
+            },
+        )
+        assert created.status_code == 201
+
+        task = create_task(client, f"review {project_path}")
+        batch = create_batch(
+            client,
+            pr_number="1",
+            review_task_id=task,
+            project_path=project_path,
+        )
+        issues = client.post(
+            f"/v1/review-issue-batches/{batch['id']}/issues",
+            json={
+                "items": [
+                    {
+                        "severity": "medium",
+                        "title": f"issue in {project_path}",
+                        "description": "tag filter fixture",
+                    }
+                ]
+            },
+        )
+        assert issues.status_code == 201
+
+    unfiltered = client.get("/v1/review-dashboard")
+    assert unfiltered.status_code == 200
+    assert unfiltered.json()["tags"] == ["core", "frontend", "重点项目"]
+    assert unfiltered.json()["total"] == 2
+
+    filtered = client.get("/v1/review-dashboard", params={"tag": " CORE "})
+    assert filtered.status_code == 200
+    payload = filtered.json()
+    assert payload["total"] == 1
+    assert payload["summary"]["issue_total"] == 1
+    assert payload["items"][0]["project_path"] == "group/project"
+    assert payload["tags"] == ["core", "frontend", "重点项目"]
+
+    unknown = client.get("/v1/review-dashboard", params={"tag": "unknown"})
+    assert unknown.status_code == 200
+    assert unknown.json()["total"] == 0
+    assert unknown.json()["summary"]["issue_total"] == 0
+    assert unknown.json()["items"] == []
+    assert unknown.json()["tags"] == ["core", "frontend", "重点项目"]
+
+    invalid = client.get("/v1/review-dashboard", params={"tag": " "})
+    assert invalid.status_code == 422
+    assert invalid.json()["detail"] == "tag must not be blank"

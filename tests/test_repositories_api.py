@@ -5,7 +5,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from cc_fastapi.api.repositories import router
+from cc_fastapi.api.repositories import router as repository_router
+from cc_fastapi.api.review_issues import batch_router, issue_router
+from cc_fastapi.api.tasks import router as task_router
 from cc_fastapi.core.config import get_settings
 from cc_fastapi.db.models import Base
 from cc_fastapi.db.session import get_db
@@ -35,7 +37,10 @@ def build_client() -> TestClient:
     Base.metadata.create_all(bind=engine)
 
     app = FastAPI()
-    app.include_router(router)
+    app.include_router(task_router)
+    app.include_router(batch_router)
+    app.include_router(issue_router)
+    app.include_router(repository_router)
 
     def override_db():
         db = testing_session()
@@ -48,6 +53,12 @@ def build_client() -> TestClient:
     return TestClient(app)
 
 
+def create_task(client: TestClient, prompt: str) -> str:
+    response = client.post("/v1/agent-tasks", json={"prompt": prompt})
+    assert response.status_code == 200
+    return response.json()["task_id"]
+
+
 def test_repository_crud_uniqueness_and_normalization():
     client = build_client()
     created = client.post(
@@ -55,6 +66,7 @@ def test_repository_crud_uniqueness_and_normalization():
         json={
             "provider": " GitLab ",
             "project_path": "/Group/Project/",
+            "web_url": "https://gitlab.example.com/Group/Project/",
             "tags": ["Backend", "重点项目", " backend "],
         },
     )
@@ -63,6 +75,7 @@ def test_repository_crud_uniqueness_and_normalization():
     repository_id = repository["id"]
     assert repository["provider"] == "gitlab"
     assert repository["project_path"] == "group/project"
+    assert repository["web_url"] == "https://gitlab.example.com/Group/Project"
     assert repository["tags"] == ["backend", "重点项目"]
 
     fetched = client.get(f"/v1/repositories/{repository_id}")
@@ -98,12 +111,14 @@ def test_repository_crud_uniqueness_and_normalization():
         json={
             "provider": "GitLab-Corp",
             "project_path": "/Team/API/",
+            "web_url": None,
             "tags": ["Core", "核心"],
         },
     )
     assert updated.status_code == 200
     assert updated.json()["provider"] == "gitlab-corp"
     assert updated.json()["project_path"] == "team/api"
+    assert updated.json()["web_url"] is None
     assert updated.json()["tags"] == ["core", "核心"]
     assert updated.json()["updated_at"] >= updated.json()["created_at"]
 
@@ -215,3 +230,186 @@ def test_repository_api_requires_configured_token(monkeypatch):
         headers={"X-API-Token": "repository-secret"},
     )
     assert authorized.status_code == 200
+
+
+def test_repository_overview_aggregates_reviews_and_issues():
+    client = build_client()
+    repository = client.post(
+        "/v1/repositories",
+        json={
+            "provider": "gitlab",
+            "project_path": "group/project",
+            "web_url": "https://gitlab.example.com/group/project",
+            "tags": ["backend"],
+        },
+    ).json()
+    assert client.post(
+        "/v1/repositories",
+        json={
+            "provider": "github",
+            "project_path": "org/empty",
+            "tags": ["frontend"],
+        },
+    ).status_code == 201
+
+    review_task = create_task(client, "review repository")
+    verify_task = create_task(client, "verify repository")
+    batch = client.post(
+        "/v1/review-issue-batches",
+        json={
+            "provider": "gitlab",
+            "project_path": "group/project",
+            "pr_number": "42",
+            "review_task_id": review_task,
+            "review_head_sha": "review-sha",
+        },
+    ).json()
+    issues = client.post(
+        f"/v1/review-issue-batches/{batch['id']}/issues",
+        json={
+            "items": [
+                {"severity": "high", "title": "accepted", "description": "fixed"},
+                {
+                    "severity": "medium",
+                    "title": "unhandled",
+                    "description": "not fixed",
+                },
+                {"severity": "low", "title": "pending", "description": "pending"},
+            ]
+        },
+    ).json()["items"]
+    assert client.patch(
+        f"/v1/review-issue-batches/{batch['id']}",
+        json={
+            "status": "verifying",
+            "merged_sha": "merged-sha",
+            "verify_task_id": verify_task,
+        },
+    ).status_code == 200
+    assert client.patch(
+        f"/v1/review-issue-batches/{batch['id']}/issues",
+        json={
+            "items": [
+                {"id": issues[0]["id"], "status": "accepted"},
+                {"id": issues[1]["id"], "status": "not_accepted"},
+            ]
+        },
+    ).status_code == 200
+
+    zero_task = create_task(client, "second review repository")
+    zero_batch = client.post(
+        "/v1/review-issue-batches",
+        json={
+            "provider": "gitlab",
+            "project_path": "group/project",
+            "pr_number": "43",
+            "review_task_id": zero_task,
+        },
+    ).json()
+    assert client.post(
+        f"/v1/review-issue-batches/{zero_batch['id']}/issues",
+        json={"items": []},
+    ).status_code == 201
+
+    response = client.get("/v1/repositories/overview")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 2
+    assert payload["summary"] == {
+        "repository_total": 2,
+        "review_total": 2,
+        "issue_total": 3,
+        "accepted_issues": 1,
+        "unhandled_issues": 1,
+        "pending_issues": 1,
+        "providers": ["github", "gitlab"],
+        "tags": ["backend", "frontend"],
+    }
+    by_id = {item["id"]: item for item in payload["items"]}
+    assert by_id[repository["id"]]["review_statistics"] == {
+        "review_total": 2,
+        "issue_total": 3,
+        "accepted_issues": 1,
+        "unhandled_issues": 1,
+        "pending_issues": 1,
+    }
+    empty = next(item for item in payload["items"] if item["provider"] == "github")
+    assert empty["review_statistics"]["review_total"] == 0
+    assert empty["review_statistics"]["issue_total"] == 0
+
+    filtered = client.get(
+        "/v1/repositories/overview",
+        params={"provider": "gitlab", "tag": "backend"},
+    )
+    assert filtered.status_code == 200
+    assert filtered.json()["total"] == 1
+    assert filtered.json()["summary"]["repository_total"] == 1
+    assert filtered.json()["summary"]["issue_total"] == 3
+
+
+def test_repository_tags_support_replace_remove_and_atomic_bulk_updates():
+    client = build_client()
+    first = client.post(
+        "/v1/repositories",
+        json={
+            "provider": "gitlab",
+            "project_path": "group/first",
+            "tags": ["old", "shared"],
+        },
+    ).json()
+    second = client.post(
+        "/v1/repositories",
+        json={
+            "provider": "gitlab",
+            "project_path": "group/second",
+            "tags": ["shared"],
+        },
+    ).json()
+
+    replaced = client.put(
+        f"/v1/repositories/{first['id']}/tags",
+        json={"tags": ["release", "重要", "release"]},
+    )
+    assert replaced.status_code == 200
+    assert replaced.json()["tags"] == ["release", "重要"]
+
+    bulk = client.patch(
+        "/v1/repositories/tags",
+        json={
+            "repository_ids": [first["id"], second["id"]],
+            "add_tags": ["Core", "新标签"],
+            "remove_tags": ["release", "shared"],
+        },
+    )
+    assert bulk.status_code == 200
+    assert bulk.json()["total"] == 2
+    by_id = {item["id"]: item for item in bulk.json()["items"]}
+    assert by_id[first["id"]]["tags"] == ["重要", "core", "新标签"]
+    assert by_id[second["id"]]["tags"] == ["core", "新标签"]
+    listed = client.get("/v1/repositories").json()
+    assert "新标签" in listed["summary"]["tags"]
+    assert "shared" not in listed["summary"]["tags"]
+
+    before_failure = client.get(f"/v1/repositories/{first['id']}").json()["tags"]
+    failed = client.patch(
+        "/v1/repositories/tags",
+        json={
+            "repository_ids": [first["id"], "missing-repository"],
+            "add_tags": ["must-not-apply"],
+        },
+    )
+    assert failed.status_code == 404
+    assert client.get(f"/v1/repositories/{first['id']}").json()["tags"] == before_failure
+
+    overlap = client.patch(
+        "/v1/repositories/tags",
+        json={
+            "repository_ids": [first["id"]],
+            "add_tags": ["same"],
+            "remove_tags": ["same"],
+        },
+    )
+    assert overlap.status_code == 422
+    assert client.put(
+        f"/v1/repositories/{second['id']}/tags", json={"tags": []}
+    ).status_code == 200

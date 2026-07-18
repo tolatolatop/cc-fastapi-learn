@@ -2,11 +2,13 @@ from collections import defaultdict
 from datetime import date, datetime
 from typing import Any, Literal
 
-from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy import and_, case, false, func, or_, select, tuple_
 from sqlalchemy.orm import Session
 
+from cc_fastapi.core.repository_values import normalize_repository_tags
 from cc_fastapi.db.models import (
     AgentTask,
+    Repository,
     ReviewIssue,
     ReviewIssueBatch,
     ReviewIssueVerificationStatus,
@@ -15,6 +17,10 @@ from cc_fastapi.db.models import (
 
 
 ReviewDashboardOutcome = Literal["all", "accepted", "unhandled", "pending"]
+
+
+class ReviewDashboardFilterError(Exception):
+    pass
 
 
 class ReviewDashboardService:
@@ -36,6 +42,36 @@ class ReviewDashboardService:
         if created_to is not None:
             filters.append(ReviewIssueBatch.created_at <= created_to)
         return filters
+
+    @staticmethod
+    def _tag_filter(db: Session, tag: str | None):
+        if tag is None:
+            return None
+        try:
+            normalized_tag = normalize_repository_tags([tag])[0]
+        except ValueError as exc:
+            raise ReviewDashboardFilterError(str(exc)) from exc
+        repository_keys = [
+            (repository.provider, repository.project_path)
+            for repository in db.scalars(select(Repository))
+            if normalized_tag in repository.tags
+        ]
+        if not repository_keys:
+            return false()
+        return tuple_(
+            ReviewIssueBatch.provider,
+            ReviewIssueBatch.project_path,
+        ).in_(repository_keys)
+
+    @staticmethod
+    def _tags(db: Session) -> list[str]:
+        return sorted(
+            {
+                tag
+                for repository in db.scalars(select(Repository))
+                for tag in repository.tags
+            }
+        )
 
     @staticmethod
     def _pull_request_statistics(filters: list[Any]):
@@ -270,6 +306,7 @@ class ReviewDashboardService:
         *,
         provider: str | None,
         project_path: str | None,
+        tag: str | None,
         created_from: datetime | None,
         created_to: datetime | None,
         outcome: ReviewDashboardOutcome,
@@ -282,6 +319,9 @@ class ReviewDashboardService:
             created_from=created_from,
             created_to=created_to,
         )
+        tag_filter = self._tag_filter(db, tag)
+        if tag_filter is not None:
+            filters.append(tag_filter)
         statistics = self._pull_request_statistics(filters).subquery()
         outcome_filter = self._outcome_filter(statistics, outcome)
         item_query = select(statistics)
@@ -371,6 +411,7 @@ class ReviewDashboardService:
             "summary": self._summary(db, statistics),
             "timeline": self._timeline(db, filters),
             "repositories": self._repositories(db),
+            "tags": self._tags(db),
             "items": items,
             "total": int(total),
         }

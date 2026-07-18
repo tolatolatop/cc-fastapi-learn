@@ -4,10 +4,16 @@ from sqlalchemy.orm import Session
 from cc_fastapi.api.dependencies import require_token
 from cc_fastapi.db.session import get_db
 from cc_fastapi.schemas.repositories import (
+    RepositoryBulkTagsUpdateRequest,
+    RepositoryBulkTagsUpdateResponse,
     RepositoryCreateRequest,
     RepositoryListResponse,
     RepositoryListSummaryResponse,
+    RepositoryOverviewItemResponse,
+    RepositoryOverviewListResponse,
+    RepositoryOverviewSummaryResponse,
     RepositoryResponse,
+    RepositoryTagsReplaceRequest,
     RepositoryUpdateRequest,
 )
 from cc_fastapi.services.repositories import (
@@ -85,6 +91,61 @@ def list_repositories(
     )
 
 
+@router.get("/overview", response_model=RepositoryOverviewListResponse)
+def list_repository_overview(
+    provider: str | None = Query(default=None, max_length=32),
+    search: str | None = Query(default=None, alias="q", max_length=200),
+    tags: list[str] | None = Query(default=None, alias="tag"),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=200),
+    db: Session = Depends(get_db),
+) -> RepositoryOverviewListResponse:
+    try:
+        items, total, statistics, summary = repositories.list_overview(
+            db,
+            provider=provider,
+            search=search,
+            tags=tags,
+            offset=offset,
+            limit=limit,
+        )
+    except RepositoryFilterError as exc:
+        _raise_service_error(exc)
+        raise AssertionError("unreachable")
+    return RepositoryOverviewListResponse(
+        items=[
+            RepositoryOverviewItemResponse(
+                **RepositoryResponse.model_validate(item).model_dump(),
+                review_statistics=statistics[item.id],
+            )
+            for item in items
+        ],
+        total=total,
+        summary=RepositoryOverviewSummaryResponse(**summary),
+    )
+
+
+@router.patch("/tags", response_model=RepositoryBulkTagsUpdateResponse)
+def bulk_update_repository_tags(
+    payload: RepositoryBulkTagsUpdateRequest,
+    db: Session = Depends(get_db),
+) -> RepositoryBulkTagsUpdateResponse:
+    try:
+        items = repositories.bulk_update_tags(
+            db,
+            payload.repository_ids,
+            add_tags=payload.add_tags,
+            remove_tags=payload.remove_tags,
+        )
+    except (RepositoryNotFoundError, RepositoryFilterError) as exc:
+        _raise_service_error(exc)
+        raise AssertionError("unreachable")
+    return RepositoryBulkTagsUpdateResponse(
+        items=[RepositoryResponse.model_validate(item) for item in items],
+        total=len(items),
+    )
+
+
 @router.get("/{repository_id}", response_model=RepositoryResponse)
 def get_repository(
     repository_id: str,
@@ -96,6 +157,20 @@ def get_repository(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="repository not found",
         )
+    return RepositoryResponse.model_validate(repository)
+
+
+@router.put("/{repository_id}/tags", response_model=RepositoryResponse)
+def replace_repository_tags(
+    repository_id: str,
+    payload: RepositoryTagsReplaceRequest,
+    db: Session = Depends(get_db),
+) -> RepositoryResponse:
+    try:
+        repository = repositories.replace_tags(db, repository_id, payload.tags)
+    except RepositoryNotFoundError as exc:
+        _raise_service_error(exc)
+        raise AssertionError("unreachable")
     return RepositoryResponse.model_validate(repository)
 
 

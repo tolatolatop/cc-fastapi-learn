@@ -1,4 +1,5 @@
 import unicodedata
+from urllib.parse import urlsplit
 
 
 MAX_REPOSITORY_TAGS = 50
@@ -45,3 +46,17 @@ def normalize_repository_tags(values: list[str]) -> list[str]:
 
 def normalize_repository_search(value: str) -> str:
     return unicodedata.normalize("NFKC", value).strip().casefold()
+
+
+def normalize_repository_web_url(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = unicodedata.normalize("NFKC", value).strip().rstrip("/")
+    if not normalized:
+        return None
+    parsed = urlsplit(normalized)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("web_url must be an absolute HTTP or HTTPS URL")
+    if len(normalized) > 2048:
+        raise ValueError("web_url must not exceed 2048 characters")
+    return normalized

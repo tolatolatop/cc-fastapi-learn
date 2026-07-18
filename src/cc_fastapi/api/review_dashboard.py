@@ -11,7 +11,10 @@ from cc_fastapi.schemas.review_dashboard import (
     ReviewDashboardResponse,
 )
 from cc_fastapi.schemas.review_issues import ReviewIssueBatchResponse
-from cc_fastapi.services.review_dashboard import ReviewDashboardService
+from cc_fastapi.services.review_dashboard import (
+    ReviewDashboardFilterError,
+    ReviewDashboardService,
+)
 
 
 router = APIRouter(
@@ -26,6 +29,7 @@ dashboard_service = ReviewDashboardService()
 def get_review_dashboard(
     provider: str | None = Query(default=None, max_length=32),
     project_path: str | None = Query(default=None, max_length=255),
+    tag: str | None = Query(default=None, max_length=64),
     created_from: datetime | None = None,
     created_to: datetime | None = None,
     outcome: Literal["all", "accepted", "unhandled", "pending"] = "all",
@@ -38,18 +42,25 @@ def get_review_dashboard(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="created_from must not be later than created_to",
         )
-    return ReviewDashboardResponse(
-        **dashboard_service.dashboard(
-            db,
-            provider=provider,
-            project_path=project_path,
-            created_from=created_from,
-            created_to=created_to,
-            outcome=outcome,
-            offset=offset,
-            limit=limit,
+    try:
+        return ReviewDashboardResponse(
+            **dashboard_service.dashboard(
+                db,
+                provider=provider,
+                project_path=project_path,
+                tag=tag,
+                created_from=created_from,
+                created_to=created_to,
+                outcome=outcome,
+                offset=offset,
+                limit=limit,
+            )
         )
-    )
+    except ReviewDashboardFilterError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
 
 
 @router.get("/pull-request", response_model=ReviewDashboardPullRequestDetailResponse)

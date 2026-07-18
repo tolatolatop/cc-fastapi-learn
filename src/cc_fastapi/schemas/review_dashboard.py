@@ -67,6 +67,7 @@ class ReviewDashboardResponse(BaseModel):
     summary: ReviewDashboardSummaryResponse
     timeline: list[ReviewDashboardTrendPointResponse]
     repositories: list[ReviewDashboardRepositoryResponse]
+    tags: list[str]
     items: list[ReviewDashboardPullRequestResponse]
     total: int
 

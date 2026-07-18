@@ -415,6 +415,7 @@ class Repository(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
     project_path: Mapped[str] = mapped_column(String(255), nullable=False)
+    web_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     tags: Mapped[list[str]] = mapped_column(
         MySQLJSON().with_variant(JSON, "sqlite"), nullable=False, default=list
     )
