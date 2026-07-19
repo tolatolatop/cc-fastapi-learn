@@ -20,6 +20,9 @@ dependencies = [
     "psycopg-binary (>=3.3.3,<4.0.0)",
 ]
 
+[project.scripts]
+cc-fastapi-admin = "cc_fastapi.cli:main"
+
 [tool.poetry]
 packages = [{include = "cc_fastapi", from = "src"}]
 

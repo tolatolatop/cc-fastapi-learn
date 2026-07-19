@@ -91,13 +91,39 @@ GitLab Merge Request 事件会按“项目路径 + MR IID”写入 `workflow_cor
 GitHub Pull Request 事件会按“仓库全名 + PR 编号”写入同一关联表；收到 `action=synchronize`
 时采用相同的替换规则。
 
-内部服务可按 MR 精确读取关联任务的输入、结果、上下文和工作流信息：
+内部服务可按 PR/MR 列出最近变更请求，并精确读取任务结果和完整工作流历史：
 
 ```text
+GET /v1/internal/change-requests?provider=github&state=open&offset=0&limit=20
+GET /v1/internal/change-requests/detail?provider=github&project_path=org/project&pr_number=42&task_status=succeeded
 GET /v1/internal/gitlab/merge-request-tasks?project_path=group/project&merge_request_iid=123
 ```
 
-接口支持 `offset`、`limit`，并与任务 API 一样通过 `X-API-Token` 使用 `API_TOKEN` 鉴权。
+列表按不同 PR/MR 分页；详情包含无 Task 的 skipped/failed Workflow，并可按 Task、Workflow、Role、
+活跃状态和时间过滤。旧 GitLab 路由作为兼容入口保留。接口与任务 API 一样通过
+`X-API-Token` 使用 `API_TOKEN` 鉴权。
+
+## Agent 管理 CLI
+
+安装项目后可使用 PR-centric 管理命令。客户端连接配置与服务端 `API_TOKEN` 分离：
+
+```bash
+export CC_FASTAPI_BASE_URL=http://localhost:18000
+export CC_FASTAPI_TOKEN=your-token
+```
+
+```text
+cc-fastapi-admin pr recent --limit 10
+cc-fastapi-admin pr show github org/project 42 --task-status succeeded
+cc-fastapi-admin pr collect github org/project 42 --input issues.json
+cc-fastapi-admin pr verify github org/project 42 --input results.json
+```
+
+`collect` 输入为 `{"issues": [...]}`，支持最多 500 个问题；未指定 `--task-id` 时只使用该 PR
+最新的 active+succeeded Task。`verify` 输入为
+`{"results": [{"issue_no": 1, "status": "accepted", "note": "..."}]}`，在批次内把
+`issue_no` 映射为内部 UUID，单次最多处理 500 条。两条写命令都支持 `--input -` 从 stdin
+读取，重试时会读取最终状态并进行幂等校验。
 
 ## 检视问题统计 API
 
