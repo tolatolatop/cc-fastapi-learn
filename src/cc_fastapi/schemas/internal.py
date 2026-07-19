@@ -17,6 +17,7 @@ class MergeRequestTaskItemResponse(BaseModel):
     claude_agent_options: dict[str, Any]
     metadata: dict[str, Any] | None
     result: dict[str, Any] | None
+    output_text: str | None
     agent_mode: bool
     unattended: bool
     attempt: int
@@ -52,3 +53,55 @@ class MergeRequestTaskItemResponse(BaseModel):
 class MergeRequestTaskListResponse(BaseModel):
     items: list[MergeRequestTaskItemResponse]
     total: int
+
+
+class ChangeRequestLatestTaskResponse(BaseModel):
+    id: str
+    status: TaskStatus
+    session_id: str | None
+    created_at: datetime
+    finished_at: datetime | None
+
+
+class ChangeRequestWorkflowResponse(BaseModel):
+    id: str
+    workflow_name: str
+    workflow_version: str
+    status: WorkflowRunStatus
+    event_type: str
+    skip_reason: str | None
+    error_message: str | None
+    created_at: datetime
+    updated_at: datetime
+    finished_at: datetime | None
+
+
+class ChangeRequestResponse(BaseModel):
+    provider: str
+    resource_type: str
+    project_path: str
+    pr_number: str
+    title: str | None
+    url: str | None
+    state: str
+    status_source: str
+    action: str | None
+    source_branch: str | None
+    target_branch: str | None
+    head_sha: str | None
+    merged_sha: str | None
+    last_activity_at: datetime
+    latest_workflow: ChangeRequestWorkflowResponse
+    latest_task: ChangeRequestLatestTaskResponse | None
+
+
+class ChangeRequestListResponse(BaseModel):
+    items: list[ChangeRequestResponse]
+    total: int
+
+
+class ChangeRequestDetailResponse(BaseModel):
+    change_request: ChangeRequestResponse
+    workflow_runs: list[ChangeRequestWorkflowResponse]
+    tasks: list[MergeRequestTaskItemResponse]
+    task_total: int

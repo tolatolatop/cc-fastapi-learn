@@ -272,6 +272,44 @@ def test_zero_issue_batch_is_recorded_and_reference_errors_are_reported():
     assert summary.json()["acceptance_rate"] is None
 
 
+def test_batch_status_transitions_are_guarded_and_review_task_is_filterable():
+    client = build_client()
+    review_task_id = create_task(client, "review guarded transitions")
+    batch = create_batch(client, review_task_id, pr_number="44").json()
+
+    skipped_collection = client.patch(
+        f"/v1/review-issue-batches/{batch['id']}",
+        json={"status": "completed", "merged_sha": "merge-44"},
+    )
+    assert skipped_collection.status_code == 409
+    assert "cannot transition" in skipped_collection.json()["detail"]
+
+    filtered = client.get(
+        "/v1/review-issue-batches",
+        params={"review_task_id": review_task_id},
+    )
+    assert filtered.status_code == 200
+    assert filtered.json()["total"] == 1
+    assert filtered.json()["items"][0]["id"] == batch["id"]
+
+    assert client.post(
+        f"/v1/review-issue-batches/{batch['id']}/issues",
+        json={"items": []},
+    ).status_code == 201
+    completed = client.patch(
+        f"/v1/review-issue-batches/{batch['id']}",
+        json={"status": "completed", "merged_sha": "merge-44"},
+    )
+    assert completed.status_code == 200
+
+    reopened = client.patch(
+        f"/v1/review-issue-batches/{batch['id']}",
+        json={"status": "verifying"},
+    )
+    assert reopened.status_code == 409
+    assert reopened.json()["detail"] == "terminal review issue batches are immutable"
+
+
 def test_review_issue_list_and_batch_list_are_paginated_and_filterable():
     client = build_client()
     first_task = create_task(client, "review PR 1")
@@ -336,6 +374,7 @@ def test_pull_request_issue_records_include_commits_batches_and_tasks():
             "items": [
                 {
                     "severity": "high",
+                    "category": "correctness",
                     "title": "accepted issue",
                     "description": "fixed before merge",
                     "file_path": "src/accepted.py",
@@ -457,6 +496,7 @@ def test_pull_request_issue_records_include_commits_batches_and_tasks():
     for params, expected_total in [
         ({"status": "accepted"}, 1),
         ({"severity": "info"}, 1),
+        ({"category": "correctness"}, 1),
         ({"batch_status": "waiting_merge"}, 1),
         ({"commit_sha": "review-first"}, 3),
         ({"commit_sha": "merged-first"}, 3),

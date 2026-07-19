@@ -26,6 +26,7 @@ from cc_fastapi.workflows.base import (
     WorkflowRetryConflictError,
     WorkflowTaskOutcome,
 )
+from cc_fastapi.workflows.correlations import change_request_correlation
 from cc_fastapi.workflows.registry import WorkflowRegistry
 
 
@@ -84,6 +85,9 @@ class WorkflowEngine:
         run.finished_at = now
         db.add(run)
         db.flush()
+        correlation = change_request_correlation(event.webhook_payload)
+        if correlation is not None:
+            self._persist_correlations(db, run.id, (correlation,))
         db.add(
             WorkflowStepRun(
                 workflow_run_id=run.id,
@@ -274,14 +278,18 @@ class WorkflowEngine:
 
         try:
             plan = workflow.before(event)
+            event_correlation = change_request_correlation(event.webhook_payload)
+            correlations = plan.correlations + (
+                (event_correlation,) if event_correlation is not None else ()
+            )
             self._acquire_resource_locks(
                 db,
-                (*plan.correlations, *plan.supersede_correlations),
+                (*correlations, *plan.supersede_correlations),
             )
             now = utc_now()
             run.context_json = plan.context
             run.updated_at = now
-            correlations = self._persist_correlations(db, run.id, plan.correlations)
+            correlations = self._persist_correlations(db, run.id, correlations)
             superseded_runs = self._supersede_correlated_runs(db, run, plan.supersede_correlations)
 
             if plan.skip_reason is not None:

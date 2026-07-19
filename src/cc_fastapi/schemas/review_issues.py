@@ -8,6 +8,10 @@ from cc_fastapi.db.models import (
     ReviewIssueVerificationStatus,
     TaskStatus,
 )
+from cc_fastapi.core.repository_values import (
+    normalize_repository_project_path,
+    normalize_repository_provider,
+)
 
 
 def _strip_required(value: str) -> str:
@@ -36,9 +40,9 @@ class ReviewIssueBatchCreateRequest(BaseModel):
     verify_task_id: str | None = Field(default=None, max_length=36)
     review_head_sha: str | None = Field(default=None, max_length=128)
 
-    _normalize_required = field_validator(
-        "provider", "project_path", "pr_number", "review_task_id"
-    )(_strip_required)
+    _normalize_required = field_validator("pr_number", "review_task_id")(
+        _strip_required
+    )
     _normalize_optional = field_validator(
         "instance_url",
         "pr_url",
@@ -47,6 +51,16 @@ class ReviewIssueBatchCreateRequest(BaseModel):
         "verify_task_id",
         "review_head_sha",
     )(_strip_optional)
+
+    @field_validator("provider")
+    @classmethod
+    def normalize_provider(cls, value: str) -> str:
+        return normalize_repository_provider(value)
+
+    @field_validator("project_path")
+    @classmethod
+    def normalize_project_path(cls, value: str) -> str:
+        return normalize_repository_project_path(value)
 
 
 class ReviewIssueBatchUpdateRequest(BaseModel):

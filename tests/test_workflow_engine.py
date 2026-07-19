@@ -11,6 +11,7 @@ from cc_fastapi.db.models import (
     TaskStatus,
     WorkflowRun,
     WorkflowRunStatus,
+    WorkflowCorrelation,
     WorkflowStepRun,
     WorkflowStepStatus,
     WorkflowTaskLink,
@@ -95,7 +96,16 @@ def test_workflow_can_record_skip_without_creating_task():
 
     execution = engine.start(
         db,
-        WorkflowEvent(provider="gitlab", event_type="large_change", payload={"changed_files": 500}),
+        WorkflowEvent(
+            provider="gitlab",
+            event_type="large_change",
+            payload={
+                "changed_files": 500,
+                "object_kind": "merge_request",
+                "project": {"path_with_namespace": "Group/Project"},
+                "object_attributes": {"iid": 42},
+            },
+        ),
     )
     db.commit()
 
@@ -106,7 +116,16 @@ def test_workflow_can_record_skip_without_creating_task():
     step = db.scalar(select(WorkflowStepRun).where(WorkflowStepRun.workflow_run_id == execution.run.id))
     assert step is not None
     assert step.status == WorkflowStepStatus.SKIPPED
-    assert step.output_json == {"decision": "skip", "reason": "changed_files_exceeded"}
+    assert step.output_json["decision"] == "skip"
+    assert step.output_json["reason"] == "changed_files_exceeded"
+    correlation = db.scalar(
+        select(WorkflowCorrelation).where(
+            WorkflowCorrelation.workflow_run_id == execution.run.id
+        )
+    )
+    assert correlation is not None
+    assert correlation.project_path == "group/project"
+    assert correlation.resource_id == "42"
 
 
 def test_registry_prefers_specific_workflow_over_fallback():

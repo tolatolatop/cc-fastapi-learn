@@ -13,7 +13,10 @@ from cc_fastapi.db.models import (
     ReviewIssueBatch,
     ReviewIssueSeverity,
     ReviewIssueVerificationStatus,
+    TaskStatus,
+    WorkflowCorrelation,
     WorkflowRun,
+    WorkflowTaskLink,
     utc_now,
 )
 
@@ -66,6 +69,37 @@ class ReviewIssueService:
         workflow_run_id = values.get("review_workflow_run_id")
         if workflow_run_id is not None and db.get(WorkflowRun, workflow_run_id) is None:
             raise ReviewIssueReferenceError("review workflow run not found")
+        if workflow_run_id is not None:
+            review_task = db.get(AgentTask, values["review_task_id"])
+            link = db.scalar(
+                select(WorkflowTaskLink).where(
+                    WorkflowTaskLink.workflow_run_id == workflow_run_id,
+                    WorkflowTaskLink.task_id == values["review_task_id"],
+                )
+            )
+            if link is None:
+                raise ReviewIssueConflictError(
+                    "review task does not belong to the review workflow run"
+                )
+            if not link.is_active or review_task is None or review_task.status != TaskStatus.SUCCEEDED:
+                raise ReviewIssueConflictError(
+                    "review task must be active and succeeded before issue collection"
+                )
+            correlation = db.scalar(
+                select(WorkflowCorrelation).where(
+                    WorkflowCorrelation.workflow_run_id == workflow_run_id,
+                    WorkflowCorrelation.provider == values["provider"],
+                    WorkflowCorrelation.resource_type.in_(
+                        ("merge_request", "pull_request")
+                    ),
+                    WorkflowCorrelation.project_path == values["project_path"],
+                    WorkflowCorrelation.resource_id == values["pr_number"],
+                )
+            )
+            if correlation is None:
+                raise ReviewIssueConflictError(
+                    "review workflow run does not belong to the pull request"
+                )
 
         batch = ReviewIssueBatch(**values)
         db.add(batch)
@@ -89,6 +123,7 @@ class ReviewIssueService:
         provider: str | None,
         project_path: str | None,
         pr_number: str | None,
+        review_task_id: str | None,
         statuses: list[ReviewBatchStatus] | None,
         created_from: datetime | None,
         created_to: datetime | None,
@@ -100,6 +135,8 @@ class ReviewIssueService:
             filters.append(ReviewIssueBatch.project_path == project_path.strip())
         if pr_number:
             filters.append(ReviewIssueBatch.pr_number == pr_number.strip())
+        if review_task_id:
+            filters.append(ReviewIssueBatch.review_task_id == review_task_id.strip())
         if statuses:
             filters.append(ReviewIssueBatch.status.in_(statuses))
         if created_from is not None:
@@ -115,6 +152,7 @@ class ReviewIssueService:
         provider: str | None,
         project_path: str | None,
         pr_number: str | None,
+        review_task_id: str | None,
         statuses: list[ReviewBatchStatus] | None,
         created_from: datetime | None,
         created_to: datetime | None,
@@ -125,6 +163,7 @@ class ReviewIssueService:
             provider=provider,
             project_path=project_path,
             pr_number=pr_number,
+            review_task_id=review_task_id,
             statuses=statuses,
             created_from=created_from,
             created_to=created_to,
@@ -155,10 +194,60 @@ class ReviewIssueService:
 
         resulting_merged_sha = values.get("merged_sha", batch.merged_sha)
         new_status = values.get("status")
+        is_transition = new_status is not None and new_status != batch.status
+        terminal_statuses = {
+            ReviewBatchStatus.COMPLETED,
+            ReviewBatchStatus.FAILED,
+            ReviewBatchStatus.CANCELLED,
+        }
+        changed_values = {
+            field: value
+            for field, value in values.items()
+            if getattr(batch, field) != value
+        }
+        if batch.status in terminal_statuses and changed_values:
+            raise ReviewIssueConflictError("terminal review issue batches are immutable")
+        allowed_transitions = {
+            ReviewBatchStatus.COLLECTING: {
+                ReviewBatchStatus.FAILED,
+                ReviewBatchStatus.CANCELLED,
+            },
+            ReviewBatchStatus.WAITING_MERGE: {
+                ReviewBatchStatus.VERIFYING,
+                ReviewBatchStatus.COMPLETED,
+                ReviewBatchStatus.FAILED,
+                ReviewBatchStatus.CANCELLED,
+            },
+            ReviewBatchStatus.VERIFYING: {
+                ReviewBatchStatus.COMPLETED,
+                ReviewBatchStatus.FAILED,
+                ReviewBatchStatus.CANCELLED,
+            },
+            ReviewBatchStatus.COMPLETED: set(),
+            ReviewBatchStatus.FAILED: set(),
+            ReviewBatchStatus.CANCELLED: set(),
+        }
+        if is_transition and new_status not in allowed_transitions[batch.status]:
+            raise ReviewIssueConflictError(
+                f"cannot transition review issue batch from {batch.status.value} to {new_status.value}"
+            )
+        requested_merged_sha = values.get("merged_sha")
+        if (
+            requested_merged_sha is not None
+            and batch.merged_sha is not None
+            and requested_merged_sha != batch.merged_sha
+        ):
+            raise ReviewIssueConflictError("merged_sha cannot be changed once recorded")
         if new_status in {ReviewBatchStatus.VERIFYING, ReviewBatchStatus.COMPLETED}:
             if not resulting_merged_sha:
                 raise ReviewIssueConflictError("merged_sha is required before verification")
         if new_status == ReviewBatchStatus.COMPLETED:
+            if batch.status == ReviewBatchStatus.WAITING_MERGE and (
+                batch.issue_count != 0 or batch.extracted_at is None
+            ):
+                raise ReviewIssueConflictError(
+                    "only a collected zero-issue batch can complete without verification"
+                )
             unverified = db.scalar(
                 select(func.count())
                 .select_from(ReviewIssue)
@@ -176,9 +265,9 @@ class ReviewIssueService:
         for field, value in values.items():
             setattr(batch, field, value)
         now = utc_now()
-        if new_status == ReviewBatchStatus.WAITING_MERGE and batch.extracted_at is None:
+        if is_transition and new_status == ReviewBatchStatus.WAITING_MERGE and batch.extracted_at is None:
             batch.extracted_at = now
-        if new_status == ReviewBatchStatus.COMPLETED:
+        if is_transition and new_status == ReviewBatchStatus.COMPLETED:
             batch.verified_at = now
         batch.updated_at = now
         try:
@@ -298,10 +387,14 @@ class ReviewIssueService:
         provider: str,
         project_path: str,
         pr_number: str,
+        batch_id: str | None,
         severities: list[ReviewIssueSeverity] | None,
         verification_statuses: list[ReviewIssueVerificationStatus] | None,
         batch_statuses: list[ReviewBatchStatus] | None,
         commit_sha: str | None,
+        category: str | None,
+        created_from: datetime | None,
+        created_to: datetime | None,
         offset: int,
         limit: int,
     ) -> PullRequestIssueRecords | None:
@@ -335,6 +428,11 @@ class ReviewIssueService:
         )
 
         batch_filters = list(identity_filters)
+        if batch_id is not None:
+            normalized_batch_id = batch_id.strip()
+            if not normalized_batch_id:
+                raise ReviewIssueFilterError("batch_id must not be blank")
+            batch_filters.append(ReviewIssueBatch.id == normalized_batch_id)
         if batch_statuses:
             batch_filters.append(ReviewIssueBatch.status.in_(batch_statuses))
         if commit_sha is not None:
@@ -355,6 +453,12 @@ class ReviewIssueService:
             issue_filters.append(
                 ReviewIssue.verification_status.in_(verification_statuses)
             )
+        if category:
+            issue_filters.append(ReviewIssue.category == category.strip())
+        if created_from is not None:
+            issue_filters.append(ReviewIssue.created_at >= created_from)
+        if created_to is not None:
+            issue_filters.append(ReviewIssue.created_at <= created_to)
 
         rows = list(
             db.execute(
@@ -504,6 +608,7 @@ class ReviewIssueService:
             provider=provider,
             project_path=project_path,
             pr_number=pr_number,
+            review_task_id=None,
             statuses=None,
             created_from=created_from,
             created_to=created_to,

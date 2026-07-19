@@ -44,10 +44,14 @@ class WebhookChangeRequestResponse(BaseModel):
 
     resource_type: str
     number: str
+    title: str | None
+    url: str | None
+    state: str | None
     action: str | None
     source_branch: str | None
     target_branch: str | None
     head_sha: str | None
+    merged_sha: str | None
 
 
 class WebhookPayloadResponse(BaseModel):

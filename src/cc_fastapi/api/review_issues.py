@@ -77,6 +77,7 @@ def list_review_issue_batches(
     provider: str | None = Query(default=None, max_length=32),
     project_path: str | None = Query(default=None, max_length=255),
     pr_number: str | None = Query(default=None, max_length=128),
+    review_task_id: str | None = Query(default=None, max_length=36),
     statuses: list[ReviewBatchStatus] | None = Query(default=None, alias="status"),
     created_from: datetime | None = None,
     created_to: datetime | None = None,
@@ -89,6 +90,7 @@ def list_review_issue_batches(
         provider=provider,
         project_path=project_path,
         pr_number=pr_number,
+        review_task_id=review_task_id,
         statuses=statuses,
         created_from=created_from,
         created_to=created_to,
@@ -246,6 +248,7 @@ def list_pull_request_review_issues(
     provider: str = Query(max_length=32),
     project_path: str = Query(max_length=255),
     pr_number: str = Query(max_length=128),
+    batch_id: str | None = Query(default=None, max_length=36),
     severities: list[ReviewIssueSeverity] | None = Query(
         default=None, alias="severity"
     ),
@@ -256,6 +259,9 @@ def list_pull_request_review_issues(
         default=None, alias="batch_status"
     ),
     commit_sha: str | None = Query(default=None, max_length=128),
+    category: str | None = Query(default=None, max_length=64),
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -266,10 +272,14 @@ def list_pull_request_review_issues(
             provider=provider,
             project_path=project_path,
             pr_number=pr_number,
+            batch_id=batch_id,
             severities=severities,
             verification_statuses=verification_statuses,
             batch_statuses=batch_statuses,
             commit_sha=commit_sha,
+            category=category,
+            created_from=created_from,
+            created_to=created_to,
             offset=offset,
             limit=limit,
         )

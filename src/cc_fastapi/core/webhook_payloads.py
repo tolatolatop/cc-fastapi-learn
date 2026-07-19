@@ -81,10 +81,14 @@ class WebhookActor:
 class WebhookChangeRequest:
     resource_type: str
     number: str
+    title: str | None = None
+    url: str | None = None
+    state: str | None = None
     action: str | None = None
     source_branch: str | None = None
     target_branch: str | None = None
     head_sha: str | None = None
+    merged_sha: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,13 +164,22 @@ class GitHubWebhookPayloadAdapter:
         )
         change_request = None
         if pull_request is not None and number is not None:
+            merged = pull_request.get("merged") is True
+            raw_state = _text(pull_request.get("state"))
+            state = "merged" if merged else raw_state.casefold() if raw_state else None
             change_request = WebhookChangeRequest(
                 resource_type="pull_request",
                 number=number,
+                title=_text(pull_request.get("title")),
+                url=_web_url(pull_request.get("html_url")),
+                state=state,
                 action=_text(payload.get("action")),
                 source_branch=_ref_name(head.get("ref")) if head is not None else None,
                 target_branch=_ref_name(base.get("ref")) if base is not None else None,
                 head_sha=_text(head.get("sha")) if head is not None else None,
+                merged_sha=(
+                    _text(pull_request.get("merge_commit_sha")) if merged else None
+                ),
             )
 
         ref = _ref_name(payload.get("ref"))
@@ -222,13 +235,21 @@ class GitLabWebhookPayloadAdapter:
         change_request = None
         if object_kind and object_kind.casefold() == "merge_request" and number is not None:
             last_commit = _mapping(attributes.get("last_commit"))
+            raw_state = _text(attributes.get("state"))
+            state = raw_state.casefold() if raw_state else None
+            if state == "opened":
+                state = "open"
             change_request = WebhookChangeRequest(
                 resource_type="merge_request",
                 number=number,
+                title=_text(attributes.get("title")),
+                url=_web_url(attributes.get("url")),
+                state=state,
                 action=_text(attributes.get("action")),
                 source_branch=_ref_name(attributes.get("source_branch")),
                 target_branch=_ref_name(attributes.get("target_branch")),
                 head_sha=_text(last_commit.get("id")) if last_commit is not None else None,
+                merged_sha=_text(attributes.get("merge_commit_sha")),
             )
 
         ref = _ref_name(payload.get("ref"))
