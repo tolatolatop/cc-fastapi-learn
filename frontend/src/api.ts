@@ -2,11 +2,13 @@ import type {
   CreateReviewIssueBatchPayload,
   CreateReviewIssuePayload,
   CreateTaskPayload,
+  ProviderCapabilityListResponse,
   QueueListResponse,
   RepositoryBulkTagsUpdateResponse,
   RepositoryItem,
   RepositoryOverviewResponse,
   RepositorySyncResponse,
+  RecordPullRequestIssuesResponse,
   ReviewDashboardOutcome,
   ReviewDashboardPullRequestDetail,
   ReviewDashboardResponse,
@@ -136,6 +138,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => request<{ status: string }>('/healthz'),
+  listProviders: () => request<ProviderCapabilityListResponse>('/v1/providers'),
   listTasks: ({ offset = 0, limit = 20, statuses = [], queue, query }: TaskListOptions = {}) => request<TaskListResponse>(queryPath('/v1/agent-tasks', [
     ['offset', offset],
     ['limit', limit],
@@ -194,6 +197,20 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ items }),
     }),
+  recordPullRequestIssues: (
+    provider: string,
+    projectPath: string,
+    prNumber: string,
+    issues: CreateReviewIssuePayload[],
+  ) => request<RecordPullRequestIssuesResponse>('/v1/review-issues/pull-request', {
+    method: 'POST',
+    body: JSON.stringify({
+      provider,
+      project_path: projectPath,
+      pr_number: prNumber,
+      issues,
+    }),
+  }),
   listReviewIssues: ({
     offset = 0,
     limit = 20,

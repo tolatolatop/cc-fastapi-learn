@@ -1,21 +1,20 @@
-import hashlib
-import hmac
-import json
 import logging
-from secrets import compare_digest
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
 from sqlalchemy.orm import Session
 
 from cc_fastapi.api.dependencies import require_token
 from cc_fastapi.core.config import get_settings
 from cc_fastapi.core.webhook_payloads import WebhookPayload
+from cc_fastapi.core.webhook_providers import (
+    WebhookRequestError,
+    webhook_provider_registry,
+)
 from cc_fastapi.db.session import get_db
 from cc_fastapi.schemas.webhooks import (
-    GitLabWebhookResponse,
-    GitHubWebhookResponse,
     WebhookPayloadResponse,
+    WebhookResponse,
     WebhookTriggerItemResponse,
     WebhookTriggerListResponse,
     WebhookTriggerListSummaryResponse,
@@ -40,148 +39,67 @@ def _webhook_payload_response(
     return WebhookPayloadResponse.model_validate(parsed_payload)
 
 
-def require_gitlab_token(x_gitlab_token: str | None = Header(default=None, alias="X-Gitlab-Token")) -> None:
-    expected_token = get_settings().gitlab_webhook_secret
-    if not expected_token:
-        return
-    if x_gitlab_token is None or not compare_digest(x_gitlab_token, expected_token):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid gitlab webhook token")
-
-
-def require_github_signature(body: bytes, signature: str | None) -> None:
-    expected_secret = get_settings().github_webhook_secret
-    if not expected_secret:
-        return
-    expected_signature = "sha256=" + hmac.new(
-        expected_secret.encode("utf-8"),
-        body,
-        hashlib.sha256,
-    ).hexdigest()
-    if signature is None or not compare_digest(signature, expected_signature):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid github webhook signature")
-
-
-def github_instance_url(enterprise_host: str | None) -> str:
-    if not enterprise_host or not enterprise_host.strip():
-        return "https://github.com"
-    normalized_host = enterprise_host.strip().rstrip("/")
-    if normalized_host.startswith(("http://", "https://")):
-        return normalized_host
-    return f"https://{normalized_host}"
-
-
-@router.post("/gitlab", response_model=GitLabWebhookResponse, dependencies=[Depends(require_gitlab_token)])
-def receive_gitlab_webhook(
-    payload: dict[str, Any],
-    x_gitlab_event: str = Header(alias="X-Gitlab-Event"),
-    x_gitlab_event_uuid: str | None = Header(default=None, alias="X-Gitlab-Event-UUID"),
-    x_gitlab_webhook_uuid: str | None = Header(default=None, alias="X-Gitlab-Webhook-UUID"),
-    x_gitlab_instance: str | None = Header(default=None, alias="X-Gitlab-Instance"),
-    db: Session = Depends(get_db),
-) -> GitLabWebhookResponse:
-    settings = get_settings()
-    try:
-        trigger, task, deduplicated, workflow_run = webhooks.trigger_gitlab_task(
-            db,
-            payload=payload,
-            event_type=x_gitlab_event,
-            event_uuid=x_gitlab_event_uuid,
-            webhook_uuid=x_gitlab_webhook_uuid,
-            instance_url=x_gitlab_instance,
-            prompt_template_path=settings.resolved_gitlab_webhook_prompt_template_path,
-            queue_name=settings.gitlab_webhook_queue_name or None,
-        )
-    except WebhookTemplateError as exc:
-        logger.warning(
-            "gitlab webhook template rendering failed",
-            extra={"event_type": "gitlab_webhook_template_failed", "reason": str(exc)},
-        )
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except QueueNotFoundError as exc:
-        logger.warning(
-            "gitlab webhook queue resolve failed",
-            extra={"event_type": "gitlab_webhook_queue_not_found", "queue_name": exc.queue_name},
-        )
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-
-    log_event_type = (
-        "gitlab_webhook_task_deduplicated"
-        if deduplicated
-        else "gitlab_webhook_workflow_skipped"
-        if task is None
-        else "gitlab_webhook_task_created"
-    )
-    logger.info(
-        log_event_type.replace("_", " "),
-        extra={
-            "event_type": log_event_type,
-            "task_id": task.id if task else None,
-            "queue_name": task.queue_name if task else None,
-            "reason": f"webhook_id={trigger.id}",
-        },
-    )
-    return GitLabWebhookResponse(
-        webhook_id=trigger.id,
-        task_id=task.id if task else None,
-        status=task.status if task else None,
-        queue_name=task.queue_name if task else None,
-        deduplicated=deduplicated,
-        workflow_run_id=workflow_run.id,
-        workflow_status=workflow_run.status,
-        skip_reason=workflow_run.skip_reason,
-    )
-
-
-@router.post("/github", response_model=GitHubWebhookResponse)
-async def receive_github_webhook(
+@router.post("/{provider}", response_model=WebhookResponse)
+async def receive_provider_webhook(
     request: Request,
-    x_github_event: str = Header(alias="X-GitHub-Event"),
-    x_github_delivery: str | None = Header(default=None, alias="X-GitHub-Delivery"),
-    x_github_hook_id: str | None = Header(default=None, alias="X-GitHub-Hook-ID"),
-    x_github_enterprise_host: str | None = Header(default=None, alias="X-GitHub-Enterprise-Host"),
-    x_hub_signature_256: str | None = Header(default=None, alias="X-Hub-Signature-256"),
+    provider: str = Path(max_length=32),
     db: Session = Depends(get_db),
-) -> GitHubWebhookResponse:
+) -> WebhookResponse:
+    definition = webhook_provider_registry.get(provider)
+    if definition is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="webhook provider is not registered",
+        )
     raw_body = await request.body()
-    require_github_signature(raw_body, x_hub_signature_256)
     try:
-        payload = json.loads(raw_body)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid github webhook payload") from exc
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid github webhook payload")
+        received = definition.request_adapter.parse(
+            request.headers,
+            raw_body,
+            get_settings(),
+        )
+    except WebhookRequestError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     settings = get_settings()
     try:
-        trigger, task, deduplicated, workflow_run = webhooks.trigger_github_task(
+        trigger, task, deduplicated, workflow_run = webhooks.trigger_task(
             db,
-            payload=payload,
-            event_type=x_github_event,
-            delivery_id=x_github_delivery,
-            hook_id=x_github_hook_id,
-            instance_url=github_instance_url(x_github_enterprise_host),
-            prompt_template_path=settings.resolved_github_webhook_prompt_template_path,
-            queue_name=settings.github_webhook_queue_name or None,
+            provider=definition.id,
+            payload=received.payload,
+            event_type=received.event_type,
+            event_uuid=received.event_uuid,
+            webhook_uuid=received.webhook_uuid,
+            instance_url=received.instance_url,
+            prompt_template_path=definition.prompt_template_path(settings),
+            queue_name=definition.queue_name(settings),
+            provider_metadata=received.provider_metadata,
         )
     except WebhookTemplateError as exc:
         logger.warning(
-            "github webhook template rendering failed",
-            extra={"event_type": "github_webhook_template_failed", "reason": str(exc)},
+            "webhook template rendering failed",
+            extra={
+                "event_type": f"{definition.id}_webhook_template_failed",
+                "reason": str(exc),
+            },
         )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except QueueNotFoundError as exc:
         logger.warning(
-            "github webhook queue resolve failed",
-            extra={"event_type": "github_webhook_queue_not_found", "queue_name": exc.queue_name},
+            "webhook queue resolve failed",
+            extra={
+                "event_type": f"{definition.id}_webhook_queue_not_found",
+                "queue_name": exc.queue_name,
+            },
         )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     log_event_type = (
-        "github_webhook_task_deduplicated"
+        f"{definition.id}_webhook_task_deduplicated"
         if deduplicated
-        else "github_webhook_workflow_skipped"
+        else f"{definition.id}_webhook_workflow_skipped"
         if task is None
-        else "github_webhook_task_created"
+        else f"{definition.id}_webhook_task_created"
     )
     logger.info(
         log_event_type.replace("_", " "),
@@ -192,7 +110,7 @@ async def receive_github_webhook(
             "reason": f"webhook_id={trigger.id}",
         },
     )
-    return GitHubWebhookResponse(
+    return WebhookResponse(
         webhook_id=trigger.id,
         task_id=task.id if task else None,
         status=task.status if task else None,

@@ -781,6 +781,18 @@ def test_gitlab_webhook_rejects_invalid_token_without_creating_records():
         assert db.scalar(select(func.count()).select_from(WorkflowRun)) == 0
 
 
+def test_unregistered_webhook_provider_is_rejected_without_side_effects():
+    client, session_factory = build_client()
+
+    response = client.post("/v1/webhooks/gitea", json={"repository": {}})
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "webhook provider is not registered"
+    with session_factory() as db:
+        assert db.scalar(select(func.count()).select_from(WebhookTrigger)) == 0
+        assert db.scalar(select(func.count()).select_from(WorkflowRun)) == 0
+
+
 def test_gitlab_webhook_template_error_does_not_create_task(webhook_settings):
     webhook_settings.write_text("{{ missing.value }}", encoding="utf-8")
     client, session_factory = build_client()

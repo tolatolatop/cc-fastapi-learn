@@ -346,12 +346,24 @@ def list_pull_request_review_issues(
     items = []
     for issue, batch in records.items:
         issue_values = ReviewIssueResponse.model_validate(issue).model_dump()
-        review_task = task_reference(batch.review_task_id)
-        if review_task is None:
+        source_type = (
+            "standalone"
+            if batch.status == ReviewBatchStatus.COMPLETED
+            and batch.review_workflow_run_id is None
+            and batch.verified_at is None
+            else "agent_task"
+        )
+        review_task = (
+            task_reference(batch.review_task_id)
+            if source_type == "agent_task"
+            else None
+        )
+        if source_type == "agent_task" and review_task is None:
             raise RuntimeError("review issue batch is missing its review task")
         items.append(
             ReviewPullRequestIssueItemResponse(
                 **issue_values,
+                source_type=source_type,
                 batch_status=batch.status,
                 review_head_sha=batch.review_head_sha,
                 merged_sha=batch.merged_sha,

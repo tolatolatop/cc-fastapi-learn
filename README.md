@@ -42,7 +42,7 @@ Vite 开发服务器会将 `/api` 请求代理到后端。生产镜像使用 Ngi
 基础交互组件使用 React-Bootstrap，颜色、字号和圆角集中配置在
 `frontend/src/bootstrap-theme.scss`；队列、Webhook 和检视轨道等业务可视化仍保留在自定义样式中。
 
-## GitLab 与 GitHub Webhook
+## 多平台 Webhook
 
 服务端接收地址：
 
@@ -60,12 +60,18 @@ GitHub 使用对应的 `GITHUB_WEBHOOK_SECRET`、`GITHUB_WEBHOOK_PROMPT_TEMPLATE
 `X-GitHub-Enterprise-Host` 记录，普通 GitHub 记录为 `https://github.com`。默认 Prompt 模板位于
 `config/templates/github_webhook_prompt.j2`。
 
-两个平台的 Jinja 模板都可直接读取 Payload 顶层字段，并额外提供 `payload`、`event_type` 和
+平台 Jinja 模板都可直接读取 Payload 顶层字段，并额外提供 `payload`、`event_type` 和
 `webhook`。控制台支持按平台、事件类型、项目、分支、投递 UUID 或关联任务 ID 检索归档。
 
 服务始终原样归档平台 Payload，并通过只读的 `WebhookPayload` 投影统一解析仓库、操作者、分支及
-PR/MR 基本信息。平台差异集中在 GitHub/GitLab Adapter；仓库同步、工作流关联和控制台摘要只读取
+PR/MR 基本信息。平台差异集中在 Provider Adapter；仓库同步、工作流关联和控制台摘要只读取
 标准化投影。Webhook 列表响应中的 `parsed_payload` 提供这份投影，`payload` 字段仍保留原始内容。
+
+`GET /v1/providers` 返回已注册平台及其能力，前端将它作为输入建议而不是录入白名单。问题录入的
+`provider` 仍是开放字符串，因此可先录入 Gitea、Bitbucket 等平台的问题，再独立增加相应的
+Webhook Adapter。新增完整 Webhook 平台时，在 `WebhookProviderDefinition` 中集中注册请求鉴权、
+Payload 投影、Prompt 配置和 supersede action；通用 `/v1/webhooks/{provider}` 路由及
+`ProviderPromptTaskWorkflow` 会复用现有归档、幂等、仓库同步和 PR 关联逻辑。
 
 已归档的 GitLab/GitHub Webhook 仓库可同步到仓库管理目录：
 
@@ -81,10 +87,9 @@ POST /v1/repositories/sync
 
 Webhook 事件由工作流注册表匹配，经过 `before` 规划后创建零个、一个或多个任务；任务进入终态后执行 `after_task`。运行、步骤和任务关联分别保存在 `workflow_runs`、`workflow_step_runs` 和 `workflow_task_links` 中。
 
-当前 `GitLabPromptTaskWorkflow` 和 `GitHubPromptTaskWorkflow` 都基于平台无关的
-`WebhookPromptTaskWorkflow`，负责读取 Jinja 模板、拼接 Prompt 并创建 Agent Task。新增平台时增加
-入口鉴权、平台工作流和配置即可复用统一的触发、幂等、归档和列表逻辑。具体事件工作流使用更高
-优先级注册后，会先于平台兜底工作流匹配。
+平台兜底工作流由注册表生成的 `ProviderPromptTaskWorkflow` 提供，负责读取 Jinja 模板、拼接
+Prompt、建立 PR/MR 关联并创建 Agent Task。新增平台不需要再复制一个 Workflow 类；具体事件
+工作流仍可使用更高优先级注册，并先于平台兜底工作流匹配。
 
 GitLab Merge Request 事件会按“项目路径 + MR IID”写入 `workflow_correlations`。收到 `object_attributes.action=update` 的事件时，新工作流会在同一事务内取消该 MR 尚在排队或执行中的旧任务，并把旧工作流标记为 `superseded`；已完成的历史任务不会被修改。
 
@@ -120,9 +125,10 @@ cc-fastapi-admin pr collect github org/project 42 --input issues.json
 cc-fastapi-admin pr verify github org/project 42 --input results.json
 ```
 
-`add-issues` 输入为 `{"issues": [...]}`，要求至少一个、最多 500 个问题；它只要求 PR/MR
-已经由 Webhook 记录，不需要提供或解析 Agent Task，也不进入合入后核验流程。相同 PR 与问题内容
-重复提交会返回同一批记录。`collect` 使用相同输入结构，允许空问题列表；未指定 `--task-id` 时
+`add-issues` 输入为 `{"issues": [...]}`，要求至少一个、最多 500 个问题；它只要求 provider、
+仓库路径和 PR/MR 编号，不依赖 Webhook 或 Agent Task，也不进入合入后核验流程。若存在 Webhook
+历史，服务会用它补充 PR 链接与 SHA；不存在也能独立录入和查询。相同 PR 与问题内容重复提交会
+返回同一批记录。`collect` 使用相同输入结构，允许空问题列表；未指定 `--task-id` 时
 只使用该 PR 最新的 active+succeeded Task。`verify` 输入为
 `{"results": [{"issue_no": 1, "status": "accepted", "note": "..."}]}`，在批次内把
 `issue_no` 映射为内部 UUID，单次最多处理 500 条。三条写命令都支持 `--input -` 从 stdin
@@ -157,7 +163,8 @@ GET   /v1/review-issues/summary
 
 `POST /v1/review-issues/pull-request` 是无需 Task 的轻量录入入口。为兼容现有非空外键且不修改
 数据库结构，服务端会创建一个不关联 Workflow、不会被执行的内部锚点，并把录入批次直接置为
-不可变终态；问题保留 `unverified`，不会进入验证流程，也不会出现在该 PR 的 Task 历史中。
+不可变终态；问题保留 `unverified`，不会进入验证流程。该内部锚点不会出现在任务管理列表或该
+PR 的 Task 历史中。
 
 ## 列表分页
 

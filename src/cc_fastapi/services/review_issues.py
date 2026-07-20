@@ -9,6 +9,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from cc_fastapi.core.internal_tasks import REVIEW_ISSUE_IMPORT_QUEUE_NAME
 from cc_fastapi.core.repository_values import (
     normalize_repository_project_path,
     normalize_repository_provider,
@@ -218,8 +219,6 @@ class ReviewIssueService:
             .order_by(WorkflowRun.created_at.desc(), WorkflowRun.id.desc())
             .limit(1)
         ).scalar_one_or_none()
-        if latest is None:
-            raise ReviewIssueNotFoundError("review pull request not found")
 
         digest = self._manual_submission_digest(
             provider=provider,
@@ -238,14 +237,22 @@ class ReviewIssueService:
         if existing is not None:
             return existing
 
-        payload = latest.payload_json if isinstance(latest.payload_json, dict) else {}
-        parsed = WebhookPayload.from_payload(latest.provider, latest.event_type, payload)
+        payload = (
+            latest.payload_json
+            if latest is not None and isinstance(latest.payload_json, dict)
+            else {}
+        )
+        parsed = (
+            WebhookPayload.from_payload(latest.provider, latest.event_type, payload)
+            if latest is not None
+            else None
+        )
         change_request = parsed.change_request if parsed is not None else None
         now = utc_now()
         task = AgentTask(
             id=task_id,
             status=TaskStatus.SUCCEEDED,
-            queue_name="review-issue-import",
+            queue_name=REVIEW_ISSUE_IMPORT_QUEUE_NAME,
             priority=0,
             payload={
                 "kind": "manual_review_issue_import",
@@ -271,7 +278,7 @@ class ReviewIssueService:
         batch = ReviewIssueBatch(
             id=batch_id,
             provider=provider,
-            instance_url=latest.instance_url,
+            instance_url=latest.instance_url if latest is not None else None,
             project_path=project_path,
             pr_number=pr_number,
             pr_url=change_request.url if change_request is not None else None,

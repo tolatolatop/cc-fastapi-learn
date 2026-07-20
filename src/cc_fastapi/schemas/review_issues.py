@@ -1,6 +1,14 @@
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 from cc_fastapi.db.models import (
     ReviewBatchStatus,
@@ -105,6 +113,17 @@ class ReviewIssueBatchResponse(BaseModel):
     extracted_at: datetime | None
     verified_at: datetime | None
     updated_at: datetime
+
+    @computed_field
+    @property
+    def source_type(self) -> Literal["agent_task", "standalone"]:
+        if (
+            self.status == ReviewBatchStatus.COMPLETED
+            and self.review_workflow_run_id is None
+            and self.verified_at is None
+        ):
+            return "standalone"
+        return "agent_task"
 
 
 class ReviewIssueBatchListResponse(BaseModel):
@@ -244,7 +263,8 @@ class ReviewPullRequestIssueItemResponse(ReviewIssueResponse):
     batch_extracted_at: datetime | None
     batch_verified_at: datetime | None
     batch_error_message: str | None
-    review_task: ReviewIssueTaskReferenceResponse
+    source_type: Literal["agent_task", "standalone"]
+    review_task: ReviewIssueTaskReferenceResponse | None
     extract_task: ReviewIssueTaskReferenceResponse | None
     verify_task: ReviewIssueTaskReferenceResponse | None
 

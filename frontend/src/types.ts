@@ -47,6 +47,17 @@ export interface QueueListResponse {
   items: QueueItem[]
 }
 
+export interface ProviderCapability {
+  id: string
+  display_name: string
+  capabilities: string[]
+}
+
+export interface ProviderCapabilityListResponse {
+  items: ProviderCapability[]
+  custom_provider_allowed: boolean
+}
+
 export interface TaskLog {
   id: number
   task_id: string
@@ -151,6 +162,7 @@ export interface ReviewIssueBatch {
   extracted_at: string | null
   verified_at: string | null
   updated_at: string
+  source_type: 'agent_task' | 'standalone'
 }
 
 export interface ReviewIssueBatchListResponse {
@@ -178,6 +190,18 @@ export interface ReviewIssue {
 export interface ReviewIssueListResponse {
   items: ReviewIssue[]
   total: number
+}
+
+export interface RecordPullRequestIssuesResponse {
+  pull_request: {
+    provider: string
+    project_path: string
+    pr_number: string
+    pr_url: string | null
+  }
+  items: ReviewIssue[]
+  total: number
+  idempotent: boolean
 }
 
 export interface ReviewIssueStatistics {

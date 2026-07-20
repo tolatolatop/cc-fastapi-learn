@@ -61,9 +61,10 @@ flowchart LR
 
 注册表按 `priority` 从高到低检查 `matches(event)`，第一个匹配项获胜。`name + version` 必须唯一。
 
-当前 `GitLabPromptTaskWorkflow` 和 `GitHubPromptTaskWorkflow` 的优先级都是 `-1000`，分别是
-各平台事件的兜底工作流。两者复用 `WebhookPromptTaskWorkflow` 的模板渲染和任务元数据逻辑。
-新增更具体的工作流使用默认优先级 `0` 或更高值，即可在平台兜底工作流之前匹配。
+`WebhookProviderDefinition` 为每个已接入平台生成优先级 `-1000` 的
+`ProviderPromptTaskWorkflow` 兜底实例，并复用模板渲染、任务元数据、Correlation 与 Supersede
+逻辑。新增平台只需注册请求和 Payload Adapter、配置字段及 Supersede Action；更具体的工作流
+使用默认优先级 `0` 或更高值，即可在平台兜底工作流之前匹配。
 
 ### `before()` 与 `WorkflowPlan`
 
@@ -380,8 +381,10 @@ X-API-Token: <API_TOKEN>
 | `workflows/base.py` | Workflow 接口和 Plan 数据结构 |
 | `workflows/registry.py` | 优先级匹配和版本查找 |
 | `workflows/engine.py` | 持久化、任务编排、后处理、Retry、Supersede |
-| `workflows/gitlab_prompt.py` | 默认 GitLab Prompt 工作流和 MR 关联提取 |
-| `workflows/github_prompt.py` | 默认 GitHub Prompt 工作流和 PR 关联提取 |
+| `core/webhook_providers.py` | 平台请求鉴权、Payload Adapter 和能力注册表 |
+| `workflows/provider_prompt.py` | 注册平台共用的 Prompt、Correlation 与 Supersede 工作流 |
+| `workflows/gitlab_prompt.py` | GitLab 兼容工作流入口 |
+| `workflows/github_prompt.py` | GitHub 兼容工作流入口 |
 | `workflows/prompt_task.py` | 多平台 Prompt 模板渲染与任务规划公共层 |
 | `services/webhooks.py` | Webhook 幂等、事务提交和兼容旧记录 |
 | `services/queue.py` | Task 状态机、队列领取、取消和自动重试 |

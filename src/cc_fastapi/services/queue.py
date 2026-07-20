@@ -7,6 +7,7 @@ from sqlalchemy import Select, String, cast, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from cc_fastapi.core.config import get_settings
+from cc_fastapi.core.internal_tasks import REVIEW_ISSUE_IMPORT_QUEUE_NAME
 from cc_fastapi.core.queue_config import get_queue_config
 from cc_fastapi.db.models import AgentTask, AgentTaskContext, AgentTaskLog, TaskStatus, utc_now
 
@@ -158,7 +159,7 @@ class TaskQueueService:
     ) -> tuple[list[AgentTask], int]:
         query = self._base_task_query()
         count_query = select(func.count()).select_from(AgentTask)
-        filters = []
+        filters = [AgentTask.queue_name != REVIEW_ISSUE_IMPORT_QUEUE_NAME]
         if statuses:
             filters.append(AgentTask.status.in_(statuses))
         if queue_name:
@@ -187,6 +188,7 @@ class TaskQueueService:
         queue_counts: dict[str, dict[str, int]] = {}
         rows = db.execute(
             select(AgentTask.queue_name, AgentTask.status, func.count())
+            .where(AgentTask.queue_name != REVIEW_ISSUE_IMPORT_QUEUE_NAME)
             .group_by(AgentTask.queue_name, AgentTask.status)
         )
         for queue_name, status, count in rows:

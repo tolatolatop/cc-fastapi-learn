@@ -24,6 +24,7 @@ import { api } from './api'
 import Pagination from './Pagination'
 import type {
   CreateReviewIssuePayload,
+  ProviderCapability,
   ReviewBatchStatus,
   ReviewIssue,
   ReviewIssueBatch,
@@ -98,6 +99,10 @@ function compactTask(value: string | null) {
   return value ? `TASK-${value.slice(0, 8).toUpperCase()}` : '—'
 }
 
+function isStandaloneBatch(batch: ReviewIssueBatch) {
+  return batch.source_type === 'standalone'
+}
+
 async function loadBatchIssues(batchId: string) {
   const firstPage = await api.listReviewIssues({ batchId, limit: 200 })
   if (firstPage.total <= firstPage.items.length) return firstPage.items
@@ -145,7 +150,11 @@ interface ReviewEntryModalProps {
 }
 
 function ReviewEntryModal({ existingBatch, onClose, onSaved }: ReviewEntryModalProps) {
-  const [provider, setProvider] = useState(existingBatch?.provider || 'gitlab')
+  const [provider, setProvider] = useState(existingBatch?.provider || '')
+  const [providerOptions, setProviderOptions] = useState<ProviderCapability[]>([])
+  const [entryMode, setEntryMode] = useState<'standalone' | 'tracked'>(
+    existingBatch ? 'tracked' : 'standalone',
+  )
   const [instanceUrl, setInstanceUrl] = useState(existingBatch?.instance_url || '')
   const [projectPath, setProjectPath] = useState(existingBatch?.project_path || '')
   const [prNumber, setPrNumber] = useState(existingBatch?.pr_number || '')
@@ -161,6 +170,22 @@ function ReviewEntryModal({ existingBatch, onClose, onSaved }: ReviewEntryModalP
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
 
+  useEffect(() => {
+    let active = true
+    api.listProviders()
+      .then((response) => {
+        if (!active) return
+        setProviderOptions(response.items)
+        setProvider((current) => current || response.items[0]?.id || '')
+      })
+      .catch(() => {
+        // Provider is intentionally free-form; suggestions are optional.
+      })
+    return () => {
+      active = false
+    }
+  }, [])
+
   function updateIssue(key: string, values: Partial<IssueDraft>) {
     setIssues((current) => current.map((issue) => issue.key === key ? { ...issue, ...values } : issue))
   }
@@ -170,7 +195,25 @@ function ReviewEntryModal({ existingBatch, onClose, onSaved }: ReviewEntryModalP
     setSubmitting(true)
     setError('')
     try {
+      const payload: CreateReviewIssuePayload[] = noIssues ? [] : issues.map((issue) => ({
+        severity: issue.severity,
+        title: issue.title.trim(),
+        description: issue.description.trim(),
+        ...(issue.category.trim() ? { category: issue.category.trim() } : {}),
+        ...(issue.filePath.trim() ? { file_path: issue.filePath.trim() } : {}),
+        ...(issue.lineNumber ? { line_number: Number(issue.lineNumber) } : {}),
+      }))
       let batch = workingBatch
+      if (!batch && entryMode === 'standalone') {
+        const recorded = await api.recordPullRequestIssues(
+          provider.trim(),
+          projectPath.trim(),
+          prNumber.trim(),
+          payload,
+        )
+        onSaved(await api.getReviewBatch(recorded.items[0].batch_id))
+        return
+      }
       if (!batch) {
         batch = await api.createReviewBatch({
           provider: provider.trim(),
@@ -185,14 +228,6 @@ function ReviewEntryModal({ existingBatch, onClose, onSaved }: ReviewEntryModalP
         })
         setWorkingBatch(batch)
       }
-      const payload: CreateReviewIssuePayload[] = noIssues ? [] : issues.map((issue) => ({
-        severity: issue.severity,
-        title: issue.title.trim(),
-        description: issue.description.trim(),
-        ...(issue.category.trim() ? { category: issue.category.trim() } : {}),
-        ...(issue.filePath.trim() ? { file_path: issue.filePath.trim() } : {}),
-        ...(issue.lineNumber ? { line_number: Number(issue.lineNumber) } : {}),
-      }))
       await api.createReviewIssues(batch.id, payload)
       onSaved(await api.getReviewBatch(batch.id))
     } catch (requestError) {
@@ -201,8 +236,14 @@ function ReviewEntryModal({ existingBatch, onClose, onSaved }: ReviewEntryModalP
     }
   }
 
-  const validIssues = noIssues || (issues.length > 0 && issues.every((issue) => issue.title.trim() && issue.description.trim()))
-  const validBatch = Boolean(workingBatch || (provider.trim() && projectPath.trim() && prNumber.trim() && reviewTaskId.trim()))
+  const standalone = !existingBatch && entryMode === 'standalone'
+  const validIssues = (!standalone && noIssues) || (issues.length > 0 && issues.every((issue) => issue.title.trim() && issue.description.trim()))
+  const validBatch = Boolean(workingBatch || (
+    provider.trim()
+    && projectPath.trim()
+    && prNumber.trim()
+    && (standalone || reviewTaskId.trim())
+  ))
 
   return (
     <Modal
@@ -219,7 +260,7 @@ function ReviewEntryModal({ existingBatch, onClose, onSaved }: ReviewEntryModalP
           <div>
             <p className="eyebrow">REVIEW INTAKE</p>
             <h2 id="review-entry-title">{existingBatch ? '录入提取结果' : '录入一次代码检视'}</h2>
-            <p>{existingBatch ? `为 ${existingBatch.project_path} !${existingBatch.pr_number} 补充问题列表。` : '关联原始 Agent 任务，并把检视意见转成可统计的问题。'}</p>
+            <p>{existingBatch ? `为 ${existingBatch.project_path} !${existingBatch.pr_number} 补充问题列表。` : standalone ? '直接记录 PR 问题，不依赖 Webhook 或 Agent Task。' : '关联原始 Agent 任务，并把检视意见转成可跟踪的问题。'}</p>
           </div>
           <button className="icon-button" onClick={onClose} aria-label="关闭录入窗口" disabled={submitting}><X size={19} /></button>
         </div>
@@ -227,14 +268,21 @@ function ReviewEntryModal({ existingBatch, onClose, onSaved }: ReviewEntryModalP
         <form onSubmit={submit}>
           {!existingBatch && (
             <section className="review-form-section">
-              <div className="review-form-section-title"><span>批次</span><small>代码位置与来源任务</small></div>
+              <div className="review-form-section-title"><span>批次</span><small>{standalone ? 'PR 标识与问题记录' : '代码位置与来源任务'}</small></div>
               <div className="review-form-grid review-form-grid-primary">
                 <label className="field">
-                  <span>代码平台</span>
-                  <Form.Select value={provider} onChange={(event) => setProvider(event.target.value)} required>
-                    <option value="gitlab">GitLab</option>
-                    <option value="github">GitHub</option>
+                  <span>录入方式</span>
+                  <Form.Select value={entryMode} onChange={(event) => { setEntryMode(event.target.value as 'standalone' | 'tracked'); setNoIssues(false) }} required>
+                    <option value="standalone">独立录入</option>
+                    <option value="tracked">关联任务</option>
                   </Form.Select>
+                </label>
+                <label className="field">
+                  <span>代码平台</span>
+                  <Form.Control list="review-provider-options" value={provider} onChange={(event) => setProvider(event.target.value)} placeholder="输入 provider，例如 gitea" required />
+                  <datalist id="review-provider-options">
+                    {providerOptions.map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}
+                  </datalist>
                 </label>
                 <label className="field review-project-field">
                   <span>代码仓库</span>
@@ -244,10 +292,12 @@ function ReviewEntryModal({ existingBatch, onClose, onSaved }: ReviewEntryModalP
                   <span>PR / MR 编号</span>
                   <Form.Control value={prNumber} onChange={(event) => setPrNumber(event.target.value)} placeholder="42" required />
                 </label>
-                <label className="field review-task-field">
-                  <span>原始检视任务 ID</span>
-                  <Form.Control value={reviewTaskId} onChange={(event) => setReviewTaskId(event.target.value)} placeholder="完整 Agent Task UUID" required />
-                </label>
+                {!standalone && (
+                  <label className="field review-task-field">
+                    <span>原始检视任务 ID</span>
+                    <Form.Control value={reviewTaskId} onChange={(event) => setReviewTaskId(event.target.value)} placeholder="完整 Agent Task UUID" required />
+                  </label>
+                )}
               </div>
             </section>
           )}
@@ -260,12 +310,12 @@ function ReviewEntryModal({ existingBatch, onClose, onSaved }: ReviewEntryModalP
               onClick={() => setAdvancedOpen((value) => !value)}
             >
               <Settings size={17} />
-              <span><strong>高级选项</strong><small>版本、关联任务、平台链接与代码位置</small></span>
+              <span><strong>高级选项</strong><small>{standalone ? '问题分类、文件位置与行号' : '版本、关联任务、平台链接与代码位置'}</small></span>
               <ChevronRight size={17} className={advancedOpen ? 'is-open' : ''} />
             </button>
             {advancedOpen && (
               <div className="review-advanced-panel">
-                {!existingBatch && (
+                {!existingBatch && !standalone && (
                   <>
                     <div className="review-advanced-panel-head">
                       <strong>批次追溯信息</strong>
@@ -307,7 +357,7 @@ function ReviewEntryModal({ existingBatch, onClose, onSaved }: ReviewEntryModalP
             <div className="review-form-section-title">
               <span>问题</span>
               <div>
-                <Form.Check className="review-zero-toggle" type="checkbox" checked={noIssues} onChange={(event) => setNoIssues(event.target.checked)} label="本次未发现问题" />
+                {!standalone && <Form.Check className="review-zero-toggle" type="checkbox" checked={noIssues} onChange={(event) => setNoIssues(event.target.checked)} label="本次未发现问题" />}
                 {!noIssues && <button type="button" className="review-add-issue" onClick={() => setIssues((current) => [...current, newIssueDraft()])}><Plus size={14} />增加问题</button>}
               </div>
             </div>
@@ -470,6 +520,7 @@ function ReviewBatchDrawer({ batch, onClose, onChanged, onOpenTask, onContinueCo
 
   const accepted = issues.filter((issue) => issue.verification_status === 'accepted').length
   const rejected = issues.filter((issue) => issue.verification_status === 'not_accepted').length
+  const standalone = isStandaloneBatch(detail)
 
   return (
     <Offcanvas show onHide={onClose} placement="end" className="detail-drawer review-detail-drawer" aria-labelledby="review-detail-title">
@@ -479,7 +530,7 @@ function ReviewBatchDrawer({ batch, onClose, onChanged, onOpenTask, onContinueCo
         </div>
 
         <div className="review-detail-intro">
-          <div className="review-detail-kicker"><ReviewBatchBadge status={detail.status} /><span>{BATCH_STATUS_META[detail.status].hint}</span></div>
+          <div className="review-detail-kicker"><ReviewBatchBadge status={detail.status} /><span>{standalone ? '独立问题记录' : BATCH_STATUS_META[detail.status].hint}</span></div>
           <h2 id="review-detail-title">{detail.project_path}</h2>
           <div className="review-pr-line">
             <span><GitPullRequest size={14} />!{detail.pr_number}</span>
@@ -502,15 +553,19 @@ function ReviewBatchDrawer({ batch, onClose, onChanged, onOpenTask, onContinueCo
               <div><dt>创建时间</dt><dd>{formatDate(detail.created_at)}</dd></div>
               <div><dt>完成时间</dt><dd>{formatDate(detail.verified_at)}</dd></div>
             </dl>
-            <div className="review-task-links">
-              {[
-                ['检视', detail.review_task_id],
-                ['提取', detail.extract_task_id],
-                ['验证', detail.verify_task_id],
-              ].map(([label, taskId]) => taskId && (
-                <button key={label} onClick={() => onOpenTask(taskId)}><span>{label}任务</span><strong>{compactTask(taskId)}</strong><ExternalLink size={12} /></button>
-              ))}
-            </div>
+            {standalone ? (
+              <div className="review-task-links"><span className="workflow-decision workflow-skipped"><i />独立录入 · 无来源任务</span></div>
+            ) : (
+              <div className="review-task-links">
+                {[
+                  ['检视', detail.review_task_id],
+                  ['提取', detail.extract_task_id],
+                  ['验证', detail.verify_task_id],
+                ].map(([label, taskId]) => taskId && (
+                  <button key={label} onClick={() => onOpenTask(taskId)}><span>{label}任务</span><strong>{compactTask(taskId)}</strong><ExternalLink size={12} /></button>
+                ))}
+              </div>
+            )}
           </section>
 
           {detail.status === 'collecting' && (
@@ -729,15 +784,15 @@ export default function ReviewIssuesPage({ onOpenSettings, onOpenTask }: ReviewI
             <div className="state-message review-empty-state"><ShieldCheck size={27} /><strong>{statistics.batch_total ? '没有匹配的回收批次' : '还没有检视统计数据'}</strong><p>{statistics.batch_total ? '调整仓库、PR 或状态筛选后再试。' : '录入第一份检视结果，开始观察问题采纳情况。'}</p>{!statistics.batch_total && <Button variant="primary" onClick={() => setEntryOpen(true)}><Plus size={16} />录入检视</Button>}</div>
           ) : (
             <Table hover className="review-batch-table">
-              <thead><tr><th>仓库 / PR</th><th>回收阶段</th><th>问题</th><th>检视版本</th><th>创建时间</th><th>来源任务</th><th><span className="sr-only">操作</span></th></tr></thead>
+              <thead><tr><th>仓库 / PR</th><th>回收阶段</th><th>问题</th><th>检视版本</th><th>创建时间</th><th>来源</th><th><span className="sr-only">操作</span></th></tr></thead>
               <tbody>{batches.map((batch) => (
                 <tr key={batch.id} tabIndex={0} onClick={() => setSelected(batch)} onKeyDown={(event) => handleRowKey(event, batch)}>
                   <td><div className="review-pr-subject"><strong>{batch.project_path}</strong><span><GitPullRequest size={12} />!{batch.pr_number}<i />{batch.provider}</span></div></td>
-                  <td><div className="review-stage-cell"><ReviewBatchBadge status={batch.status} /><span>{BATCH_STATUS_META[batch.status].hint}</span></div></td>
+                  <td><div className="review-stage-cell"><ReviewBatchBadge status={batch.status} /><span>{isStandaloneBatch(batch) ? '独立问题记录' : BATCH_STATUS_META[batch.status].hint}</span></div></td>
                   <td><span className="review-issue-count">{batch.issue_count}</span></td>
                   <td><code className="review-sha"><GitBranch size={12} />{compactSha(batch.review_head_sha)}</code></td>
                   <td><span className="date-cell">{formatDate(batch.created_at)}</span></td>
-                  <td><button className="review-task-link" onClick={(event) => { event.stopPropagation(); onOpenTask(batch.review_task_id) }}>{compactTask(batch.review_task_id)}<ExternalLink size={11} /></button></td>
+                  <td>{isStandaloneBatch(batch) ? <span className="workflow-decision workflow-skipped"><i />独立录入</span> : <button className="review-task-link" onClick={(event) => { event.stopPropagation(); onOpenTask(batch.review_task_id) }}>{compactTask(batch.review_task_id)}<ExternalLink size={11} /></button>}</td>
                   <td><button className="row-action" onClick={(event) => { event.stopPropagation(); setSelected(batch) }} aria-label={`查看 ${batch.project_path} PR ${batch.pr_number}`}><ChevronRight size={17} /></button></td>
                 </tr>
               ))}</tbody>

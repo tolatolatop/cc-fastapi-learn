@@ -1,11 +1,19 @@
+from cc_fastapi.core.webhook_providers import webhook_provider_registry
 from cc_fastapi.workflows.engine import WorkflowEngine
-from cc_fastapi.workflows.github_prompt import GitHubPromptTaskWorkflow
-from cc_fastapi.workflows.gitlab_prompt import GitLabPromptTaskWorkflow
+from cc_fastapi.workflows.provider_prompt import ProviderPromptTaskWorkflow
 from cc_fastapi.workflows.registry import WorkflowRegistry
 
 
 def build_default_workflow_engine() -> WorkflowEngine:
-    return WorkflowEngine(WorkflowRegistry([GitLabPromptTaskWorkflow(), GitHubPromptTaskWorkflow()]))
+    return WorkflowEngine(
+        WorkflowRegistry(
+            ProviderPromptTaskWorkflow(
+                definition.id,
+                supersede_actions=definition.supersede_actions,
+            )
+            for definition in webhook_provider_registry.list()
+        )
+    )
 
 
 __all__ = ["WorkflowEngine", "WorkflowRegistry", "build_default_workflow_engine"]

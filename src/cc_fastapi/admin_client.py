@@ -284,13 +284,38 @@ class AdminApiClient:
         category: str | None,
         commit_sha: str | None,
     ) -> dict[str, Any]:
-        detail = self.detail(
-            identity,
-            task_id=task_id,
-            task_statuses=task_statuses,
-            include_result=include_result,
-        )
         batches = self.list_batches(identity)
+        try:
+            detail = self.detail(
+                identity,
+                task_id=task_id,
+                task_statuses=task_statuses,
+                include_result=include_result,
+            )
+        except AdminNotFoundError:
+            if task_id or not batches:
+                raise
+            latest_batch = batches[0]
+            detail = {
+                "change_request": {
+                    **identity.params(),
+                    "resource_type": "change_request",
+                    "title": None,
+                    "url": latest_batch.get("pr_url"),
+                    "state": None,
+                    "action": None,
+                    "source_branch": None,
+                    "target_branch": None,
+                    "head_sha": latest_batch.get("review_head_sha"),
+                    "merged_sha": latest_batch.get("merged_sha"),
+                    "last_activity_at": latest_batch.get("updated_at"),
+                    "latest_workflow": None,
+                    "latest_task": None,
+                },
+                "workflow_runs": [],
+                "tasks": [],
+                "task_total": 0,
+            }
         issues: list[dict[str, Any]] = []
         issue_summary: dict[str, Any] | None = None
         if batches:

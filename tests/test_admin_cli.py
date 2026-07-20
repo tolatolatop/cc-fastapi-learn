@@ -35,6 +35,7 @@ from cc_fastapi.db.models import (
     utc_now,
 )
 from cc_fastapi.db.session import get_db
+from cc_fastapi.services.queue import TaskQueueService
 
 
 @pytest.fixture(autouse=True)
@@ -348,11 +349,45 @@ def test_admin_client_adds_pr_issues_without_a_review_task_or_verification():
         assert detail["task_total"] == 0
         assert detail["issue_total"] == 1
         assert detail["batches"][0]["status"] == "completed"
+        assert detail["batches"][0]["source_type"] == "standalone"
+        assert detail["issues"][0]["source_type"] == "standalone"
+        assert detail["issues"][0]["review_task"] is None
+
+        standalone_identity = PullRequestIdentity("gitea", "Org/Legacy", "404")
+        standalone = client.add_issues(standalone_identity, issues=issues)
+        assert standalone["pull_request"] == {
+            "provider": "gitea",
+            "project_path": "org/legacy",
+            "pr_number": "404",
+            "pr_url": None,
+        }
+        standalone_detail = client.show(
+            standalone_identity,
+            task_id=None,
+            task_statuses=[],
+            include_result=True,
+            severities=[],
+            issue_statuses=[],
+            batch_statuses=[],
+            category=None,
+            commit_sha=None,
+        )
+        assert standalone_detail["workflow_runs"] == []
+        assert standalone_detail["task_total"] == 0
+        assert standalone_detail["issue_total"] == 1
+        assert standalone_detail["issues"][0]["source_type"] == "standalone"
 
         with pytest.raises(AdminNotFoundError):
-            client.add_issues(
-                PullRequestIdentity("github", "org/project", "404"),
-                issues=issues,
+            client.show(
+                PullRequestIdentity("gitea", "org/missing", "405"),
+                task_id=None,
+                task_statuses=[],
+                include_result=True,
+                severities=[],
+                issue_statuses=[],
+                batch_statuses=[],
+                category=None,
+                commit_sha=None,
             )
 
     issue_id = recorded["items"][0]["id"]
@@ -365,12 +400,23 @@ def test_admin_client_adds_pr_issues_without_a_review_task_or_verification():
     with session_factory() as db:
         batches = db.query(ReviewIssueBatch).all()
         stored_issues = db.query(ReviewIssue).all()
-        anchor = db.get(AgentTask, batches[0].review_task_id)
-        assert len(batches) == 1
-        assert len(stored_issues) == 1
+        gitlab_batch = next(item for item in batches if item.provider == "gitlab")
+        anchor = db.get(AgentTask, gitlab_batch.review_task_id)
+        assert len(batches) == 2
+        assert len(stored_issues) == 2
         assert anchor is not None
         assert anchor.metadata_json["source"] == "manual_review_issue_import"
-        assert db.query(WorkflowTaskLink).filter_by(task_id=anchor.id).count() == 0
+        assert db.query(WorkflowTaskLink).count() == 1
+        visible_tasks, visible_total = TaskQueueService().list_tasks(
+            db,
+            statuses=None,
+            queue_name=None,
+            search=None,
+            offset=0,
+            limit=20,
+        )
+        assert visible_total == 1
+        assert visible_tasks[0].queue_name == "default"
 
 
 def test_add_issues_input_requires_at_least_one_issue():

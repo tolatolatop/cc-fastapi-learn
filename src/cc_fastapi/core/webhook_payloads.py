@@ -1,6 +1,5 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
-from types import MappingProxyType
 from typing import Any, Protocol
 
 from cc_fastapi.core.repository_values import (
@@ -115,14 +114,16 @@ class WebhookPayload:
         except ValueError:
             return None
         normalized_event_type = _text(event_type) or "event"
-        adapter = WEBHOOK_PAYLOAD_ADAPTERS.get(provider)
-        if adapter is None:
+        from cc_fastapi.core.webhook_providers import webhook_provider_registry
+
+        definition = webhook_provider_registry.get(provider)
+        if definition is None:
             return cls(
                 provider=provider,
                 event_type=normalized_event_type,
                 event_kind=normalized_event_type,
             )
-        return adapter.parse(normalized_event_type, payload)
+        return definition.payload_adapter.parse(normalized_event_type, payload)
 
 
 class WebhookPayloadAdapter(Protocol):
@@ -267,11 +268,3 @@ class GitLabWebhookPayloadAdapter:
             ref=ref,
             change_request=change_request,
         )
-
-
-WEBHOOK_PAYLOAD_ADAPTERS: Mapping[str, WebhookPayloadAdapter] = MappingProxyType(
-    {
-        "github": GitHubWebhookPayloadAdapter(),
-        "gitlab": GitLabWebhookPayloadAdapter(),
-    }
-)
