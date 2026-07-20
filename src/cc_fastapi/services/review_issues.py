@@ -1,11 +1,19 @@
 from dataclasses import dataclass
 from datetime import datetime
+from hashlib import sha256
+import json
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from cc_fastapi.core.repository_values import (
+    normalize_repository_project_path,
+    normalize_repository_provider,
+)
+from cc_fastapi.core.webhook_payloads import WebhookPayload
 from cc_fastapi.db.models import (
     AgentTask,
     ReviewBatchStatus,
@@ -45,6 +53,14 @@ class PullRequestIssueRecords:
     total: int
     tasks: dict[str, AgentTask]
     summary: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class RecordedPullRequestIssues:
+    batch: ReviewIssueBatch
+    issues: list[ReviewIssue]
+    pr_url: str | None
+    idempotent: bool
 
 
 class ReviewIssueService:
@@ -112,6 +128,201 @@ class ReviewIssueService:
             ) from exc
         db.refresh(batch)
         return batch
+
+    @staticmethod
+    def _manual_submission_digest(
+        *,
+        provider: str,
+        project_path: str,
+        pr_number: str,
+        items: list[dict[str, Any]],
+    ) -> str:
+        canonical = {
+            "provider": provider,
+            "project_path": project_path,
+            "pr_number": pr_number,
+            "issues": items,
+        }
+        encoded = json.dumps(
+            canonical,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        return sha256(encoded).hexdigest()
+
+    @staticmethod
+    def _load_manual_submission(
+        db: Session,
+        *,
+        batch_id: str,
+        task_id: str,
+        submission_digest: str,
+    ) -> RecordedPullRequestIssues | None:
+        batch = db.get(ReviewIssueBatch, batch_id)
+        task = db.get(AgentTask, task_id)
+        metadata = task.metadata_json if task is not None else None
+        if (
+            batch is None
+            or task is None
+            or batch.review_task_id != task.id
+            or not isinstance(metadata, dict)
+            or metadata.get("source") != "manual_review_issue_import"
+            or metadata.get("submission_digest") != submission_digest
+        ):
+            return None
+        issues = list(
+            db.scalars(
+                select(ReviewIssue)
+                .where(ReviewIssue.batch_id == batch.id)
+                .order_by(ReviewIssue.issue_no.asc())
+            )
+        )
+        return RecordedPullRequestIssues(
+            batch=batch,
+            issues=issues,
+            pr_url=batch.pr_url,
+            idempotent=True,
+        )
+
+    def record_pull_request_issues(
+        self,
+        db: Session,
+        *,
+        provider: str,
+        project_path: str,
+        pr_number: str,
+        items: list[dict[str, Any]],
+    ) -> RecordedPullRequestIssues:
+        provider = normalize_repository_provider(provider)
+        project_path = normalize_repository_project_path(project_path)
+        pr_number = pr_number.strip()
+        if not pr_number:
+            raise ReviewIssueFilterError("pr_number must not be blank")
+        if not items:
+            raise ReviewIssueFilterError("at least one issue is required")
+
+        latest = db.execute(
+            select(WorkflowRun)
+            .join(
+                WorkflowCorrelation,
+                WorkflowCorrelation.workflow_run_id == WorkflowRun.id,
+            )
+            .where(
+                WorkflowCorrelation.provider == provider,
+                WorkflowCorrelation.resource_type.in_(("merge_request", "pull_request")),
+                WorkflowCorrelation.project_path == project_path,
+                WorkflowCorrelation.resource_id == pr_number,
+            )
+            .distinct()
+            .order_by(WorkflowRun.created_at.desc(), WorkflowRun.id.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if latest is None:
+            raise ReviewIssueNotFoundError("review pull request not found")
+
+        digest = self._manual_submission_digest(
+            provider=provider,
+            project_path=project_path,
+            pr_number=pr_number,
+            items=items,
+        )
+        task_id = str(uuid5(NAMESPACE_URL, f"cc-fastapi:manual-review-task:{digest}"))
+        batch_id = str(uuid5(NAMESPACE_URL, f"cc-fastapi:manual-review-batch:{digest}"))
+        existing = self._load_manual_submission(
+            db,
+            batch_id=batch_id,
+            task_id=task_id,
+            submission_digest=digest,
+        )
+        if existing is not None:
+            return existing
+
+        payload = latest.payload_json if isinstance(latest.payload_json, dict) else {}
+        parsed = WebhookPayload.from_payload(latest.provider, latest.event_type, payload)
+        change_request = parsed.change_request if parsed is not None else None
+        now = utc_now()
+        task = AgentTask(
+            id=task_id,
+            status=TaskStatus.SUCCEEDED,
+            queue_name="review-issue-import",
+            priority=0,
+            payload={
+                "kind": "manual_review_issue_import",
+                "provider": provider,
+                "project_path": project_path,
+                "pr_number": pr_number,
+            },
+            result=None,
+            metadata_json={
+                "source": "manual_review_issue_import",
+                "submission_digest": digest,
+            },
+            agent_mode=False,
+            unattended=True,
+            created_at=now,
+            scheduled_at=now,
+            started_at=now,
+            finished_at=now,
+            attempt=1,
+            max_attempts=1,
+            queue_expire_at=now,
+        )
+        batch = ReviewIssueBatch(
+            id=batch_id,
+            provider=provider,
+            instance_url=latest.instance_url,
+            project_path=project_path,
+            pr_number=pr_number,
+            pr_url=change_request.url if change_request is not None else None,
+            review_workflow_run_id=None,
+            review_task_id=task.id,
+            review_head_sha=(
+                change_request.head_sha if change_request is not None else None
+            ),
+            merged_sha=(
+                change_request.merged_sha if change_request is not None else None
+            ),
+            status=ReviewBatchStatus.COMPLETED,
+            issue_count=len(items),
+            created_at=now,
+            extracted_at=now,
+            verified_at=None,
+            updated_at=now,
+        )
+        issues = [
+            ReviewIssue(
+                batch_id=batch.id,
+                issue_no=index,
+                **values,
+            )
+            for index, values in enumerate(items, start=1)
+        ]
+        db.add_all([task, batch, *issues])
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            existing = self._load_manual_submission(
+                db,
+                batch_id=batch_id,
+                task_id=task_id,
+                submission_digest=digest,
+            )
+            if existing is not None:
+                return existing
+            raise ReviewIssueConflictError(
+                "manual review issues could not be recorded"
+            ) from exc
+        db.refresh(batch)
+        for issue in issues:
+            db.refresh(issue)
+        return RecordedPullRequestIssues(
+            batch=batch,
+            issues=issues,
+            pr_url=batch.pr_url,
+            idempotent=False,
+        )
 
     @staticmethod
     def get_batch(db: Session, batch_id: str) -> ReviewIssueBatch | None:

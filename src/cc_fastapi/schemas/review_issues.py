@@ -128,6 +128,25 @@ class ReviewIssueBulkCreateRequest(BaseModel):
     items: list[ReviewIssueCreateRequest] = Field(max_length=500)
 
 
+class ReviewPullRequestIssueCreateRequest(BaseModel):
+    provider: str = Field(max_length=32)
+    project_path: str = Field(max_length=255)
+    pr_number: str = Field(max_length=128)
+    issues: list[ReviewIssueCreateRequest] = Field(min_length=1, max_length=500)
+
+    _normalize_pr_number = field_validator("pr_number")(_strip_required)
+
+    @field_validator("provider")
+    @classmethod
+    def normalize_provider(cls, value: str) -> str:
+        return normalize_repository_provider(value)
+
+    @field_validator("project_path")
+    @classmethod
+    def normalize_project_path(cls, value: str) -> str:
+        return normalize_repository_project_path(value)
+
+
 class ReviewIssueVerificationItemRequest(BaseModel):
     id: str = Field(max_length=36)
     status: ReviewIssueVerificationStatus
@@ -243,3 +262,10 @@ class ReviewPullRequestIssueListResponse(BaseModel):
     items: list[ReviewPullRequestIssueItemResponse]
     total: int
     summary: ReviewPullRequestIssueSummaryResponse
+
+
+class ReviewPullRequestIssueCreateResponse(BaseModel):
+    pull_request: ReviewPullRequestReferenceResponse
+    items: list[ReviewIssueResponse]
+    total: int
+    idempotent: bool

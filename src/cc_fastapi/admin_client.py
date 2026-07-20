@@ -458,6 +458,25 @@ class AdminApiClient:
             "issues": final_issues,
         }
 
+    def add_issues(
+        self,
+        identity: PullRequestIdentity,
+        *,
+        issues: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        if not issues:
+            raise AdminInputError("at least one issue is required")
+        response = self.request(
+            "POST",
+            "/v1/review-issues/pull-request",
+            json={**identity.params(), "issues": issues},
+        )
+        return {
+            "ok": True,
+            "operation": "add_issues",
+            **response,
+        }
+
     def verify(
         self,
         identity: PullRequestIdentity,
@@ -612,6 +631,13 @@ def parse_collect_input(payload: Any) -> list[dict[str, Any]]:
     except (ValidationError, TypeError) as exc:
         raise AdminInputError(str(exc)) from exc
     return [item.model_dump(mode="json") for item in validated.items]
+
+
+def parse_add_issues_input(payload: Any) -> list[dict[str, Any]]:
+    items = parse_collect_input(payload)
+    if not items:
+        raise AdminInputError("at least one issue is required")
+    return items
 
 
 def parse_verify_input(payload: Any) -> list[VerifyResult]:

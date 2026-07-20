@@ -22,6 +22,8 @@ from cc_fastapi.schemas.review_issues import (
     ReviewIssueStatisticsResponse,
     ReviewIssueVerificationUpdateRequest,
     ReviewIssueTaskReferenceResponse,
+    ReviewPullRequestIssueCreateRequest,
+    ReviewPullRequestIssueCreateResponse,
     ReviewPullRequestIssueItemResponse,
     ReviewPullRequestIssueListResponse,
     ReviewPullRequestIssueSummaryResponse,
@@ -57,6 +59,43 @@ def _raise_service_error(exc: Exception) -> None:
     if isinstance(exc, ReviewIssueConflictError):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     raise exc
+
+
+@issue_router.post(
+    "/pull-request",
+    response_model=ReviewPullRequestIssueCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def record_pull_request_review_issues(
+    payload: ReviewPullRequestIssueCreateRequest,
+    db: Session = Depends(get_db),
+) -> ReviewPullRequestIssueCreateResponse:
+    try:
+        recorded = reviews.record_pull_request_issues(
+            db,
+            provider=payload.provider,
+            project_path=payload.project_path,
+            pr_number=payload.pr_number,
+            items=[item.model_dump(mode="json") for item in payload.issues],
+        )
+    except (
+        ReviewIssueNotFoundError,
+        ReviewIssueReferenceError,
+        ReviewIssueConflictError,
+    ) as exc:
+        _raise_service_error(exc)
+        raise AssertionError("unreachable")
+    return ReviewPullRequestIssueCreateResponse(
+        pull_request=ReviewPullRequestReferenceResponse(
+            provider=recorded.batch.provider,
+            project_path=recorded.batch.project_path,
+            pr_number=recorded.batch.pr_number,
+            pr_url=recorded.pr_url,
+        ),
+        items=[ReviewIssueResponse.model_validate(item) for item in recorded.issues],
+        total=len(recorded.issues),
+        idempotent=recorded.idempotent,
+    )
 
 
 @batch_router.post("", response_model=ReviewIssueBatchResponse, status_code=status.HTTP_201_CREATED)

@@ -10,6 +10,7 @@ from cc_fastapi.admin_client import (
     AdminApiClient,
     AdminClientError,
     PullRequestIdentity,
+    parse_add_issues_input,
     parse_collect_input,
     parse_verify_input,
     read_json_input,
@@ -60,6 +61,10 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--task-id")
     collect.add_argument("--input", required=True)
 
+    add_issues = pr_commands.add_parser("add-issues")
+    _add_identity_arguments(add_issues)
+    add_issues.add_argument("--input", required=True)
+
     verify = pr_commands.add_parser("verify")
     _add_identity_arguments(verify)
     verify.add_argument("--batch-id")
@@ -103,6 +108,11 @@ def _run(client: AdminApiClient, args: argparse.Namespace) -> dict[str, Any]:
             _identity(args),
             task_id=args.task_id,
             issues=parse_collect_input(payload),
+        )
+    if args.pr_command == "add-issues":
+        return client.add_issues(
+            _identity(args),
+            issues=parse_add_issues_input(payload),
         )
     if args.pr_command == "verify":
         return client.verify(

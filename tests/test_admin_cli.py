@@ -11,8 +11,11 @@ from sqlalchemy.pool import StaticPool
 from cc_fastapi.admin_client import (
     AdminApiClient,
     AdminConflictError,
+    AdminInputError,
+    AdminNotFoundError,
     PullRequestIdentity,
     VerifyResult,
+    parse_add_issues_input,
     parse_collect_input,
 )
 from cc_fastapi.api.internal import router as internal_router
@@ -22,6 +25,8 @@ from cc_fastapi.core.config import get_settings
 from cc_fastapi.db.models import (
     AgentTask,
     Base,
+    ReviewIssue,
+    ReviewIssueBatch,
     TaskStatus,
     WorkflowCorrelation,
     WorkflowRun,
@@ -295,6 +300,82 @@ def test_admin_client_collects_idempotently_and_verifies_by_issue_number():
                     )
                 ],
             )
+
+
+def test_admin_client_adds_pr_issues_without_a_review_task_or_verification():
+    test_client, session_factory = build_client()
+    seed_change_requests(session_factory)
+    identity = PullRequestIdentity("gitlab", "Group/Other", "7")
+    issues = parse_add_issues_input(
+        {
+            "issues": [
+                {
+                    "severity": "medium",
+                    "category": "maintainability",
+                    "title": "Duplicated condition",
+                    "description": "The branch repeats the same condition.",
+                    "file_path": "src/rules.py",
+                    "line_number": 27,
+                }
+            ]
+        }
+    )
+
+    with AdminApiClient(
+        "http://testserver", transport=bridge_transport(test_client)
+    ) as client:
+        recorded = client.add_issues(identity, issues=issues)
+        assert recorded["operation"] == "add_issues"
+        assert recorded["idempotent"] is False
+        assert recorded["pull_request"]["project_path"] == "group/other"
+        assert recorded["items"][0]["verification_status"] == "unverified"
+
+        repeated = client.add_issues(identity, issues=issues)
+        assert repeated["idempotent"] is True
+        assert repeated["items"][0]["id"] == recorded["items"][0]["id"]
+
+        detail = client.show(
+            identity,
+            task_id=None,
+            task_statuses=[],
+            include_result=True,
+            severities=[],
+            issue_statuses=[],
+            batch_statuses=[],
+            category=None,
+            commit_sha=None,
+        )
+        assert detail["task_total"] == 0
+        assert detail["issue_total"] == 1
+        assert detail["batches"][0]["status"] == "completed"
+
+        with pytest.raises(AdminNotFoundError):
+            client.add_issues(
+                PullRequestIdentity("github", "org/project", "404"),
+                issues=issues,
+            )
+
+    issue_id = recorded["items"][0]["id"]
+    verification = test_client.patch(
+        f"/v1/review-issues/{issue_id}",
+        json={"status": "accepted", "note": "should remain untracked"},
+    )
+    assert verification.status_code == 409
+
+    with session_factory() as db:
+        batches = db.query(ReviewIssueBatch).all()
+        stored_issues = db.query(ReviewIssue).all()
+        anchor = db.get(AgentTask, batches[0].review_task_id)
+        assert len(batches) == 1
+        assert len(stored_issues) == 1
+        assert anchor is not None
+        assert anchor.metadata_json["source"] == "manual_review_issue_import"
+        assert db.query(WorkflowTaskLink).filter_by(task_id=anchor.id).count() == 0
+
+
+def test_add_issues_input_requires_at_least_one_issue():
+    with pytest.raises(AdminInputError, match="at least one issue"):
+        parse_add_issues_input({"issues": []})
 
 
 def test_cli_reports_missing_connection_configuration_as_json(monkeypatch, capsys):

@@ -115,15 +115,18 @@ export CC_FASTAPI_TOKEN=your-token
 ```text
 cc-fastapi-admin pr recent --limit 10
 cc-fastapi-admin pr show github org/project 42 --task-status succeeded
+cc-fastapi-admin pr add-issues github org/project 42 --input issues.json
 cc-fastapi-admin pr collect github org/project 42 --input issues.json
 cc-fastapi-admin pr verify github org/project 42 --input results.json
 ```
 
-`collect` 输入为 `{"issues": [...]}`，支持最多 500 个问题；未指定 `--task-id` 时只使用该 PR
-最新的 active+succeeded Task。`verify` 输入为
+`add-issues` 输入为 `{"issues": [...]}`，要求至少一个、最多 500 个问题；它只要求 PR/MR
+已经由 Webhook 记录，不需要提供或解析 Agent Task，也不进入合入后核验流程。相同 PR 与问题内容
+重复提交会返回同一批记录。`collect` 使用相同输入结构，允许空问题列表；未指定 `--task-id` 时
+只使用该 PR 最新的 active+succeeded Task。`verify` 输入为
 `{"results": [{"issue_no": 1, "status": "accepted", "note": "..."}]}`，在批次内把
-`issue_no` 映射为内部 UUID，单次最多处理 500 条。两条写命令都支持 `--input -` 从 stdin
-读取，重试时会读取最终状态并进行幂等校验。
+`issue_no` 映射为内部 UUID，单次最多处理 500 条。三条写命令都支持 `--input -` 从 stdin
+读取；三条写命令均支持安全重试。
 
 ## 检视问题统计 API
 
@@ -140,6 +143,7 @@ PATCH /v1/review-issue-batches/{batch_id}
 POST  /v1/review-issue-batches/{batch_id}/issues
 PATCH /v1/review-issue-batches/{batch_id}/issues
 
+POST  /v1/review-issues/pull-request
 GET   /v1/review-issues
 GET   /v1/review-issues/{issue_id}
 PATCH /v1/review-issues/{issue_id}
@@ -150,6 +154,10 @@ GET   /v1/review-issues/summary
 `verifying` 后，可以逐条或批量写入 `accepted`、`not_accepted` 验证结果。全部问题完成验证时，
 批次自动变为 `completed`。零问题批次同样可以完成回收并计入汇总。列表接口支持按仓库、PR、
 状态、等级和创建时间筛选，汇总接口返回问题总数、已验证数、接受数、采纳率和等级分布。
+
+`POST /v1/review-issues/pull-request` 是无需 Task 的轻量录入入口。为兼容现有非空外键且不修改
+数据库结构，服务端会创建一个不关联 Workflow、不会被执行的内部锚点，并把录入批次直接置为
+不可变终态；问题保留 `unverified`，不会进入验证流程，也不会出现在该 PR 的 Task 历史中。
 
 ## 列表分页
 
