@@ -13,19 +13,10 @@ RUN apt-get update \
     && groupadd --gid 10001 ccagent \
     && useradd --uid 10001 --gid ccagent --create-home --shell /usr/sbin/nologin ccagent
 
-RUN pip install --no-cache-dir \
-    "fastapi>=0.116.0,<0.117.0" \
-    "uvicorn>=0.35.0,<0.36.0" \
-    "sqlalchemy>=2.0.43,<3.0.0" \
-    "pydantic-settings>=2.10.1,<3.0.0" \
-    "httpx>=0.28.0,<0.29.0" \
-    "claude-agent-sdk>=0.1.44,<0.2.0" \
-    "jinja2>=3.1.5,<4.0.0" \
-    "pyyaml>=6.0.2,<7.0.0" \
-    "pymysql>=1.1.1,<2.0.0" \
-    "psycopg[binary]>=3.3.3,<4.0.0"
-
+COPY pyproject.toml README.md ./
 COPY --chown=ccagent:ccagent src ./src
+RUN python -m pip install --no-cache-dir .
+
 COPY --chown=ccagent:ccagent config ./config
 COPY docker-entrypoint.sh /usr/local/bin/cc-fastapi-entrypoint
 COPY docker-admin-entrypoint.sh /usr/local/bin/cc-fastapi-admin

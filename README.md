@@ -4,6 +4,19 @@
 
 架构说明：[Workflow 与数据库概念](docs/workflows-and-database.md)。
 
+## Python 版本
+
+后端支持 Python 3.12 及以上版本（`>=3.12,<4.0`），生产容器固定使用 Python 3.12。标准本地
+安装可执行：
+
+```bash
+poetry env use python3.12
+poetry install
+```
+
+Docker 镜像会直接从 `pyproject.toml` 构建并安装 `cc-fastapi` 项目包，避免容器与本地环境维护
+两套不同的依赖声明。
+
 ## Docker Compose 启动
 
 Compose 会自动读取项目根目录的 `.env`。首次部署可从示例文件复制后填写模型和 Webhook 配置：
