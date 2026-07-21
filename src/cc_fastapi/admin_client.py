@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
@@ -105,7 +106,10 @@ class AdminApiClient:
     ) -> None:
         normalized_url = base_url.strip().rstrip("/")
         if not normalized_url:
-            raise AdminInputError("CC_FASTAPI_BASE_URL is required")
+            raise AdminInputError(
+                "API base URL is required; use --base-url or CC_FASTAPI_BASE_URL"
+            )
+        self.base_url = normalized_url
         headers = {"X-API-Token": token} if token else {}
         self.client = httpx.Client(
             base_url=normalized_url,
@@ -158,6 +162,22 @@ class AdminApiClient:
         if response.status_code == 422:
             raise AdminInputError(str(detail))
         raise AdminClientError(str(detail))
+
+    def status(self) -> dict[str, Any]:
+        health = self.request("GET", "/healthz")
+        return {
+            "ok": health.get("status") == "ok",
+            "base_url": self.base_url,
+            "health": health,
+        }
+
+    def show_task(self, task_id: str) -> dict[str, Any]:
+        normalized_task_id = task_id.strip()
+        if not normalized_task_id:
+            raise AdminInputError("task_id must not be blank")
+        return self.request(
+            "GET", f"/v1/agent-tasks/{quote(normalized_task_id, safe='')}"
+        )
 
     def paged_items(
         self,

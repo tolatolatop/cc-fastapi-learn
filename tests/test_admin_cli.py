@@ -20,7 +20,7 @@ from cc_fastapi.admin_client import (
 )
 from cc_fastapi.api.internal import router as internal_router
 from cc_fastapi.api.review_issues import batch_router, issue_router
-from cc_fastapi.cli import main
+from cc_fastapi.cli import build_parser, main
 from cc_fastapi.core.config import get_settings
 from cc_fastapi.db.models import (
     AgentTask,
@@ -424,6 +424,143 @@ def test_add_issues_input_requires_at_least_one_issue():
         parse_add_issues_input({"issues": []})
 
 
+def test_admin_client_status_reports_resolved_base_url_and_health():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url == "http://testserver/healthz"
+        return httpx.Response(200, json={"status": "ok"}, request=request)
+
+    with AdminApiClient(
+        "http://testserver/", transport=httpx.MockTransport(handler)
+    ) as client:
+        assert client.status() == {
+            "ok": True,
+            "base_url": "http://testserver",
+            "health": {"status": "ok"},
+        }
+
+
+def test_admin_client_gets_prompt_and_result_by_task_id():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url == "http://testserver/v1/agent-tasks/task-123"
+        return httpx.Response(
+            200,
+            json={
+                "id": "task-123",
+                "status": "succeeded",
+                "prompt": "Review this pull request",
+                "result": {"output_text": "No blocking issues"},
+            },
+            request=request,
+        )
+
+    with AdminApiClient(
+        "http://testserver", transport=httpx.MockTransport(handler)
+    ) as client:
+        assert client.show_task(" task-123 ") == {
+            "id": "task-123",
+            "status": "succeeded",
+            "prompt": "Review this pull request",
+            "result": {"output_text": "No blocking issues"},
+        }
+
+
+def test_admin_client_rejects_blank_task_id():
+    with AdminApiClient(
+        "http://testserver", transport=httpx.MockTransport(lambda _request: None)
+    ) as client:
+        with pytest.raises(AdminInputError, match="task_id must not be blank"):
+            client.show_task("  ")
+
+
+def test_cli_status_uses_connection_configuration(monkeypatch, capsys):
+    class FakeAdminApiClient:
+        def __init__(self, base_url: str, token: str):
+            assert base_url == "http://api.example.test"
+            assert token == "secret"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object):
+            return None
+
+        def status(self):
+            return {
+                "ok": True,
+                "base_url": "http://api.example.test",
+                "health": {"status": "ok"},
+            }
+
+    monkeypatch.setenv("CC_FASTAPI_BASE_URL", "http://api.example.test")
+    monkeypatch.setenv("CC_FASTAPI_TOKEN", "secret")
+    monkeypatch.setattr("cc_fastapi.cli.AdminApiClient", FakeAdminApiClient)
+
+    assert main(["status"]) == 0
+    assert '"base_url": "http://api.example.test"' in capsys.readouterr().out
+
+
+def test_cli_shows_task_by_id(monkeypatch, capsys):
+    class FakeAdminApiClient:
+        def __init__(self, base_url: str, token: str):
+            assert base_url == "http://api.example.test"
+            assert token == "secret"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object):
+            return None
+
+        def show_task(self, task_id: str):
+            assert task_id == "task-123"
+            return {
+                "id": task_id,
+                "prompt": "Review this pull request",
+                "result": {"output_text": "No blocking issues"},
+            }
+
+    monkeypatch.setenv("CC_FASTAPI_BASE_URL", "http://api.example.test")
+    monkeypatch.setenv("CC_FASTAPI_TOKEN", "secret")
+    monkeypatch.setattr("cc_fastapi.cli.AdminApiClient", FakeAdminApiClient)
+
+    assert main(["task", "show", "task-123"]) == 0
+    output = capsys.readouterr().out
+    assert '"prompt": "Review this pull request"' in output
+    assert '"output_text": "No blocking issues"' in output
+
+
+def test_pr_help_explains_each_command(capsys):
+    with pytest.raises(SystemExit, match="0"):
+        build_parser().parse_args(["pr", "--help"])
+
+    output = capsys.readouterr().out
+    assert "list PRs/MRs recently observed through Webhooks" in output
+    assert "show one PR/MR with Workflow" in output
+    assert "record findings from a successful Task" in output
+    assert "record standalone findings" in output
+    assert "record accepted or not-accepted outcomes" in output
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected_help"),
+    [
+        (["task", "show", "--help"], "result.output_text"),
+        (["pr", "recent", "--help"], "not a live query"),
+        (["pr", "show", "--help"], "--without-results"),
+        (["pr", "collect", "--help"], "latest active Task"),
+        (["pr", "add-issues", "--help"], "does not require a Task or Webhook"),
+        (["pr", "verify", "--help"], "--batch-id is required"),
+    ],
+)
+def test_subcommand_help_explains_business_semantics(
+    arguments: list[str], expected_help: str, capsys
+):
+    with pytest.raises(SystemExit, match="0"):
+        build_parser().parse_args(arguments)
+
+    assert expected_help in capsys.readouterr().out
+
+
 def test_cli_reports_missing_connection_configuration_as_json(monkeypatch, capsys):
     monkeypatch.delenv("CC_FASTAPI_BASE_URL", raising=False)
 
@@ -431,5 +568,6 @@ def test_cli_reports_missing_connection_configuration_as_json(monkeypatch, capsy
 
     assert exit_code == 2
     assert capsys.readouterr().err == (
-        '{"ok": false, "error": "CC_FASTAPI_BASE_URL is required", "exit_code": 2}\n'
+        '{"ok": false, "error": "API base URL is required; use --base-url or '
+        'CC_FASTAPI_BASE_URL", "exit_code": 2}\n'
     )

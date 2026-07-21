@@ -110,20 +110,57 @@ GET /v1/internal/gitlab/merge-request-tasks?project_path=group/project&merge_req
 
 ## Agent 管理 CLI
 
-安装项目后可使用 PR-centric 管理命令。客户端连接配置与服务端 `API_TOKEN` 分离：
+对于 Compose 部署，推荐直接调用运行中容器里的 CLI：
 
 ```bash
-export CC_FASTAPI_BASE_URL=http://localhost:18000
-export CC_FASTAPI_TOKEN=your-token
+docker exec cc-fastapi-app cc-fastapi-admin status
 ```
 
+该方式不依赖当前工作目录，也不依赖宿主机安装 Python 包。CLI 固定连接容器内部的
+`http://127.0.0.1:8000`，并自动复用容器已有的 `API_TOKEN`；不会依赖可能变化的宿主机映射
+端口。`status` 会返回实际使用的服务地址和 `/healthz` 结果，但不会输出 token。
+
+以下命令都可以从任意目录执行：
+
 ```text
-cc-fastapi-admin pr recent --limit 10
-cc-fastapi-admin pr show github org/project 42 --task-status succeeded
-cc-fastapi-admin pr add-issues github org/project 42 --input issues.json
-cc-fastapi-admin pr collect github org/project 42 --input issues.json
-cc-fastapi-admin pr verify github org/project 42 --input results.json
+docker exec cc-fastapi-app cc-fastapi-admin pr recent --limit 10
+docker exec cc-fastapi-app cc-fastapi-admin pr show github org/project 42 --task-status succeeded
+docker exec cc-fastapi-app cc-fastapi-admin task show <task_id>
 ```
+
+`task show` 不要求先提供 provider、仓库或 PR/MR 信息，直接返回任务详情；任务 Prompt 位于
+`prompt`，完整任务结果位于 `result`，常规文本输出位于 `result.output_text`。
+
+CLI 内置分层帮助。`pr --help` 会说明每个 PR 操作的业务语义，进入具体命令后会显示参数、
+选择规则、输入结构和示例：
+
+```bash
+docker exec cc-fastapi-app cc-fastapi-admin --help
+docker exec cc-fastapi-app cc-fastapi-admin task show --help
+docker exec cc-fastapi-app cc-fastapi-admin pr --help
+docker exec cc-fastapi-app cc-fastapi-admin pr collect --help
+```
+
+写命令使用 stdin 把宿主机文件传给容器，文件推荐使用绝对路径：
+
+```bash
+docker exec -i cc-fastapi-app cc-fastapi-admin pr add-issues github org/project 42 --input - < /absolute/path/issues.json
+docker exec -i cc-fastapi-app cc-fastapi-admin pr collect github org/project 42 --input - < /absolute/path/issues.json
+docker exec -i cc-fastapi-app cc-fastapi-admin pr verify github org/project 42 --input - < /absolute/path/results.json
+```
+
+如需从宿主机安装后的 `cc-fastapi-admin` 直接连接，先用
+`docker port cc-fastapi-app 8000/tcp` 查询当前发布端口，再显式配置客户端：
+
+```bash
+export CC_FASTAPI_BASE_URL=http://127.0.0.1:<查询到的端口>
+export CC_FASTAPI_TOKEN=your-token
+cc-fastapi-admin status
+```
+
+全局安装产生的 `cc-fastapi-admin` 不依赖当前目录；`poetry run cc-fastapi-admin` 需要在能够找到
+本项目 `pyproject.toml` 的目录执行。`docker compose exec` 同样默认依赖当前目录中的 Compose
+文件，因此 agent 自动化应优先使用上面的 `docker exec` 形式。
 
 `add-issues` 输入为 `{"issues": [...]}`，要求至少一个、最多 500 个问题；它只要求 provider、
 仓库路径和 PR/MR 编号，不依赖 Webhook 或 Agent Task，也不进入合入后核验流程。若存在 Webhook
