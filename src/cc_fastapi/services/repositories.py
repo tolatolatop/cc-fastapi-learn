@@ -1,4 +1,3 @@
-from dataclasses import replace
 from typing import Any
 
 from sqlalchemy import and_, case, func, or_, select
@@ -6,11 +5,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from cc_fastapi.core.repository_values import (
+    normalize_repository_project_path,
     normalize_repository_provider,
     normalize_repository_search,
     normalize_repository_tags,
 )
-from cc_fastapi.core.webhook_payloads import WebhookPayload, WebhookRepository
+from cc_fastapi.core.webhook_payloads import WebhookPayload
 from cc_fastapi.db.models import (
     Repository,
     ReviewIssue,
@@ -65,8 +65,11 @@ class RepositoryService:
         db.refresh(repository)
         return repository
 
-    def sync_from_webhooks(self, db: Session) -> list[Repository]:
-        discovered: dict[tuple[str, str], WebhookRepository] = {}
+    @staticmethod
+    def _discover_webhook_repositories(
+        db: Session,
+    ) -> dict[tuple[str, str], str | None]:
+        discovered: dict[tuple[str, str], str | None] = {}
         webhook_rows = db.execute(
             select(
                 WebhookTrigger.provider,
@@ -82,9 +85,38 @@ class RepositoryService:
                 continue
             repository = parsed_payload.repository
             key = (parsed_payload.provider, repository.project_path)
-            current = discovered.setdefault(key, repository)
-            if current.web_url is None and repository.web_url is not None:
-                discovered[key] = replace(current, web_url=repository.web_url)
+            if key not in discovered or (
+                discovered[key] is None and repository.web_url is not None
+            ):
+                discovered[key] = repository.web_url
+        return discovered
+
+    @staticmethod
+    def _discover_review_issue_repositories(
+        db: Session,
+    ) -> set[tuple[str, str]]:
+        discovered: set[tuple[str, str]] = set()
+        review_rows = db.execute(
+            select(ReviewIssueBatch.provider, ReviewIssueBatch.project_path)
+            .join(ReviewIssue, ReviewIssue.batch_id == ReviewIssueBatch.id)
+            .distinct()
+            .order_by(ReviewIssueBatch.provider, ReviewIssueBatch.project_path)
+        ).tuples()
+        for provider, project_path in review_rows:
+            try:
+                key = (
+                    normalize_repository_provider(provider),
+                    normalize_repository_project_path(project_path),
+                )
+            except ValueError:
+                continue
+            discovered.add(key)
+        return discovered
+
+    def sync_from_sources(self, db: Session) -> list[Repository]:
+        discovered = self._discover_webhook_repositories(db)
+        for key in self._discover_review_issue_repositories(db):
+            discovered.setdefault(key, None)
 
         for attempt in range(2):
             existing = set(
@@ -95,11 +127,11 @@ class RepositoryService:
             created = [
                 Repository(
                     provider=key[0],
-                    project_path=repository.project_path,
-                    web_url=repository.web_url,
+                    project_path=key[1],
+                    web_url=web_url,
                     tags=[],
                 )
-                for key, repository in discovered.items()
+                for key, web_url in discovered.items()
                 if key not in existing
             ]
             if not created:

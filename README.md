@@ -86,15 +86,16 @@ Webhook Adapter。新增完整 Webhook 平台时，在 `WebhookProviderDefinitio
 Payload 投影、Prompt 配置和 supersede action；通用 `/v1/webhooks/{provider}` 路由及
 `ProviderPromptTaskWorkflow` 会复用现有归档、幂等、仓库同步和 PR 关联逻辑。
 
-已归档的 GitLab/GitHub Webhook 仓库可同步到仓库管理目录：
+已归档的 GitLab/GitHub Webhook 仓库，以及已记录结构化检视意见的仓库，可同步到仓库管理目录：
 
 ```text
 POST /v1/repositories/sync
 ```
 
-接口按平台和仓库路径去重，只创建尚未登记的仓库，并将新仓库的 Tags 初始化为空；已有仓库及
-其 Tags 不会被修改。同步接口与其他仓库 API 一样使用 `X-API-Token` 鉴权，也可通过控制台
-“仓库管理”页面右上角的“同步 Webhook 仓库”按钮触发。
+接口按平台和仓库路径去重，优先采用 Webhook 中的仓库地址，再补充检视意见中的仓库；只创建
+尚未登记的仓库，并将新仓库的 Tags 初始化为空。已有仓库、仓库地址及 Tags 不会被修改。同步
+接口与其他仓库 API 一样使用 `X-API-Token` 鉴权，也可通过控制台“仓库管理”页面右上角的
+“同步仓库”按钮触发。
 
 ## 工作流扩展
 

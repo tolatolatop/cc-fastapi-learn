@@ -10,7 +10,6 @@ import {
   Search,
   Server,
   Tags,
-  Webhook,
   X,
 } from 'lucide-react'
 import { Button, Form, Modal, Table } from 'react-bootstrap'
@@ -299,7 +298,7 @@ export default function RepositoryPage({ onOpenSettings }: RepositoryPageProps) 
       const response = await api.syncRepositories()
       setNotice({
         message: response.total
-          ? `已同步 ${response.total} 个 Webhook 仓库`
+          ? `已同步 ${response.total} 个仓库`
           : '仓库目录已是最新',
         tone: 'success',
       })
@@ -338,7 +337,7 @@ export default function RepositoryPage({ onOpenSettings }: RepositoryPageProps) 
         </div>
         <div className="repository-page-actions">
           {selectedRepositories.length > 0 && <Button variant="outline-primary" onClick={() => setTagModal({ repositories: selectedRepositories, bulk: selectedRepositories.length > 1 })}><Tags size={16} />{selectedRepositories.length > 1 ? '批量管理 Tags' : '管理 Tags'} <span>{selectedRepositories.length}</span></Button>}
-          <Button variant="primary" onClick={syncRepositories} disabled={syncing} aria-busy={syncing}>{syncing ? <RefreshCw size={16} className="spin" /> : <Webhook size={16} />}{syncing ? '正在同步' : '同步 Webhook 仓库'}</Button>
+          <Button variant="primary" onClick={syncRepositories} disabled={syncing} aria-busy={syncing}><RefreshCw size={16} className={syncing ? 'spin' : ''} />{syncing ? '正在同步' : '同步仓库'}</Button>
           <button className="icon-button" onClick={() => loadRepositories(true)} aria-label="刷新仓库"><RefreshCw size={17} className={refreshing ? 'spin' : ''} /></button>
         </div>
       </section>
@@ -367,7 +366,7 @@ export default function RepositoryPage({ onOpenSettings }: RepositoryPageProps) 
           ) : error ? (
             <div className="state-message error-state"><CircleAlert size={26} /><strong>无法读取仓库</strong><p>{error}</p><div>{error === 'invalid api token' && <Button variant="outline-secondary" onClick={onOpenSettings}><KeyRound size={16} />填写 Token</Button>}<Button variant="primary" onClick={() => loadRepositories()}><RefreshCw size={16} />重试连接</Button></div></div>
           ) : overview.items.length === 0 ? (
-            <div className="state-message"><LibraryBig size={27} /><strong>{summary.repository_total ? '没有匹配的仓库' : '仓库目录还是空的'}</strong><p>{summary.repository_total ? '调整平台、Tag 或搜索条件后再试。' : '通过仓库 REST API 添加第一条仓库记录。'}</p></div>
+            <div className="state-message"><LibraryBig size={27} /><strong>{summary.repository_total ? '没有匹配的仓库' : '仓库目录还是空的'}</strong><p>{summary.repository_total ? '调整平台、Tag 或搜索条件后再试。' : '同步历史 Webhook 与检视意见，或通过 REST API 添加仓库。'}</p></div>
           ) : (
             <>
               <Table hover className="repository-table">

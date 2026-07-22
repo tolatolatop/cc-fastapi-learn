@@ -78,6 +78,41 @@ def create_task(client: TestClient, prompt: str) -> str:
     return response.json()["task_id"]
 
 
+def create_review_batch(
+    client: TestClient,
+    *,
+    provider: str,
+    project_path: str,
+    pr_number: str,
+    issue_titles: list[str],
+) -> None:
+    task_id = create_task(client, f"review {provider}/{project_path}#{pr_number}")
+    batch = client.post(
+        "/v1/review-issue-batches",
+        json={
+            "provider": provider,
+            "project_path": project_path,
+            "pr_number": pr_number,
+            "review_task_id": task_id,
+        },
+    )
+    assert batch.status_code == 201
+    recorded = client.post(
+        f"/v1/review-issue-batches/{batch.json()['id']}/issues",
+        json={
+            "items": [
+                {
+                    "severity": "medium",
+                    "title": title,
+                    "description": f"details for {title}",
+                }
+                for title in issue_titles
+            ]
+        },
+    )
+    assert recorded.status_code == 201
+
+
 def test_repository_crud_uniqueness_and_normalization():
     client = build_client()
     created = client.post(
@@ -275,6 +310,64 @@ def test_repository_sync_adds_distinct_webhook_repositories_with_empty_tags():
     repeated = client.post("/v1/repositories/sync")
     assert repeated.status_code == 200
     assert repeated.json() == {"items": [], "total": 0}
+
+
+def test_repository_sync_adds_review_issue_repositories_and_prefers_webhook_url():
+    client = build_client()
+    create_webhook_trigger(
+        client,
+        provider="gitlab",
+        payload={
+            "project": {
+                "path_with_namespace": "Group/Shared",
+                "web_url": "https://gitlab.example.com/Group/Shared",
+            }
+        },
+    )
+    create_review_batch(
+        client,
+        provider="GitLab",
+        project_path="/Group/Shared/",
+        pr_number="41",
+        issue_titles=["shared issue"],
+    )
+    create_review_batch(
+        client,
+        provider="Gitea",
+        project_path="/Org/Review-Only/",
+        pr_number="42",
+        issue_titles=["review-only issue"],
+    )
+    create_review_batch(
+        client,
+        provider="github",
+        project_path="org/no-issues",
+        pr_number="43",
+        issue_titles=[],
+    )
+
+    synced = client.post("/v1/repositories/sync")
+
+    assert synced.status_code == 200
+    assert synced.json()["total"] == 2
+    by_key = {
+        (item["provider"], item["project_path"]): item
+        for item in synced.json()["items"]
+    }
+    assert set(by_key) == {
+        ("gitlab", "group/shared"),
+        ("gitea", "org/review-only"),
+    }
+    assert (
+        by_key[("gitlab", "group/shared")]["web_url"]
+        == "https://gitlab.example.com/Group/Shared"
+    )
+    assert by_key[("gitea", "org/review-only")]["web_url"] is None
+    assert all(item["tags"] == [] for item in by_key.values())
+
+    listed = client.get("/v1/repositories", params={"limit": 200}).json()
+    assert all(item["project_path"] != "org/no-issues" for item in listed["items"])
+    assert client.post("/v1/repositories/sync").json() == {"items": [], "total": 0}
 
 
 @pytest.mark.parametrize(
