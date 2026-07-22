@@ -407,6 +407,18 @@ function DetailDrawer({ task, logs, context, loading, now, onClose, onCancel, on
         <div className="drawer-body">
           {tab === 'overview' && (
             <>
+              {task.result && (
+                <section className="detail-section">
+                  <div className="detail-section-heading">
+                    <h3>任务结果</h3>
+                    <button className="text-action-button" onClick={() => copyText(resultText, '完整任务结果已复制')}>
+                      <Copy size={14} />复制完整结果
+                    </button>
+                  </div>
+                  <pre className="code-block result-block">{resultText}</pre>
+                </section>
+              )}
+
               <section className="detail-section">
                 <h3>运行信息</h3>
                 <dl className="detail-grid">
@@ -445,18 +457,6 @@ function DetailDrawer({ task, logs, context, loading, now, onClose, onCancel, on
                 <section className="detail-section">
                   <h3>任务元数据</h3>
                   <pre className="code-block">{JSON.stringify(task.metadata, null, 2)}</pre>
-                </section>
-              )}
-
-              {task.result && (
-                <section className="detail-section">
-                  <div className="detail-section-heading">
-                    <h3>任务结果</h3>
-                    <button className="text-action-button" onClick={() => copyText(resultText, '完整任务结果已复制')}>
-                      <Copy size={14} />复制完整结果
-                    </button>
-                  </div>
-                  <pre className="code-block result-block">{resultText}</pre>
                 </section>
               )}
             </>
