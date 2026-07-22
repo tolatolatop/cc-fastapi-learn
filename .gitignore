@@ -29,6 +29,10 @@ htmlcov/
 .env
 .env.*
 
+# Local deployment overrides
+deploy/cloudflare/config.yml
+deploy/docker-compose.local.yaml
+
 *.db
 logs/
 *.log

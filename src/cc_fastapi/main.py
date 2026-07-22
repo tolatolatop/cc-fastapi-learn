@@ -3,9 +3,16 @@ import logging
 
 from fastapi import FastAPI
 
+from cc_fastapi.api.internal import router as internal_router
+from cc_fastapi.api.providers import router as providers_router
+from cc_fastapi.api.repositories import router as repositories_router
+from cc_fastapi.api.review_dashboard import router as review_dashboard_router
+from cc_fastapi.api.review_issues import batch_router as review_issue_batches_router
+from cc_fastapi.api.review_issues import issue_router as review_issues_router
 from cc_fastapi.api.tasks import router as tasks_router
 from cc_fastapi.api.webhooks import router as webhooks_router
 from cc_fastapi.core.config import get_settings
+from cc_fastapi.db.migrations import apply_schema_migrations
 from cc_fastapi.db.models import Base
 from cc_fastapi.db.session import engine
 from cc_fastapi.logging_setup import setup_logging
@@ -29,6 +36,7 @@ async def lifespan(_: FastAPI):
     )
     logger.info("application startup begin", extra={"event_type": "app_startup"})
     Base.metadata.create_all(bind=engine)
+    apply_schema_migrations(engine)
     recovered = worker_manager.run_startup_recovery()
     logger.info(
         "startup recovery finished",
@@ -50,6 +58,12 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
 app.include_router(tasks_router)
 app.include_router(webhooks_router)
+app.include_router(internal_router)
+app.include_router(providers_router)
+app.include_router(repositories_router)
+app.include_router(review_dashboard_router)
+app.include_router(review_issue_batches_router)
+app.include_router(review_issues_router)
 
 
 @app.get("/healthz")

@@ -34,6 +34,7 @@ class TaskItemResponse(BaseModel):
     priority: int
     attempt: int
     max_attempts: int
+    session_id: str | None
     agent_mode: bool
     unattended: bool
     created_at: datetime
@@ -45,9 +46,23 @@ class TaskItemResponse(BaseModel):
     result: dict[str, Any] | None
 
 
+class TaskQueueSummaryResponse(BaseModel):
+    name: str
+    total: int
+    queued: int
+    running: int
+
+
+class TaskListSummaryResponse(BaseModel):
+    total: int
+    status_counts: dict[TaskStatus, int]
+    queues: list[TaskQueueSummaryResponse]
+
+
 class TaskListResponse(BaseModel):
     items: list[TaskItemResponse]
     total: int
+    summary: TaskListSummaryResponse
 
 
 class TaskCancelResponse(BaseModel):

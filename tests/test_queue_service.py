@@ -1,12 +1,14 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from threading import Barrier
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
 from cc_fastapi.core.config import get_settings
 from cc_fastapi.core.queue_config import get_queue_config
-from cc_fastapi.db.models import AgentTask, AgentTaskContext, Base, TaskStatus, utc_now
+from cc_fastapi.db.models import AgentTask, AgentTaskContext, AgentTaskLog, Base, TaskStatus, utc_now
 from cc_fastapi.services.queue import QueueNotFoundError, TaskQueueService
 
 
@@ -116,6 +118,7 @@ def test_retry_task_creates_new_task_with_same_configuration():
     assert retried.agent_mode == original.agent_mode
     assert retried.unattended == original.unattended
     assert retried.max_attempts == original.max_attempts
+    assert retried.session_id is None
 
 
 def test_retry_task_returns_none_when_original_does_not_exist():
@@ -123,6 +126,115 @@ def test_retry_task_returns_none_when_original_does_not_exist():
     queue = TaskQueueService()
 
     assert queue.retry_task(db, "not-exists") is None
+
+
+def test_cancelled_running_task_is_not_overwritten_by_late_success():
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        future=True,
+    )
+    Base.metadata.create_all(bind=engine)
+    session_factory = sessionmaker(
+        bind=engine,
+        autocommit=False,
+        autoflush=False,
+        expire_on_commit=False,
+    )
+    queue = TaskQueueService()
+    with session_factory() as worker_db, session_factory() as webhook_db:
+        task = queue.create_task(
+            worker_db,
+            prompt="cancel while running",
+            model=None,
+            queue_name=None,
+            metadata=None,
+            priority=0,
+            agent_mode=True,
+            unattended=True,
+            max_attempts=1,
+        )
+        claimed = queue.claim_next_task(worker_db, "worker-1", "default")
+        assert claimed is not None
+
+        cancelled = queue.cancel_task(webhook_db, task.id, reason="superseded_by_workflow:test")
+        assert cancelled is not None and cancelled.status == TaskStatus.CANCELLED
+
+        queue.mark_success(worker_db, task.id, {"late": "result"})
+        worker_db.refresh(task)
+        assert task.status == TaskStatus.CANCELLED
+        assert task.result is None
+
+
+def test_concurrent_cancel_and_success_have_only_one_winning_transition(tmp_path):
+    engine = create_engine(
+        f"sqlite+pysqlite:///{tmp_path / 'task-transition-concurrency.db'}",
+        connect_args={"check_same_thread": False, "timeout": 30},
+        future=True,
+    )
+    Base.metadata.create_all(bind=engine)
+    session_factory = sessionmaker(
+        bind=engine,
+        autocommit=False,
+        autoflush=False,
+        expire_on_commit=False,
+    )
+    with session_factory() as db:
+        queue = TaskQueueService()
+        task = queue.create_task(
+            db,
+            prompt="race terminal transitions",
+            model=None,
+            queue_name=None,
+            metadata=None,
+            priority=0,
+            agent_mode=True,
+            unattended=True,
+            max_attempts=1,
+        )
+        task_id = task.id
+        assert queue.claim_next_task(db, "worker-1", "default") is not None
+
+    barrier = Barrier(2)
+
+    def cancel_once() -> TaskStatus:
+        with session_factory() as db:
+            barrier.wait()
+            task = TaskQueueService().cancel_task(db, task_id, reason="concurrent_test")
+            assert task is not None
+            return task.status
+
+    def succeed_once() -> bool:
+        with session_factory() as db:
+            barrier.wait()
+            return TaskQueueService().mark_success(db, task_id, {"ok": True})
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        cancel_future = pool.submit(cancel_once)
+        success_future = pool.submit(succeed_once)
+        cancel_status = cancel_future.result()
+        success_won = success_future.result()
+
+    with session_factory() as db:
+        task = db.get(AgentTask, task_id)
+        assert task is not None
+        if success_won:
+            assert cancel_status == TaskStatus.SUCCEEDED
+            assert task.status == TaskStatus.SUCCEEDED
+            assert task.result == {"ok": True}
+        else:
+            assert cancel_status == TaskStatus.CANCELLED
+            assert task.status == TaskStatus.CANCELLED
+            assert task.result is None
+        terminal_log_count = db.scalar(
+            select(func.count())
+            .select_from(AgentTaskLog)
+            .where(
+                AgentTaskLog.task_id == task_id,
+                AgentTaskLog.event_type.in_(["cancelled", "succeeded"]),
+            )
+        )
+        assert terminal_log_count == 1
 
 
 def test_upsert_task_context_updates_latest():
@@ -144,6 +256,94 @@ def test_upsert_task_context_updates_latest():
     context = db.get(AgentTaskContext, task.id)
     assert context is not None
     assert context.messages_json == ["first", "second"]
+
+
+def test_set_task_session_id_persists_and_logs_once():
+    db = make_db()
+    queue = TaskQueueService()
+    task = queue.create_task(
+        db,
+        prompt="hello",
+        model=None,
+        queue_name=None,
+        metadata=None,
+        priority=1,
+        agent_mode=True,
+        unattended=True,
+        max_attempts=None,
+    )
+
+    queue.set_task_session_id(db, task.id, " session-1 ")
+    queue.set_task_session_id(db, task.id, "session-1")
+
+    db.refresh(task)
+    assert task.session_id == "session-1"
+    logs, _ = queue.list_logs(db, task.id, 0, 100)
+    session_logs = [log for log in logs if log.event_type == "session_started"]
+    assert len(session_logs) == 1
+    assert session_logs[0].metadata_json == {"session_id": "session-1", "attempt": 0}
+
+
+def test_mark_success_persists_result_session_id_as_fallback():
+    db = make_db()
+    queue = TaskQueueService()
+    task = queue.create_task(
+        db,
+        prompt="hello",
+        model=None,
+        queue_name=None,
+        metadata=None,
+        priority=1,
+        agent_mode=True,
+        unattended=True,
+        max_attempts=None,
+    )
+    claimed = queue.claim_next_task(db, "worker-1", "default")
+    assert claimed is not None
+
+    queue.mark_success(db, task.id, {"session_id": "session-from-result"})
+
+    db.refresh(task)
+    assert task.session_id == "session-from-result"
+
+
+def test_mark_failure_persists_execution_error_event():
+    db = make_db()
+    queue = TaskQueueService()
+    task = queue.create_task(
+        db,
+        prompt="hello",
+        model=None,
+        queue_name=None,
+        metadata=None,
+        priority=1,
+        agent_mode=True,
+        unattended=True,
+        max_attempts=1,
+    )
+    claimed = queue.claim_next_task(db, "worker-1", "default")
+    assert claimed is not None
+
+    queue.mark_retry_or_failed(
+        db,
+        task.id,
+        "ProcessError: failed\nClaude CLI stderr:\npermission denied",
+        {"exception_type": "ProcessError", "exit_code": 1, "has_cli_stderr": True},
+    )
+
+    db.refresh(task)
+    assert task.error_message is not None
+    assert "permission denied" in task.error_message
+    logs, _ = queue.list_logs(db, task.id, 0, 100)
+    diagnostic = next(log for log in logs if log.event_type == "execution_error")
+    assert "permission denied" in diagnostic.message
+    assert diagnostic.metadata_json == {
+        "attempt": 1,
+        "max_attempts": 1,
+        "exception_type": "ProcessError",
+        "exit_code": 1,
+        "has_cli_stderr": True,
+    }
 
 
 def test_create_task_unknown_queue_raises():
