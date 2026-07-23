@@ -73,6 +73,10 @@ GitHub 使用对应的 `GITHUB_WEBHOOK_SECRET`、`GITHUB_WEBHOOK_PROMPT_TEMPLATE
 `X-GitHub-Enterprise-Host` 记录，普通 GitHub 记录为 `https://github.com`。默认 Prompt 模板位于
 `config/templates/github_webhook_prompt.j2`。
 
+用于把后续检视报告与 PR 看板进行语义去重和状态对账的固定提示词位于
+`config/templates/review_report_incremental_reconciliation_prompt.j2`。模板参数化了报告任务、
+PR 标识、合并 SHA 回退值和预期问题数量，可用于验证仅录入新增问题并将已消失问题标记为已接受。
+
 平台 Jinja 模板都可直接读取 Payload 顶层字段，并额外提供 `payload`、`event_type` 和
 `webhook`。控制台支持按平台、事件类型、项目、分支、投递 UUID 或关联任务 ID 检索归档。
 
