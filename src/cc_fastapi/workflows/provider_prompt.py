@@ -28,6 +28,46 @@ class ProviderPromptTaskWorkflow(WebhookPromptTaskWorkflow):
         )
         super().__init__()
 
+    @staticmethod
+    def _gitlab_skip_reason(event: WorkflowEvent) -> str | None:
+        parsed = event.webhook_payload
+        if parsed is None:
+            return "invalid_gitlab_event"
+        if parsed.event_kind == "push":
+            return None
+        if parsed.event_kind == "merge_request":
+            action = (
+                parsed.change_request.action.casefold()
+                if parsed.change_request and parsed.change_request.action
+                else ""
+            )
+            if action in {"open", "reopen", "update", "merge"}:
+                return None
+            return "unsupported_gitlab_merge_request_action"
+        if parsed.event_kind != "note":
+            return "unsupported_gitlab_event"
+        if parsed.change_request is None or parsed.comment is None:
+            return "gitlab_note_not_on_merge_request"
+        if (parsed.comment.target_type or "").casefold() not in {
+            "mergerequest",
+            "merge_request",
+        }:
+            return "gitlab_note_not_on_merge_request"
+        if "<!-- cc-platform-operation:" in (parsed.comment.body or ""):
+            return "agent_generated_note"
+        return None
+
+    def before(self, event: WorkflowEvent) -> WorkflowPlan:
+        if self.provider == "gitlab":
+            skip_reason = self._gitlab_skip_reason(event)
+            if skip_reason is not None:
+                correlation = change_request_correlation(event.webhook_payload)
+                return WorkflowPlan.skip(
+                    skip_reason,
+                    correlations=(correlation,) if correlation is not None else (),
+                )
+        return super().before(event)
+
     def _build_plan(
         self,
         event: WorkflowEvent,

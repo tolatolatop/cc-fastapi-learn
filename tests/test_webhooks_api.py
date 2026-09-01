@@ -1,12 +1,12 @@
-from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import hmac
 import json
+from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-import pytest
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -534,6 +534,26 @@ def test_merge_request_update_supersedes_active_workflow_and_cancels_task():
         )
         assert cancellation_log is not None
         assert cancellation_log.metadata_json == {"reason": f"superseded_by_workflow:{new_run.id}"}
+
+
+def test_gitlab_non_code_merge_request_event_is_recorded_without_llm_task():
+    client, session_factory = build_client()
+
+    approved = client.post(
+        "/v1/webhooks/gitlab",
+        headers=merge_request_headers("approved"),
+        json=gitlab_merge_request_payload(action="approved"),
+    )
+
+    assert approved.status_code == 200
+    assert approved.json()["task_id"] is None
+    assert approved.json()["workflow_status"] == "skipped"
+    assert (
+        approved.json()["skip_reason"]
+        == "unsupported_gitlab_merge_request_action"
+    )
+    with session_factory() as db:
+        assert db.scalar(select(func.count()).select_from(AgentTask)) == 0
 
 
 def test_concurrent_updates_leave_only_one_running_workflow_for_merge_request(tmp_path):

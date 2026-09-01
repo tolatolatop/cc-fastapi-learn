@@ -6,6 +6,7 @@ import pytest
 from cc_fastapi.core.webhook_payloads import (
     WebhookActor,
     WebhookChangeRequest,
+    WebhookComment,
     WebhookPayload,
     WebhookRepository,
 )
@@ -106,6 +107,44 @@ def test_gitlab_merge_request_payload_is_normalized():
         ),
     )
 
+
+def test_gitlab_merge_request_note_exposes_comment_and_change_request():
+    parsed = WebhookPayload.from_payload(
+        "gitlab",
+        "Note Hook",
+        {
+            "object_kind": "note",
+            "project": {"path_with_namespace": "Group/API"},
+            "user": {"name": "Developer", "username": "developer"},
+            "object_attributes": {
+                "id": 91,
+                "note": "I pushed a fix",
+                "noteable_type": "MergeRequest",
+            },
+            "merge_request": {
+                "iid": 8,
+                "state": "opened",
+                "source_branch": "feature-8",
+                "target_branch": "main",
+                "last_commit": {"id": "head-sha"},
+            },
+        },
+    )
+
+    assert parsed is not None
+    assert parsed.change_request == WebhookChangeRequest(
+        resource_type="merge_request",
+        number="8",
+        state="open",
+        source_branch="feature-8",
+        target_branch="main",
+        head_sha="head-sha",
+    )
+    assert parsed.comment == WebhookComment(
+        id="91",
+        body="I pushed a fix",
+        target_type="MergeRequest",
+    )
 
 def test_unknown_provider_returns_safe_empty_projection():
     parsed = WebhookPayload.from_payload(

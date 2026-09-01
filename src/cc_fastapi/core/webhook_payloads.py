@@ -91,6 +91,13 @@ class WebhookChangeRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class WebhookComment:
+    id: str | None = None
+    body: str | None = None
+    target_type: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class WebhookPayload:
     """Immutable, normalized read projection of a provider webhook payload."""
 
@@ -101,6 +108,7 @@ class WebhookPayload:
     actor: WebhookActor | None = None
     ref: str | None = None
     change_request: WebhookChangeRequest | None = None
+    comment: WebhookComment | None = None
 
     @classmethod
     def from_payload(
@@ -232,25 +240,43 @@ class GitLabWebhookPayloadAdapter:
 
         attributes = _mapping(payload.get("object_attributes"))
         object_kind = _text(payload.get("object_kind"))
-        number = _identifier(attributes.get("iid")) if attributes is not None else None
+        merge_request = (
+            _mapping(payload.get("merge_request"))
+            if object_kind and object_kind.casefold() == "note"
+            else attributes
+        )
+        number = _identifier(merge_request.get("iid")) if merge_request is not None else None
         change_request = None
-        if object_kind and object_kind.casefold() == "merge_request" and number is not None:
-            last_commit = _mapping(attributes.get("last_commit"))
-            raw_state = _text(attributes.get("state"))
+        if (
+            object_kind
+            and object_kind.casefold() in {"merge_request", "note"}
+            and number is not None
+            and merge_request is not None
+        ):
+            last_commit = _mapping(merge_request.get("last_commit"))
+            raw_state = _text(merge_request.get("state"))
             state = raw_state.casefold() if raw_state else None
             if state == "opened":
                 state = "open"
             change_request = WebhookChangeRequest(
                 resource_type="merge_request",
                 number=number,
-                title=_text(attributes.get("title")),
-                url=_web_url(attributes.get("url")),
+                title=_text(merge_request.get("title")),
+                url=_web_url(merge_request.get("url")),
                 state=state,
-                action=_text(attributes.get("action")),
-                source_branch=_ref_name(attributes.get("source_branch")),
-                target_branch=_ref_name(attributes.get("target_branch")),
+                action=_text(merge_request.get("action")),
+                source_branch=_ref_name(merge_request.get("source_branch")),
+                target_branch=_ref_name(merge_request.get("target_branch")),
                 head_sha=_text(last_commit.get("id")) if last_commit is not None else None,
-                merged_sha=_text(attributes.get("merge_commit_sha")),
+                merged_sha=_text(merge_request.get("merge_commit_sha")),
+            )
+
+        comment = None
+        if object_kind and object_kind.casefold() == "note" and attributes is not None:
+            comment = WebhookComment(
+                id=_identifier(attributes.get("id")),
+                body=_text(attributes.get("note")),
+                target_type=_text(attributes.get("noteable_type")),
             )
 
         ref = _ref_name(payload.get("ref"))
@@ -267,4 +293,5 @@ class GitLabWebhookPayloadAdapter:
             actor=actor,
             ref=ref,
             change_request=change_request,
+            comment=comment,
         )
