@@ -66,6 +66,16 @@ const SEVERITY_LABEL: Record<ReviewIssueSeverity, string> = {
   info: '提示',
 }
 
+const SEVERITY_SHORT: Record<ReviewIssueSeverity, string> = {
+  critical: 'C',
+  high: 'H',
+  medium: 'M',
+  low: 'L',
+  info: 'I',
+}
+
+const SEVERITY_ORDER: ReviewIssueSeverity[] = ['critical', 'high', 'medium', 'low', 'info']
+
 const ROLE_LABEL: Record<ReviewDashboardTask['role'], string> = {
   review: '检视',
   extract: '提取',
@@ -81,6 +91,7 @@ const EMPTY_DASHBOARD: ReviewDashboardResponse = {
     merged_unhandled_issues: 0,
     pending_issues: 0,
     acceptance_rate: null,
+    severity_counts: { critical: 0, high: 0, medium: 0, low: 0, info: 0 },
   },
   timeline: [],
   repositories: [],
@@ -178,6 +189,28 @@ function OutcomeMiniBar({ pullRequest }: { pullRequest: ReviewDashboardPullReque
   )
 }
 
+interface TrendAxisTick {
+  date: Date
+  position: number
+}
+
+function buildTrendAxisTicks(from: string, to: string): TrendAxisTick[] {
+  const start = new Date(`${from}T00:00:00`)
+  const end = new Date(`${to}T00:00:00`)
+  const millisecondsPerDay = 24 * 60 * 60 * 1000
+  const daySpan = Math.max(0, Math.round((end.getTime() - start.getTime()) / millisecondsPerDay))
+  const tickCount = Math.min(8, daySpan + 1)
+
+  if (tickCount === 1) return [{ date: start, position: 0 }]
+
+  return Array.from({ length: tickCount }, (_, index) => {
+    const dayOffset = Math.round(index * daySpan / (tickCount - 1))
+    const date = new Date(start)
+    date.setDate(start.getDate() + dayOffset)
+    return { date, position: dayOffset / daySpan }
+  })
+}
+
 function ReviewTrend({ points, from, to }: { points: ReviewDashboardTrendPoint[]; from: string; to: string }) {
   if (!points.length) {
     return <div className="review-trend-empty"><GitCommitHorizontal size={21} /><span>当前时间段还没有问题记录</span></div>
@@ -191,8 +224,8 @@ function ReviewTrend({ points, from, to }: { points: ReviewDashboardTrendPoint[]
   const chartBottom = 168
   const chartHeight = 132
   const barWidth = Math.max(4, Math.min(18, 680 / Math.max(points.length, 1)))
-  const startLabel = new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit' }).format(new Date(start))
-  const endLabel = new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit' }).format(new Date(end))
+  const tickFormatter = new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit' })
+  const ticks = buildTrendAxisTicks(from, to)
 
   return (
     <div className="review-trend-chart">
@@ -201,6 +234,18 @@ function ReviewTrend({ points, from, to }: { points: ReviewDashboardTrendPoint[]
         <line x1={chartLeft} y1={chartBottom - chartHeight} x2={chartRight} y2={chartBottom - chartHeight} className="guide" />
         <text x="4" y={chartBottom - chartHeight + 4}>{maxTotal}</text>
         <text x="4" y={chartBottom + 4}>0</text>
+        <g className="review-trend-axis-ticks" aria-hidden="true">
+          {ticks.map((tick, index) => {
+            const x = chartLeft + tick.position * (chartRight - chartLeft)
+            const textAnchor = index === 0 ? 'start' : index === ticks.length - 1 ? 'end' : 'middle'
+            return (
+              <g key={tick.date.toISOString()}>
+                <line x1={x} y1={chartBottom} x2={x} y2={chartBottom + 5} />
+                <text x={x} y="193" textAnchor={textAnchor}>{tickFormatter.format(tick.date)}</text>
+              </g>
+            )
+          })}
+        </g>
         {points.map((point) => {
           const time = new Date(`${point.date}T12:00:00`).getTime()
           const x = chartLeft + ((time - start) / duration) * (chartRight - chartLeft)
@@ -217,8 +262,6 @@ function ReviewTrend({ points, from, to }: { points: ReviewDashboardTrendPoint[]
             </g>
           )
         })}
-        <text x={chartLeft} y="193">{startLabel}</text>
-        <text x={chartRight} y="193" textAnchor="end">{endLabel}</text>
       </svg>
     </div>
   )
@@ -228,11 +271,12 @@ interface PullRequestDrawerProps {
   pullRequest: ReviewDashboardPullRequest
   createdFrom: string
   createdTo: string
+  severities: ReviewIssueSeverity[]
   onClose: () => void
   onOpenTask: (taskId: string) => void
 }
 
-function PullRequestDrawer({ pullRequest, createdFrom, createdTo, onClose, onOpenTask }: PullRequestDrawerProps) {
+function PullRequestDrawer({ pullRequest, createdFrom, createdTo, severities, onClose, onOpenTask }: PullRequestDrawerProps) {
   const [detail, setDetail] = useState<ReviewDashboardPullRequestDetail | null>(null)
   const [issues, setIssues] = useState<ReviewIssue[]>([])
   const [issueTotal, setIssueTotal] = useState(0)
@@ -264,6 +308,7 @@ function PullRequestDrawer({ pullRequest, createdFrom, createdTo, onClose, onOpe
         prNumber: pullRequest.pr_number,
         batchCreatedFrom: createdFrom,
         batchCreatedTo: createdTo,
+        severities,
       })
       setIssues(response.items)
       setIssueTotal(response.total)
@@ -274,7 +319,7 @@ function PullRequestDrawer({ pullRequest, createdFrom, createdTo, onClose, onOpe
     } finally {
       setIssuesLoading(false)
     }
-  }, [createdFrom, createdTo, issuePage, issuePageSize, pullRequest.pr_number, pullRequest.project_path, pullRequest.provider])
+  }, [createdFrom, createdTo, issuePage, issuePageSize, pullRequest.pr_number, pullRequest.project_path, pullRequest.provider, severities])
 
   useEffect(() => {
     loadIssues()
@@ -395,6 +440,7 @@ export default function ReviewDashboardPage({ onOpenSettings, onOpenTask }: Revi
   const [preset, setPreset] = useState<'7' | '30' | '90' | 'custom'>('30')
   const [repository, setRepository] = useState('')
   const [tag, setTag] = useState('')
+  const [severityFilters, setSeverityFilters] = useState<ReviewIssueSeverity[]>([])
   const [outcome, setOutcome] = useState<ReviewDashboardOutcome>('all')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
@@ -415,6 +461,7 @@ export default function ReviewDashboardPage({ onOpenSettings, onOpenTask }: Revi
         limit: pageSize,
         ...selectedRepository,
         tag: tag || undefined,
+        severities: severityFilters,
         ...bounds,
         outcome,
       })
@@ -428,7 +475,7 @@ export default function ReviewDashboardPage({ onOpenSettings, onOpenTask }: Revi
       setLoading(false)
       setRefreshing(false)
     }
-  }, [bounds, outcome, page, pageSize, repository, tag])
+  }, [bounds, outcome, page, pageSize, repository, severityFilters, tag])
 
   useEffect(() => {
     loadDashboard()
@@ -454,6 +501,13 @@ export default function ReviewDashboardPage({ onOpenSettings, onOpenTask }: Revi
 
   function chooseOutcome(value: ReviewDashboardOutcome) {
     setOutcome((current) => current === value && value !== 'all' ? 'all' : value)
+    setPage(1)
+  }
+
+  function toggleSeverity(severity: ReviewIssueSeverity) {
+    setSeverityFilters((current) => current.includes(severity)
+      ? current.filter((value) => value !== severity)
+      : [...current, severity])
     setPage(1)
   }
 
@@ -485,6 +539,32 @@ export default function ReviewDashboardPage({ onOpenSettings, onOpenTask }: Revi
         <button className="icon-button" onClick={() => loadDashboard(true)} aria-label="刷新聚合看板"><RefreshCw size={17} className={refreshing ? 'spin' : ''} /></button>
       </section>
 
+      <section className="review-severity-filter" aria-label="按问题严重等级筛选">
+        <div className="review-severity-filter-label">
+          <span>SEVERITY / 问题等级</span>
+          <small>{severityFilters.length ? `已选择 ${severityFilters.length} 个等级` : '选择等级以筛选聚合结果'}</small>
+        </div>
+        <div className="review-severity-options">
+          {SEVERITY_ORDER.map((severity) => {
+            const selectedSeverity = severityFilters.includes(severity)
+            return (
+              <button
+                type="button"
+                className={`review-severity-option severity-${severity}${selectedSeverity ? ' is-active' : ''}`}
+                key={severity}
+                aria-pressed={selectedSeverity}
+                onClick={() => toggleSeverity(severity)}
+              >
+                <i>{SEVERITY_SHORT[severity]}</i>
+                <span>{SEVERITY_LABEL[severity]}</span>
+                <strong>{dashboard.summary.severity_counts[severity].toLocaleString('zh-CN')}</strong>
+              </button>
+            )
+          })}
+        </div>
+        {severityFilters.length > 0 && <button type="button" className="review-severity-clear" onClick={() => { setSeverityFilters([]); setPage(1) }}><X size={13} />清除</button>}
+      </section>
+
       {error ? (
         <section className="state-message error-state review-dashboard-error"><CircleAlert size={26} /><strong>无法读取检视看板</strong><p>{error}</p><div>{error === 'invalid api token' && <Button variant="outline-secondary" onClick={onOpenSettings}><KeyRound size={16} />填写 Token</Button>}<Button variant="primary" onClick={() => loadDashboard()}><RefreshCw size={16} />重试连接</Button></div></section>
       ) : (
@@ -497,17 +577,17 @@ export default function ReviewDashboardPage({ onOpenSettings, onOpenTask }: Revi
             </div>
             <div className="review-evidence-route" aria-hidden="true"><span /><i /><i /><i /></div>
             <div className="review-evidence-outcomes">
-              <button className={`accepted ${outcome === 'accepted' ? 'active' : ''}`} onClick={() => chooseOutcome('accepted')}>
+              <button className={`accepted ${outcome === 'accepted' ? 'active' : ''}`} aria-pressed={outcome === 'accepted'} onClick={() => chooseOutcome('accepted')}>
                 <span><Check size={17} />已接受</span><strong>{summary.accepted_issues}</strong><small>验证确认已处理</small>
               </button>
-              <button className={`unhandled ${outcome === 'unhandled' ? 'active' : ''}`} onClick={() => chooseOutcome('unhandled')}>
+              <button className={`unhandled ${outcome === 'unhandled' ? 'active' : ''}`} aria-pressed={outcome === 'unhandled'} onClick={() => chooseOutcome('unhandled')}>
                 <span><AlertTriangle size={17} />合入未处理</span><strong>{summary.merged_unhandled_issues}</strong><small>合入后仍未修复</small>
               </button>
-              <button className={`pending ${outcome === 'pending' ? 'active' : ''}`} onClick={() => chooseOutcome('pending')}>
+              <button className={`pending ${outcome === 'pending' ? 'active' : ''}`} aria-pressed={outcome === 'pending'} onClick={() => chooseOutcome('pending')}>
                 <span><Clock3 size={17} />待确认</span><strong>{summary.pending_issues}</strong><small>尚无验证结论</small>
               </button>
             </div>
-            <button className={`review-evidence-rate ${outcome === 'all' ? 'active' : ''}`} onClick={() => chooseOutcome('all')}>
+            <button className={`review-evidence-rate ${outcome === 'all' ? 'active' : ''}`} aria-pressed={outcome === 'all'} onClick={() => chooseOutcome('all')}>
               <span>问题接受率</span><strong>{acceptance}</strong><small>仅计算已有结论的问题</small>
             </button>
           </section>
@@ -560,7 +640,7 @@ export default function ReviewDashboardPage({ onOpenSettings, onOpenTask }: Revi
         </>
       )}
 
-      {selected && <PullRequestDrawer pullRequest={selected} createdFrom={bounds.createdFrom} createdTo={bounds.createdTo} onClose={() => setSelected(null)} onOpenTask={onOpenTask} />}
+      {selected && <PullRequestDrawer pullRequest={selected} createdFrom={bounds.createdFrom} createdTo={bounds.createdTo} severities={severityFilters} onClose={() => setSelected(null)} onOpenTask={onOpenTask} />}
     </>
   )
 }

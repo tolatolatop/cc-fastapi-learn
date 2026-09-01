@@ -170,6 +170,13 @@ def test_review_dashboard_aggregates_outcomes_and_pull_request_tasks():
         "merged_unhandled_issues": 1,
         "pending_issues": 2,
         "acceptance_rate": 0.5,
+        "severity_counts": {
+            "critical": 0,
+            "high": 1,
+            "medium": 1,
+            "low": 1,
+            "info": 1,
+        },
     }
     assert payload["total"] == 2
     assert len(payload["timeline"]) == 1
@@ -181,6 +188,41 @@ def test_review_dashboard_aggregates_outcomes_and_pull_request_tasks():
             "issue_total": 4,
         }
     ]
+
+    severity_filtered = client.get(
+        "/v1/review-dashboard",
+        params=[("severity", "high"), ("severity", "medium")],
+    )
+    assert severity_filtered.status_code == 200
+    severity_payload = severity_filtered.json()
+    assert severity_payload["total"] == 1
+    assert severity_payload["summary"] == {
+        "pull_request_total": 1,
+        "batch_total": 1,
+        "issue_total": 2,
+        "accepted_issues": 1,
+        "merged_unhandled_issues": 1,
+        "pending_issues": 0,
+        "acceptance_rate": 0.5,
+        "severity_counts": {
+            "critical": 0,
+            "high": 1,
+            "medium": 1,
+            "low": 1,
+            "info": 1,
+        },
+    }
+    assert severity_payload["timeline"][0]["issue_total"] == 2
+    assert severity_payload["items"][0]["pr_number"] == "42"
+    assert severity_payload["items"][0]["pending_issues"] == 0
+
+    no_severity_match = client.get(
+        "/v1/review-dashboard",
+        params={"severity": "critical"},
+    )
+    assert no_severity_match.status_code == 200
+    assert no_severity_match.json()["summary"]["issue_total"] == 0
+    assert no_severity_match.json()["items"] == []
 
     attention = client.get(
         "/v1/review-dashboard",

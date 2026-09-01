@@ -50,6 +50,8 @@ const SEVERITY_META: Record<ReviewIssueSeverity, { label: string; short: string 
   info: { label: '提示', short: 'I' },
 }
 
+const SEVERITY_ORDER: ReviewIssueSeverity[] = ['critical', 'high', 'medium', 'low', 'info']
+
 const VERIFICATION_LABEL: Record<ReviewIssueVerificationStatus, string> = {
   unverified: '待验证',
   accepted: '已接受',
@@ -648,6 +650,7 @@ export default function ReviewIssuesPage({ onOpenSettings, onOpenTask }: ReviewI
   const [debouncedProject, setDebouncedProject] = useState('')
   const [debouncedPr, setDebouncedPr] = useState('')
   const [statusFilter, setStatusFilter] = useState<ReviewBatchStatus | 'all'>('all')
+  const [severityFilters, setSeverityFilters] = useState<ReviewIssueSeverity[]>([])
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [selected, setSelected] = useState<ReviewIssueBatch | null>(null)
@@ -666,6 +669,7 @@ export default function ReviewIssuesPage({ onOpenSettings, onOpenTask }: ReviewI
           projectPath: debouncedProject || undefined,
           prNumber: debouncedPr || undefined,
           statuses: statusFilter === 'all' ? [] : [statusFilter],
+          severities: severityFilters,
         }),
         api.getReviewStatistics({
           projectPath: debouncedProject || undefined,
@@ -684,7 +688,7 @@ export default function ReviewIssuesPage({ onOpenSettings, onOpenTask }: ReviewI
       setLoading(false)
       setRefreshing(false)
     }
-  }, [debouncedPr, debouncedProject, page, pageSize, statusFilter])
+  }, [debouncedPr, debouncedProject, page, pageSize, severityFilters, statusFilter])
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -720,6 +724,13 @@ export default function ReviewIssuesPage({ onOpenSettings, onOpenTask }: ReviewI
     setSelected(batch)
     setNotice(batch.status === 'completed' ? '检视批次已经完成验证' : '检视数据已更新')
     await loadData(true)
+  }
+
+  function toggleSeverity(severity: ReviewIssueSeverity) {
+    setSeverityFilters((current) => current.includes(severity)
+      ? current.filter((value) => value !== severity)
+      : [...current, severity])
+    setPage(1)
   }
 
   const acceptancePercent = statistics.acceptance_rate === null ? '—' : `${Math.round(statistics.acceptance_rate * 100)}%`
@@ -761,7 +772,32 @@ export default function ReviewIssuesPage({ onOpenSettings, onOpenTask }: ReviewI
         <div><span className="pulse-dot verifying" /><strong>{statistics.batch_status_counts.verifying}</strong><span>正在验证</span></div>
         <div><span className="pulse-dot complete" /><strong>{statistics.batch_status_counts.completed}</strong><span>完成批次</span></div>
         <div><span className="pulse-dot zero" /><strong>{statistics.zero_issue_batches}</strong><span>零问题批次</span></div>
-        <div className="review-severity-mini"><span>等级分布</span>{(['critical', 'high', 'medium', 'low', 'info'] as ReviewIssueSeverity[]).map((severity) => <i className={`severity-${severity}`} key={severity} style={{ flexGrow: statistics.severity_counts[severity] || 0 }} title={`${SEVERITY_META[severity].label}：${statistics.severity_counts[severity]}`} />)}</div>
+      </section>
+
+      <section className="review-severity-filter" aria-label="按问题严重等级筛选">
+        <div className="review-severity-filter-label">
+          <span>SEVERITY / 问题等级</span>
+          <small>{severityFilters.length ? `已选择 ${severityFilters.length} 个等级` : '选择等级以筛选批次'}</small>
+        </div>
+        <div className="review-severity-options">
+          {SEVERITY_ORDER.map((severity) => {
+            const selectedSeverity = severityFilters.includes(severity)
+            return (
+              <button
+                type="button"
+                className={`review-severity-option severity-${severity}${selectedSeverity ? ' is-active' : ''}`}
+                key={severity}
+                aria-pressed={selectedSeverity}
+                onClick={() => toggleSeverity(severity)}
+              >
+                <i>{SEVERITY_META[severity].short}</i>
+                <span>{SEVERITY_META[severity].label}</span>
+                <strong>{statistics.severity_counts[severity].toLocaleString('zh-CN')}</strong>
+              </button>
+            )
+          })}
+        </div>
+        {severityFilters.length > 0 && <button type="button" className="review-severity-clear" onClick={() => { setSeverityFilters([]); setPage(1) }}><X size={13} />清除</button>}
       </section>
 
       <section className="review-batch-panel">
@@ -781,7 +817,7 @@ export default function ReviewIssuesPage({ onOpenSettings, onOpenTask }: ReviewI
           ) : error ? (
             <div className="state-message error-state"><CircleAlert size={26} /><strong>无法读取检视数据</strong><p>{error}</p><div>{error === 'invalid api token' && <Button variant="outline-secondary" onClick={onOpenSettings}><KeyRound size={16} />填写 Token</Button>}<Button variant="primary" onClick={() => loadData()}><RefreshCw size={16} />重试连接</Button></div></div>
           ) : batches.length === 0 ? (
-            <div className="state-message review-empty-state"><ShieldCheck size={27} /><strong>{statistics.batch_total ? '没有匹配的回收批次' : '还没有检视统计数据'}</strong><p>{statistics.batch_total ? '调整仓库、PR 或状态筛选后再试。' : '录入第一份检视结果，开始观察问题采纳情况。'}</p>{!statistics.batch_total && <Button variant="primary" onClick={() => setEntryOpen(true)}><Plus size={16} />录入检视</Button>}</div>
+            <div className="state-message review-empty-state"><ShieldCheck size={27} /><strong>{statistics.batch_total ? '没有匹配的回收批次' : '还没有检视统计数据'}</strong><p>{statistics.batch_total ? '调整仓库、PR、状态或问题等级后再试。' : '录入第一份检视结果，开始观察问题采纳情况。'}</p>{!statistics.batch_total && <Button variant="primary" onClick={() => setEntryOpen(true)}><Plus size={16} />录入检视</Button>}</div>
           ) : (
             <Table hover className="review-batch-table">
               <thead><tr><th>仓库 / PR</th><th>回收阶段</th><th>问题</th><th>检视版本</th><th>创建时间</th><th>来源</th><th><span className="sr-only">操作</span></th></tr></thead>

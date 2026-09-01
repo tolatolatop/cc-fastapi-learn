@@ -343,6 +343,7 @@ class ReviewIssueService:
         pr_number: str | None,
         review_task_id: str | None,
         statuses: list[ReviewBatchStatus] | None,
+        severities: list[ReviewIssueSeverity] | None,
         created_from: datetime | None,
         created_to: datetime | None,
     ) -> list[Any]:
@@ -357,6 +358,15 @@ class ReviewIssueService:
             filters.append(ReviewIssueBatch.review_task_id == review_task_id.strip())
         if statuses:
             filters.append(ReviewIssueBatch.status.in_(statuses))
+        if severities:
+            filters.append(
+                select(ReviewIssue.id)
+                .where(
+                    ReviewIssue.batch_id == ReviewIssueBatch.id,
+                    ReviewIssue.severity.in_(severities),
+                )
+                .exists()
+            )
         if created_from is not None:
             filters.append(ReviewIssueBatch.created_at >= created_from)
         if created_to is not None:
@@ -372,6 +382,7 @@ class ReviewIssueService:
         pr_number: str | None,
         review_task_id: str | None,
         statuses: list[ReviewBatchStatus] | None,
+        severities: list[ReviewIssueSeverity] | None,
         created_from: datetime | None,
         created_to: datetime | None,
         offset: int,
@@ -383,6 +394,7 @@ class ReviewIssueService:
             pr_number=pr_number,
             review_task_id=review_task_id,
             statuses=statuses,
+            severities=severities,
             created_from=created_from,
             created_to=created_to,
         )
@@ -828,6 +840,7 @@ class ReviewIssueService:
             pr_number=pr_number,
             review_task_id=None,
             statuses=None,
+            severities=None,
             created_from=created_from,
             created_to=created_to,
         )

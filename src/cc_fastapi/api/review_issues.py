@@ -118,6 +118,9 @@ def list_review_issue_batches(
     pr_number: str | None = Query(default=None, max_length=128),
     review_task_id: str | None = Query(default=None, max_length=36),
     statuses: list[ReviewBatchStatus] | None = Query(default=None, alias="status"),
+    severities: list[ReviewIssueSeverity] | None = Query(
+        default=None, alias="severity"
+    ),
     created_from: datetime | None = None,
     created_to: datetime | None = None,
     offset: int = Query(default=0, ge=0),
@@ -131,6 +134,7 @@ def list_review_issue_batches(
         pr_number=pr_number,
         review_task_id=review_task_id,
         statuses=statuses,
+        severities=severities,
         created_from=created_from,
         created_to=created_to,
         offset=offset,

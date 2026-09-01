@@ -4,6 +4,7 @@ from pydantic import BaseModel
 
 from cc_fastapi.db.models import (
     ReviewBatchStatus,
+    ReviewIssueSeverity,
     TaskStatus,
 )
 from cc_fastapi.schemas.review_issues import ReviewIssueBatchResponse
@@ -17,6 +18,7 @@ class ReviewDashboardSummaryResponse(BaseModel):
     merged_unhandled_issues: int
     pending_issues: int
     acceptance_rate: float | None
+    severity_counts: dict[ReviewIssueSeverity, int]
 
 
 class ReviewDashboardTrendPointResponse(BaseModel):
