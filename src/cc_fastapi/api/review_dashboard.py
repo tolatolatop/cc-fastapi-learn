@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from cc_fastapi.api.dependencies import require_token
+from cc_fastapi.db.models import ReviewIssueSeverity
 from cc_fastapi.db.session import get_db
 from cc_fastapi.schemas.review_dashboard import (
     ReviewDashboardPullRequestDetailResponse,
@@ -30,6 +31,9 @@ def get_review_dashboard(
     provider: str | None = Query(default=None, max_length=32),
     project_path: str | None = Query(default=None, max_length=255),
     tag: str | None = Query(default=None, max_length=64),
+    severities: list[ReviewIssueSeverity] | None = Query(
+        default=None, alias="severity"
+    ),
     created_from: datetime | None = None,
     created_to: datetime | None = None,
     outcome: Literal["all", "accepted", "unhandled", "pending"] = "all",
@@ -49,6 +53,7 @@ def get_review_dashboard(
                 provider=provider,
                 project_path=project_path,
                 tag=tag,
+                severities=severities,
                 created_from=created_from,
                 created_to=created_to,
                 outcome=outcome,

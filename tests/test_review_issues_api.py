@@ -340,6 +340,24 @@ def test_review_issue_list_and_batch_list_are_paginated_and_filterable():
     assert batches.json()["total"] == 1
     assert batches.json()["items"][0]["pr_number"] == "2"
 
+    severity_filtered = client.get(
+        "/v1/review-issue-batches",
+        params=[("severity", "critical"), ("severity", "info")],
+    )
+    assert severity_filtered.status_code == 200
+    assert severity_filtered.json()["total"] == 2
+    assert {item["id"] for item in severity_filtered.json()["items"]} == {
+        first_batch["id"],
+        second_batch["id"],
+    }
+
+    no_severity_match = client.get(
+        "/v1/review-issue-batches",
+        params={"severity": "medium"},
+    )
+    assert no_severity_match.status_code == 200
+    assert no_severity_match.json() == {"items": [], "total": 0}
+
     issues = client.get(
         "/v1/review-issues",
         params={"severity": "critical", "offset": 0, "limit": 1},

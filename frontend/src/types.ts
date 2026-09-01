@@ -256,6 +256,7 @@ export interface ReviewDashboardSummary {
   merged_unhandled_issues: number
   pending_issues: number
   acceptance_rate: number | null
+  severity_counts: Record<ReviewIssueSeverity, number>
 }
 
 export interface ReviewDashboardTrendPoint {

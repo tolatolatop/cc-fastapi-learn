@@ -11,6 +11,7 @@ from cc_fastapi.db.models import (
     Repository,
     ReviewIssue,
     ReviewIssueBatch,
+    ReviewIssueSeverity,
     ReviewIssueVerificationStatus,
     TaskStatus,
 )
@@ -74,7 +75,10 @@ class ReviewDashboardService:
         )
 
     @staticmethod
-    def _pull_request_statistics(filters: list[Any]):
+    def _pull_request_statistics(
+        filters: list[Any],
+        severities: list[ReviewIssueSeverity] | None = None,
+    ):
         accepted = case(
             (
                 ReviewIssue.verification_status
@@ -102,7 +106,7 @@ class ReviewDashboardService:
             ),
             else_=0,
         )
-        return (
+        query = (
             select(
                 ReviewIssueBatch.provider.label("provider"),
                 ReviewIssueBatch.project_path.label("project_path"),
@@ -123,6 +127,9 @@ class ReviewDashboardService:
                 ReviewIssueBatch.pr_number,
             )
         )
+        if severities:
+            query = query.where(ReviewIssue.severity.in_(severities))
+        return query
 
     @staticmethod
     def _outcome_filter(statistics, outcome: ReviewDashboardOutcome):
@@ -240,7 +247,26 @@ class ReviewDashboardService:
         }
 
     @staticmethod
-    def _timeline(db: Session, filters: list[Any]) -> list[dict[str, Any]]:
+    def _severity_counts(
+        db: Session,
+        filters: list[Any],
+    ) -> dict[ReviewIssueSeverity, int]:
+        rows = db.execute(
+            select(ReviewIssue.severity, func.count())
+            .join(ReviewIssueBatch, ReviewIssueBatch.id == ReviewIssue.batch_id)
+            .where(*filters)
+            .group_by(ReviewIssue.severity)
+        ).all()
+        counts = {severity: 0 for severity in ReviewIssueSeverity}
+        counts.update(dict(rows))
+        return counts
+
+    @staticmethod
+    def _timeline(
+        db: Session,
+        filters: list[Any],
+        severities: list[ReviewIssueSeverity] | None = None,
+    ) -> list[dict[str, Any]]:
         day = func.date(ReviewIssueBatch.created_at).label("date")
         accepted = func.sum(
             case(
@@ -275,7 +301,7 @@ class ReviewDashboardService:
                 else_=0,
             )
         ).label("pending_issues")
-        rows = db.execute(
+        query = (
             select(
                 day,
                 func.count(ReviewIssue.id).label("issue_total"),
@@ -288,7 +314,10 @@ class ReviewDashboardService:
             .where(*filters)
             .group_by(day)
             .order_by(day.asc())
-        ).all()
+        )
+        if severities:
+            query = query.where(ReviewIssue.severity.in_(severities))
+        rows = db.execute(query).all()
         return [
             {
                 "date": value if isinstance(value, date) else date.fromisoformat(str(value)),
@@ -307,6 +336,7 @@ class ReviewDashboardService:
         provider: str | None,
         project_path: str | None,
         tag: str | None,
+        severities: list[ReviewIssueSeverity] | None,
         created_from: datetime | None,
         created_to: datetime | None,
         outcome: ReviewDashboardOutcome,
@@ -322,7 +352,8 @@ class ReviewDashboardService:
         tag_filter = self._tag_filter(db, tag)
         if tag_filter is not None:
             filters.append(tag_filter)
-        statistics = self._pull_request_statistics(filters).subquery()
+        severity_counts = self._severity_counts(db, filters)
+        statistics = self._pull_request_statistics(filters, severities).subquery()
         outcome_filter = self._outcome_filter(statistics, outcome)
         item_query = select(statistics)
         if outcome_filter is not None:
@@ -356,10 +387,20 @@ class ReviewDashboardService:
                     for provider_value, project_value, pr_value in row_keys
                 ]
             )
+            page_batch_filters = list(filters)
+            if severities:
+                page_batch_filters.append(
+                    select(ReviewIssue.id)
+                    .where(
+                        ReviewIssue.batch_id == ReviewIssueBatch.id,
+                        ReviewIssue.severity.in_(severities),
+                    )
+                    .exists()
+                )
             page_batches = list(
                 db.scalars(
                     select(ReviewIssueBatch)
-                    .where(key_filter, *filters)
+                    .where(key_filter, *page_batch_filters)
                     .order_by(ReviewIssueBatch.created_at.desc(), ReviewIssueBatch.id.desc())
                 )
             )
@@ -407,9 +448,11 @@ class ReviewDashboardService:
                 }
             )
 
+        summary = self._summary(db, statistics)
+        summary["severity_counts"] = severity_counts
         return {
-            "summary": self._summary(db, statistics),
-            "timeline": self._timeline(db, filters),
+            "summary": summary,
+            "timeline": self._timeline(db, filters, severities),
             "repositories": self._repositories(db),
             "tags": self._tags(db),
             "items": items,

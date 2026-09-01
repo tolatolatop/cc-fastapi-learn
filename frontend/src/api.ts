@@ -53,6 +53,7 @@ interface ReviewBatchListOptions {
   projectPath?: string
   prNumber?: string
   statuses?: ReviewBatchStatus[]
+  severities?: ReviewIssueSeverity[]
 }
 
 interface ReviewIssueListOptions {
@@ -83,6 +84,7 @@ interface ReviewDashboardOptions {
   provider?: string
   projectPath?: string
   tag?: string
+  severities?: ReviewIssueSeverity[]
   createdFrom?: string
   createdTo?: string
   outcome?: ReviewDashboardOutcome
@@ -173,6 +175,7 @@ export const api = {
     projectPath,
     prNumber,
     statuses = [],
+    severities = [],
   }: ReviewBatchListOptions = {}) => request<ReviewIssueBatchListResponse>(queryPath('/v1/review-issue-batches', [
     ['offset', offset],
     ['limit', limit],
@@ -180,6 +183,7 @@ export const api = {
     ['project_path', projectPath],
     ['pr_number', prNumber],
     ...statuses.map((status): [string, string] => ['status', status]),
+    ...severities.map((severity): [string, string] => ['severity', severity]),
   ])),
   getReviewBatch: (id: string) => request<ReviewIssueBatch>(`/v1/review-issue-batches/${id}`),
   createReviewBatch: (payload: CreateReviewIssueBatchPayload) =>
@@ -259,6 +263,7 @@ export const api = {
     provider,
     projectPath,
     tag,
+    severities = [],
     createdFrom,
     createdTo,
     outcome = 'all',
@@ -268,6 +273,7 @@ export const api = {
     ['provider', provider],
     ['project_path', projectPath],
     ['tag', tag],
+    ...severities.map((severity): [string, string] => ['severity', severity]),
     ['created_from', createdFrom],
     ['created_to', createdTo],
     ['outcome', outcome],
