@@ -367,6 +367,11 @@
   stroke-width: 1;
 }
 
+.review-trend-axis-ticks line {
+  stroke: #aeb9bc;
+  stroke-width: 1;
+}
+
 .review-trend-chart .guide {
   stroke: #dfe4e6;
   stroke-width: 1;

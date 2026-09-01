@@ -189,6 +189,28 @@ function OutcomeMiniBar({ pullRequest }: { pullRequest: ReviewDashboardPullReque
   )
 }
 
+interface TrendAxisTick {
+  date: Date
+  position: number
+}
+
+function buildTrendAxisTicks(from: string, to: string): TrendAxisTick[] {
+  const start = new Date(`${from}T00:00:00`)
+  const end = new Date(`${to}T00:00:00`)
+  const millisecondsPerDay = 24 * 60 * 60 * 1000
+  const daySpan = Math.max(0, Math.round((end.getTime() - start.getTime()) / millisecondsPerDay))
+  const tickCount = Math.min(8, daySpan + 1)
+
+  if (tickCount === 1) return [{ date: start, position: 0 }]
+
+  return Array.from({ length: tickCount }, (_, index) => {
+    const dayOffset = Math.round(index * daySpan / (tickCount - 1))
+    const date = new Date(start)
+    date.setDate(start.getDate() + dayOffset)
+    return { date, position: dayOffset / daySpan }
+  })
+}
+
 function ReviewTrend({ points, from, to }: { points: ReviewDashboardTrendPoint[]; from: string; to: string }) {
   if (!points.length) {
     return <div className="review-trend-empty"><GitCommitHorizontal size={21} /><span>当前时间段还没有问题记录</span></div>
@@ -202,8 +224,8 @@ function ReviewTrend({ points, from, to }: { points: ReviewDashboardTrendPoint[]
   const chartBottom = 168
   const chartHeight = 132
   const barWidth = Math.max(4, Math.min(18, 680 / Math.max(points.length, 1)))
-  const startLabel = new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit' }).format(new Date(start))
-  const endLabel = new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit' }).format(new Date(end))
+  const tickFormatter = new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit' })
+  const ticks = buildTrendAxisTicks(from, to)
 
   return (
     <div className="review-trend-chart">
@@ -212,6 +234,18 @@ function ReviewTrend({ points, from, to }: { points: ReviewDashboardTrendPoint[]
         <line x1={chartLeft} y1={chartBottom - chartHeight} x2={chartRight} y2={chartBottom - chartHeight} className="guide" />
         <text x="4" y={chartBottom - chartHeight + 4}>{maxTotal}</text>
         <text x="4" y={chartBottom + 4}>0</text>
+        <g className="review-trend-axis-ticks" aria-hidden="true">
+          {ticks.map((tick, index) => {
+            const x = chartLeft + tick.position * (chartRight - chartLeft)
+            const textAnchor = index === 0 ? 'start' : index === ticks.length - 1 ? 'end' : 'middle'
+            return (
+              <g key={tick.date.toISOString()}>
+                <line x1={x} y1={chartBottom} x2={x} y2={chartBottom + 5} />
+                <text x={x} y="193" textAnchor={textAnchor}>{tickFormatter.format(tick.date)}</text>
+              </g>
+            )
+          })}
+        </g>
         {points.map((point) => {
           const time = new Date(`${point.date}T12:00:00`).getTime()
           const x = chartLeft + ((time - start) / duration) * (chartRight - chartLeft)
@@ -228,8 +262,6 @@ function ReviewTrend({ points, from, to }: { points: ReviewDashboardTrendPoint[]
             </g>
           )
         })}
-        <text x={chartLeft} y="193">{startLabel}</text>
-        <text x={chartRight} y="193" textAnchor="end">{endLabel}</text>
       </svg>
     </div>
   )
