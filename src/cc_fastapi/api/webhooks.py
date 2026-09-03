@@ -73,6 +73,7 @@ async def receive_provider_webhook(
             instance_url=received.instance_url,
             prompt_template_path=definition.prompt_template_path(settings),
             queue_name=definition.queue_name(settings),
+            model=definition.model(settings),
             provider_metadata=received.provider_metadata,
         )
     except WebhookTemplateError as exc:

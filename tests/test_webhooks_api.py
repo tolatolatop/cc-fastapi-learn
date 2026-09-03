@@ -40,12 +40,14 @@ from cc_fastapi.workflows import build_default_workflow_engine
 def webhook_settings(monkeypatch, tmp_path):
     cfg = tmp_path / "queues.yaml"
     cfg.write_text(
-        "default_queue: default\nqueues:\n  default:\n    workers: 1\n  hooks:\n    workers: 1\n",
+        "default_queue: default\nqueues:\n  default:\n    workers: 1\n  hooks:\n    workers: 1\n"
+        "    default_model: queue-model\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("QUEUES_CONFIG_PATH", str(cfg))
     monkeypatch.setenv("GITLAB_WEBHOOK_SECRET", "gitlab-secret")
     monkeypatch.setenv("GITLAB_WEBHOOK_QUEUE_NAME", "hooks")
+    monkeypatch.setenv("GITLAB_WEBHOOK_MODEL", "webhook-model")
     template = tmp_path / "gitlab_webhook_prompt.j2"
     template.write_text(
         "Review {{ event_type }} for {{ project.path_with_namespace }} on {{ ref }} ({{ commits | length }} commits)",
@@ -54,6 +56,8 @@ def webhook_settings(monkeypatch, tmp_path):
     monkeypatch.setenv("GITLAB_WEBHOOK_PROMPT_TEMPLATE_PATH", str(template))
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "github-secret")
     monkeypatch.setenv("GITHUB_WEBHOOK_QUEUE_NAME", "hooks")
+    monkeypatch.setenv("GITHUB_WEBHOOK_MODEL", "")
+    monkeypatch.setenv("ANTHROPIC_MODEL", "global-model")
     github_template = tmp_path / "github_webhook_prompt.j2"
     github_template.write_text(
         "Review {{ event_type }} for {{ repository.full_name }} by {{ sender.login }}",
@@ -248,6 +252,7 @@ def test_gitlab_webhook_renders_prompt_creates_task_and_records_metadata():
         assert trigger is not None
         assert workflow_run is not None
         assert task.status == TaskStatus.QUEUED
+        assert task.payload["model"] == "webhook-model"
         assert task.payload["prompt"] == "Review Push Hook for group/project on refs/heads/feature-1 (1 commits)"
         assert task.metadata_json == {
             "trigger": "gitlab_webhook",
@@ -330,6 +335,7 @@ def test_github_webhook_verifies_signature_creates_task_and_records_metadata():
         assert trigger is not None
         assert run is not None
         assert task.payload["prompt"] == "Review push for octo-org/octo-repo by octocat"
+        assert task.payload["model"] == "queue-model"
         assert task.metadata_json == {
             "trigger": "github_webhook",
             "github": {

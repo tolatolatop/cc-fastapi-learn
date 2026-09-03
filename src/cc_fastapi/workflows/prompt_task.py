@@ -73,10 +73,17 @@ class WebhookPromptTaskWorkflow(Workflow):
             self.provider: provider_metadata,
         }
 
-    def _build_plan(self, event: WorkflowEvent, prompt: str, queue_name: str | None) -> WorkflowPlan:
+    def _build_plan(
+        self,
+        event: WorkflowEvent,
+        prompt: str,
+        queue_name: str | None,
+        model: str | None,
+    ) -> WorkflowPlan:
         return WorkflowPlan.create_tasks(
             WorkflowTaskSpec(
                 prompt=prompt,
+                model=model,
                 queue_name=queue_name,
                 metadata=self._task_metadata(event),
             ),
@@ -90,7 +97,9 @@ class WebhookPromptTaskWorkflow(Workflow):
         prompt = self._render_prompt(event)
         queue_name_value = event.config.get("queue_name")
         queue_name = str(queue_name_value).strip() if queue_name_value else None
-        return self._build_plan(event, prompt, queue_name)
+        model_value = event.config.get("model")
+        model = str(model_value).strip() if model_value else None
+        return self._build_plan(event, prompt, queue_name, model)
 
     def after_task(
         self,

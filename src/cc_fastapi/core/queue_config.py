@@ -9,6 +9,7 @@ from cc_fastapi.core.config import get_settings
 
 class QueueDefinition(BaseModel):
     workers: int = Field(default=1, ge=1)
+    default_model: str | None = None
 
 
 class QueueConfig(BaseModel):
@@ -30,4 +31,3 @@ def get_queue_config() -> QueueConfig:
     if not cfg_path.is_absolute():
         cfg_path = Path.cwd() / cfg_path
     return _load_from_file(cfg_path)
-

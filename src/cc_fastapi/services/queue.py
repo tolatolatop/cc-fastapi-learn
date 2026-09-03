@@ -49,13 +49,19 @@ class TaskQueueService:
     ) -> AgentTask:
         now = utc_now()
         target_queue = self.resolve_target_queue(queue_name)
+        queue_default_model = get_queue_config().queues[target_queue].default_model
+        resolved_model = model.strip() if isinstance(model, str) and model.strip() else None
+        if resolved_model is None and isinstance(queue_default_model, str) and queue_default_model.strip():
+            resolved_model = queue_default_model.strip()
+        if resolved_model is None:
+            resolved_model = self.settings.anthropic_model
         task = AgentTask(
             status=TaskStatus.QUEUED,
             queue_name=target_queue,
             priority=priority,
             payload={
                 "prompt": prompt,
-                "model": model or self.settings.anthropic_model,
+                "model": resolved_model,
                 "claude_agent_options": claude_agent_options or {},
             },
             metadata_json=metadata or {},

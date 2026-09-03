@@ -73,6 +73,7 @@ class ProviderPromptTaskWorkflow(WebhookPromptTaskWorkflow):
         event: WorkflowEvent,
         prompt: str,
         queue_name: str | None,
+        model: str | None,
     ) -> WorkflowPlan:
         parsed_payload = event.webhook_payload
         correlation = change_request_correlation(parsed_payload)
@@ -90,6 +91,7 @@ class ProviderPromptTaskWorkflow(WebhookPromptTaskWorkflow):
         return WorkflowPlan.create_tasks(
             WorkflowTaskSpec(
                 prompt=prompt,
+                model=model,
                 queue_name=queue_name,
                 metadata=self._task_metadata(event),
             ),

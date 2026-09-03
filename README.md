@@ -64,10 +64,10 @@ POST /v1/webhooks/gitlab
 POST /v1/webhooks/github
 ```
 
-可通过 `GITLAB_WEBHOOK_SECRET`、`GITLAB_WEBHOOK_PROMPT_TEMPLATE_PATH` 和 `GITLAB_WEBHOOK_QUEUE_NAME` 配置验证密钥、任务提示模板文件及目标队列。默认模板位于 `config/templates/gitlab_webhook_prompt.j2`。控制台中的“Webhook 档案”页面可按项目、分支、事件 UUID、Webhook UUID 或关联任务 ID 检索最近的触发记录，并查看原始 Payload。
+可通过 `GITLAB_WEBHOOK_SECRET`、`GITLAB_WEBHOOK_PROMPT_TEMPLATE_PATH`、`GITLAB_WEBHOOK_QUEUE_NAME` 和 `GITLAB_WEBHOOK_MODEL` 配置验证密钥、任务提示模板文件、目标队列及默认模型。默认模板位于 `config/templates/gitlab_webhook_prompt.j2`。控制台中的“Webhook 档案”页面可按项目、分支、事件 UUID、Webhook UUID 或关联任务 ID 检索最近的触发记录，并查看原始 Payload。
 
 GitHub 使用对应的 `GITHUB_WEBHOOK_SECRET`、`GITHUB_WEBHOOK_PROMPT_TEMPLATE_PATH` 和
-`GITHUB_WEBHOOK_QUEUE_NAME`。在 GitHub Webhook 设置中选择 `application/json`，把 Payload URL
+`GITHUB_WEBHOOK_QUEUE_NAME`、`GITHUB_WEBHOOK_MODEL`。在 GitHub Webhook 设置中选择 `application/json`，把 Payload URL
 指向 `/v1/webhooks/github`，并让 Secret 与 `GITHUB_WEBHOOK_SECRET` 保持一致。服务按原始请求体校验
 `X-Hub-Signature-256`，使用 `X-GitHub-Delivery` 去重；GitHub Enterprise Server 实例地址从
 `X-GitHub-Enterprise-Host` 记录，普通 GitHub 记录为 `https://github.com`。默认 Prompt 模板位于
@@ -113,6 +113,24 @@ GitLab Merge Request 事件会按“项目路径 + MR IID”写入 `workflow_cor
 
 GitHub Pull Request 事件会按“仓库全名 + PR 编号”写入同一关联表；收到 `action=synchronize`
 时采用相同的替换规则。
+
+## 队列与模型默认值
+
+每个队列可以在 `config/queues.yaml` 中配置供该队列 Worker 使用的默认模型：
+
+```yaml
+default_queue: default
+queues:
+  default:
+    workers: 1
+    default_model: claude-sonnet-4-5
+  high_priority:
+    workers: 2
+    default_model: claude-opus-4-1
+```
+
+模型按“任务显式 `model` → `GITLAB_WEBHOOK_MODEL` / `GITHUB_WEBHOOK_MODEL` → Queue 的
+`default_model` → `ANTHROPIC_MODEL`”依次解析。空字符串视为未配置。
 
 内部服务可按 PR/MR 列出最近变更请求，并精确读取任务结果和完整工作流历史：
 

@@ -44,12 +44,14 @@ class Settings(BaseSettings):
         alias="GITLAB_WEBHOOK_PROMPT_TEMPLATE_PATH",
     )
     gitlab_webhook_queue_name: str = Field(default="", alias="GITLAB_WEBHOOK_QUEUE_NAME")
+    gitlab_webhook_model: str = Field(default="", alias="GITLAB_WEBHOOK_MODEL")
     github_webhook_secret: str = Field(default="", alias="GITHUB_WEBHOOK_SECRET")
     github_webhook_prompt_template_path: str = Field(
         default=DEFAULT_GITHUB_WEBHOOK_PROMPT_TEMPLATE_PATH,
         alias="GITHUB_WEBHOOK_PROMPT_TEMPLATE_PATH",
     )
     github_webhook_queue_name: str = Field(default="", alias="GITHUB_WEBHOOK_QUEUE_NAME")
+    github_webhook_model: str = Field(default="", alias="GITHUB_WEBHOOK_MODEL")
     max_attempts: int = Field(default=3, alias="MAX_ATTEMPTS")
 
     @property

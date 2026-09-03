@@ -22,10 +22,12 @@ def make_db():
 def queue_config_file(monkeypatch, tmp_path):
     cfg = tmp_path / "queues.yaml"
     cfg.write_text(
-        "default_queue: default\nqueues:\n  default:\n    workers: 1\n  slow:\n    workers: 2\n",
+        "default_queue: default\nqueues:\n  default:\n    workers: 1\n  slow:\n    workers: 2\n"
+        "    default_model: queue-model\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("QUEUES_CONFIG_PATH", str(cfg))
+    monkeypatch.setenv("ANTHROPIC_MODEL", "global-model")
     get_settings.cache_clear()
     get_queue_config.cache_clear()
     yield
@@ -87,6 +89,41 @@ def test_create_task_with_explicit_queue_name():
         max_attempts=None,
     )
     assert task.queue_name == "slow"
+    assert task.payload["model"] == "queue-model"
+
+
+def test_create_task_uses_global_model_when_queue_has_no_default():
+    db = make_db()
+    task = TaskQueueService().create_task(
+        db,
+        prompt="hello",
+        model=None,
+        queue_name="default",
+        metadata=None,
+        priority=1,
+        agent_mode=True,
+        unattended=True,
+        max_attempts=None,
+    )
+
+    assert task.payload["model"] == "global-model"
+
+
+def test_explicit_model_overrides_queue_default_model():
+    db = make_db()
+    task = TaskQueueService().create_task(
+        db,
+        prompt="hello",
+        model="explicit-model",
+        queue_name="slow",
+        metadata=None,
+        priority=1,
+        agent_mode=True,
+        unattended=True,
+        max_attempts=None,
+    )
+
+    assert task.payload["model"] == "explicit-model"
 
 
 def test_retry_task_creates_new_task_with_same_configuration():

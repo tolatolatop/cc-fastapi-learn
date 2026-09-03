@@ -88,6 +88,7 @@ def test_new_provider_can_register_without_a_provider_specific_workflow_class():
         request_adapter=ExampleRequestAdapter(),
         prompt_template_setting="resolved_github_webhook_prompt_template_path",
         queue_setting="github_webhook_queue_name",
+        model_setting="github_webhook_model",
         supersede_actions=frozenset({"synchronize"}),
     )
     registry = WebhookProviderRegistry((definition,))

@@ -161,6 +161,7 @@ class WebhookProviderDefinition:
     request_adapter: WebhookRequestAdapter
     prompt_template_setting: str
     queue_setting: str
+    model_setting: str
     supersede_actions: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
@@ -190,6 +191,10 @@ class WebhookProviderDefinition:
 
     def queue_name(self, settings: Settings) -> str | None:
         value = str(getattr(settings, self.queue_setting)).strip()
+        return value or None
+
+    def model(self, settings: Settings) -> str | None:
+        value = str(getattr(settings, self.model_setting)).strip()
         return value or None
 
 
@@ -231,6 +236,7 @@ webhook_provider_registry = WebhookProviderRegistry(
             request_adapter=GitHubWebhookRequestAdapter(),
             prompt_template_setting="resolved_github_webhook_prompt_template_path",
             queue_setting="github_webhook_queue_name",
+            model_setting="github_webhook_model",
             supersede_actions=frozenset({"synchronize"}),
         ),
         WebhookProviderDefinition(
@@ -240,6 +246,7 @@ webhook_provider_registry = WebhookProviderRegistry(
             request_adapter=GitLabWebhookRequestAdapter(),
             prompt_template_setting="resolved_gitlab_webhook_prompt_template_path",
             queue_setting="gitlab_webhook_queue_name",
+            model_setting="gitlab_webhook_model",
             supersede_actions=frozenset({"update"}),
         ),
     )

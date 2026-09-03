@@ -38,6 +38,7 @@ class WebhookService:
         *,
         prompt_template_path: str,
         queue_name: str | None,
+        model: str | None,
     ) -> WorkflowRun:
         now = utc_now()
         if task is None:
@@ -58,7 +59,11 @@ class WebhookService:
             webhook_uuid=trigger.webhook_uuid,
             instance_url=trigger.instance_url,
             payload_json=trigger.payload_json,
-            config_json={"prompt_template_path": prompt_template_path, "queue_name": queue_name},
+            config_json={
+                "prompt_template_path": prompt_template_path,
+                "queue_name": queue_name,
+                "model": model,
+            },
             context_json={"legacy_adopted": True},
             status=run_status,
             skip_reason="legacy_trigger_without_task" if task is None else None,
@@ -145,6 +150,7 @@ class WebhookService:
         instance_url: str | None,
         prompt_template_path: str,
         queue_name: str | None,
+        model: str | None = None,
         provider_metadata: dict[str, Any] | None = None,
     ) -> tuple[WebhookTrigger, AgentTask | None, bool, WorkflowRun]:
         provider = provider.strip().lower()
@@ -165,6 +171,7 @@ class WebhookService:
                     task,
                     prompt_template_path=prompt_template_path,
                     queue_name=queue_name,
+                    model=model,
                 )
             return trigger, task, True, workflow_run
 
@@ -180,6 +187,7 @@ class WebhookService:
                 config={
                     "prompt_template_path": prompt_template_path,
                     "queue_name": queue_name,
+                    "model": model,
                     "provider_metadata": provider_metadata or {},
                 },
             ),
@@ -224,6 +232,7 @@ class WebhookService:
                     existing_task,
                     prompt_template_path=prompt_template_path,
                     queue_name=queue_name,
+                    model=model,
                 )
             return existing_trigger, existing_task, True, existing_run
         if task is not None:
@@ -243,6 +252,7 @@ class WebhookService:
         instance_url: str | None,
         prompt_template_path: str,
         queue_name: str | None,
+        model: str | None = None,
     ) -> tuple[WebhookTrigger, AgentTask | None, bool, WorkflowRun]:
         return self.trigger_task(
             db,
@@ -254,6 +264,7 @@ class WebhookService:
             instance_url=instance_url,
             prompt_template_path=prompt_template_path,
             queue_name=queue_name,
+            model=model,
         )
 
     def trigger_github_task(
@@ -267,6 +278,7 @@ class WebhookService:
         instance_url: str,
         prompt_template_path: str,
         queue_name: str | None,
+        model: str | None = None,
     ) -> tuple[WebhookTrigger, AgentTask | None, bool, WorkflowRun]:
         return self.trigger_task(
             db,
@@ -278,6 +290,7 @@ class WebhookService:
             instance_url=instance_url,
             prompt_template_path=prompt_template_path,
             queue_name=queue_name,
+            model=model,
             provider_metadata={
                 "delivery_id": delivery_id,
                 "hook_id": hook_id,
