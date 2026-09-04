@@ -36,6 +36,7 @@ services:
       ANTHROPIC_DEFAULT_HAIKU_MODEL: "${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}"
       ANTHROPIC_MODEL: "${ANTHROPIC_MODEL:-claude-sonnet-4-20250514}"
       API_TOKEN: "${API_TOKEN:-}"
+      REVIEW_CONSOLE_API_TOKEN: "${REVIEW_CONSOLE_API_TOKEN:-}"
       GITLAB_WEBHOOK_SECRET: "${GITLAB_WEBHOOK_SECRET:-}"
       GITLAB_WEBHOOK_PROMPT_TEMPLATE_PATH: "${GITLAB_WEBHOOK_PROMPT_TEMPLATE_PATH:-}"
       GITLAB_WEBHOOK_QUEUE_NAME: "${GITLAB_WEBHOOK_QUEUE_NAME:-}"
@@ -57,5 +58,36 @@ services:
       - app
     restart: unless-stopped
 
+  review-console-api:
+    profiles: ["review-console"]
+    build:
+      context: ./review-console/backend
+    container_name: cc-review-console-api
+    environment:
+      REVIEW_CONSOLE_DATABASE_URL: "sqlite:///./data/review_console.db"
+      REVIEW_API_URL: "http://app:8000"
+      REVIEW_CONSOLE_API_TOKEN: "${REVIEW_CONSOLE_API_TOKEN:-}"
+      REVIEW_CONSOLE_SESSION_SECRET: "${REVIEW_CONSOLE_SESSION_SECRET:-}"
+      REVIEW_CONSOLE_COOKIE_SECURE: "${REVIEW_CONSOLE_COOKIE_SECURE:-false}"
+      REVIEW_CONSOLE_ADMIN_USERNAME: "${REVIEW_CONSOLE_ADMIN_USERNAME:-admin}"
+      REVIEW_CONSOLE_ADMIN_PASSWORD: "${REVIEW_CONSOLE_ADMIN_PASSWORD:-}"
+    volumes:
+      - review_console_data:/app/data
+    depends_on:
+      - app
+    restart: unless-stopped
+
+  review-console-frontend:
+    profiles: ["review-console"]
+    build:
+      context: ./review-console/frontend
+    container_name: cc-review-console
+    ports:
+      - "${REVIEW_CONSOLE_HOST:-0.0.0.0}:${REVIEW_CONSOLE_PORT:-18090}:80"
+    depends_on:
+      - review-console-api
+    restart: unless-stopped
+
 volumes:
   app_data:
+  review_console_data:

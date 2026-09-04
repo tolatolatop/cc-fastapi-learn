@@ -6089,6 +6089,30 @@ main {
   margin-top: 15px;
 }
 
+.review-console-handoff {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin: 0 26px 18px;
+  padding: 14px 16px;
+  border: 1px solid #b9dadd;
+  border-left: 4px solid #167d8d;
+  border-radius: 6px;
+  color: #1b5861;
+  background: #e9f5f5;
+}
+
+.review-console-handoff div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.review-console-handoff span {
+  color: #59747a;
+  font-size: 12px;
+}
+
 .review-issue-detail-section {
   margin-top: 27px;
 }

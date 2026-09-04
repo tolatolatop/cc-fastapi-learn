@@ -1,7 +1,7 @@
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from hashlib import sha256
-import json
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
@@ -20,7 +20,9 @@ from cc_fastapi.db.models import (
     ReviewBatchStatus,
     ReviewIssue,
     ReviewIssueBatch,
+    ReviewIssueDecisionStatus,
     ReviewIssueSeverity,
+    ReviewIssueStatusChange,
     ReviewIssueVerificationStatus,
     TaskStatus,
     WorkflowCorrelation,
@@ -800,8 +802,27 @@ class ReviewIssueService:
         now = utc_now()
         for result in results:
             issue = by_id[result["id"]]
-            issue.verification_status = result["status"]
-            issue.verification_note = result.get("note")
+            next_status = result["status"]
+            next_note = result.get("note")
+            if issue.verification_status != next_status or issue.verification_note != next_note:
+                db.add(
+                    ReviewIssueStatusChange(
+                        issue_id=issue.id,
+                        previous_status=ReviewIssueDecisionStatus(
+                            issue.verification_status.value
+                        ),
+                        new_status=ReviewIssueDecisionStatus(next_status.value),
+                        previous_note=issue.verification_note,
+                        new_note=next_note,
+                        actor_id="verification-workflow",
+                        actor_name="自动验证流程",
+                        dimension="verification",
+                        source="verification_workflow",
+                        created_at=now,
+                    )
+                )
+            issue.verification_status = next_status
+            issue.verification_note = next_note
             issue.verified_at = now
             issue.updated_at = now
 

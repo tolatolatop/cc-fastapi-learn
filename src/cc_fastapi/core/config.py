@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     debug_log_filename: str = Field(default="debug.log", alias="DEBUG_LOG_FILENAME")
     debug_log_utc: bool = Field(default=True, alias="DEBUG_LOG_UTC")
     api_token: str = Field(default="", alias="API_TOKEN")
+    review_console_api_token: str = Field(default="", alias="REVIEW_CONSOLE_API_TOKEN")
     gitlab_webhook_secret: str = Field(default="", alias="GITLAB_WEBHOOK_SECRET")
     gitlab_webhook_prompt_template_path: str = Field(
         default=DEFAULT_GITLAB_WEBHOOK_PROMPT_TEMPLATE_PATH,

@@ -46,3 +46,65 @@ def test_apply_schema_migrations_adds_web_url_to_legacy_repositories_table():
             "SELECT id, web_url FROM repositories WHERE id = 'repo-1'"
         ).one()
     assert row == ("repo-1", None)
+
+
+def test_apply_schema_migrations_adds_human_decision_fields_and_audit_dimension():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "CREATE TABLE review_issues ("
+            "id VARCHAR(36) PRIMARY KEY, verification_status VARCHAR(32) NOT NULL, "
+            "verification_note TEXT, verified_at DATETIME)"
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO review_issues "
+            "(id, verification_status, verification_note, verified_at) "
+            "VALUES ('issue-1', 'ACCEPTED', 'legacy result', CURRENT_TIMESTAMP)"
+        )
+        connection.exec_driver_sql(
+            "CREATE TABLE review_issue_status_changes ("
+            "id VARCHAR(36) PRIMARY KEY, source VARCHAR(64) NOT NULL)"
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO review_issue_status_changes (id, source) "
+            "VALUES ('change-1', 'verification_workflow')"
+        )
+
+    apply_schema_migrations(engine)
+    apply_schema_migrations(engine)
+
+    issue_columns = {
+        column["name"] for column in inspect(engine).get_columns("review_issues")
+    }
+    assert {
+        "decision_status",
+        "decision_reason_code",
+        "decision_note",
+        "decided_by_id",
+        "decided_by_name",
+        "decided_at",
+    }.issubset(issue_columns)
+    with engine.connect() as connection:
+        issue = connection.exec_driver_sql(
+            "SELECT decision_status, decision_note, decided_at "
+            "FROM review_issues WHERE id = 'issue-1'"
+        ).one()
+        change = connection.exec_driver_sql(
+            "SELECT dimension FROM review_issue_status_changes "
+            "WHERE id = 'change-1'"
+        ).one()
+    assert issue[0:2] == ("ACCEPTED", "legacy result")
+    assert issue[2] is not None
+    assert change == ("verification",)
+
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "UPDATE review_issues SET decision_status = 'UNVERIFIED', "
+            "decision_note = NULL WHERE id = 'issue-1'"
+        )
+    apply_schema_migrations(engine)
+    with engine.connect() as connection:
+        status_after_restart = connection.exec_driver_sql(
+            "SELECT decision_status FROM review_issues WHERE id = 'issue-1'"
+        ).scalar_one()
+    assert status_after_restart == "UNVERIFIED"

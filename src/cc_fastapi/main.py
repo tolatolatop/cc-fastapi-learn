@@ -9,6 +9,7 @@ from cc_fastapi.api.repositories import router as repositories_router
 from cc_fastapi.api.review_dashboard import router as review_dashboard_router
 from cc_fastapi.api.review_issues import batch_router as review_issue_batches_router
 from cc_fastapi.api.review_issues import issue_router as review_issues_router
+from cc_fastapi.api.review_console import router as review_console_router
 from cc_fastapi.api.tasks import router as tasks_router
 from cc_fastapi.api.webhooks import router as webhooks_router
 from cc_fastapi.core.config import get_settings
@@ -64,6 +65,7 @@ app.include_router(repositories_router)
 app.include_router(review_dashboard_router)
 app.include_router(review_issue_batches_router)
 app.include_router(review_issues_router)
+app.include_router(review_console_router)
 
 
 @app.get("/healthz")

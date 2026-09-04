@@ -17,7 +17,6 @@ import {
   ShieldCheck,
   Trash2,
   X,
-  XCircle,
 } from 'lucide-react'
 import { Button, Form, Modal, Offcanvas, Table } from 'react-bootstrap'
 import { api } from './api'
@@ -447,8 +446,6 @@ function ReviewBatchDrawer({ batch, onClose, onChanged, onOpenTask, onContinueCo
   const [error, setError] = useState('')
   const [mergedSha, setMergedSha] = useState(batch.merged_sha || '')
   const [verifyTaskId, setVerifyTaskId] = useState(batch.verify_task_id || '')
-  const [decision, setDecision] = useState<{ issueId: string; status: 'accepted' | 'not_accepted' } | null>(null)
-  const [decisionNote, setDecisionNote] = useState('')
   const [saving, setSaving] = useState(false)
 
   const loadDetail = useCallback(async () => {
@@ -487,32 +484,6 @@ function ReviewBatchDrawer({ batch, onClose, onChanged, onOpenTask, onContinueCo
       })
       setDetail(updated)
       onChanged(updated)
-    } catch (requestError) {
-      setError(messageFrom(requestError))
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  async function saveDecision(event: FormEvent) {
-    event.preventDefault()
-    if (!decision) return
-    setSaving(true)
-    setError('')
-    try {
-      await api.updateReviewIssue(decision.issueId, {
-        status: decision.status,
-        ...(decisionNote.trim() ? { note: decisionNote.trim() } : {}),
-      })
-      setDecision(null)
-      setDecisionNote('')
-      const [nextBatch, nextIssues] = await Promise.all([
-        api.getReviewBatch(detail.id),
-        loadBatchIssues(detail.id),
-      ])
-      setDetail(nextBatch)
-      setIssues(nextIssues.sort((left, right) => left.issue_no - right.issue_no))
-      onChanged(nextBatch)
     } catch (requestError) {
       setError(messageFrom(requestError))
     } finally {
@@ -589,6 +560,13 @@ function ReviewBatchDrawer({ batch, onClose, onChanged, onOpenTask, onContinueCo
 
           {error && <div className="inline-error review-detail-error"><CircleAlert size={16} />{error}</div>}
 
+          {detail.status === 'verifying' && (
+            <div className="review-console-handoff">
+              <ShieldCheck size={18} />
+              <div><strong>人工裁定已迁移到独立检视裁定台</strong><span>此处仅展示结果；仓库审核者请在裁定台修改状态并填写依据。</span></div>
+            </div>
+          )}
+
           <section className="detail-section review-issue-detail-section">
             <div className="review-issues-heading"><h3>问题列表</h3><span>{issues.length} 条</span></div>
             {loading ? (
@@ -610,19 +588,6 @@ function ReviewBatchDrawer({ batch, onClose, onChanged, onOpenTask, onContinueCo
                       {issue.category && <em>{issue.category}</em>}
                     </footer>
                     {issue.verification_note && <div className="review-verification-note"><span>验证依据</span>{issue.verification_note}</div>}
-                    {detail.status === 'verifying' && issue.verification_status === 'unverified' && decision?.issueId !== issue.id && (
-                      <div className="review-decision-actions">
-                        <Button variant="outline-success" size="sm" onClick={() => { setDecision({ issueId: issue.id, status: 'accepted' }); setDecisionNote('') }}><Check size={14} />已修复，接受</Button>
-                        <Button variant="outline-danger" size="sm" onClick={() => { setDecision({ issueId: issue.id, status: 'not_accepted' }); setDecisionNote('') }}><XCircle size={14} />未发现修复</Button>
-                      </div>
-                    )}
-                    {decision?.issueId === issue.id && (
-                      <form className={`review-decision-form decision-${decision.status}`} onSubmit={saveDecision}>
-                        <strong>{decision.status === 'accepted' ? '记录为已接受' : '记录为未接受'}</strong>
-                        <Form.Control as="textarea" value={decisionNote} onChange={(event) => setDecisionNote(event.target.value)} rows={2} placeholder="可选：填写判断依据" autoFocus />
-                        <div><Button type="button" variant="link" size="sm" onClick={() => setDecision(null)}>取消</Button><Button type="submit" variant={decision.status === 'accepted' ? 'success' : 'danger'} size="sm" disabled={saving}>{saving ? '正在保存' : '确认结论'}</Button></div>
-                      </form>
-                    )}
                   </article>
                 ))}
               </div>

@@ -75,6 +75,24 @@ class ReviewIssueVerificationStatus(StrEnum):
     NOT_ACCEPTED = "not_accepted"
 
 
+class ReviewIssueDecisionStatus(StrEnum):
+    UNVERIFIED = "unverified"
+    ACCEPTED = "accepted"
+    NOT_ACCEPTED = "not_accepted"
+    NEEDS_INFO = "needs_info"
+
+
+class ReviewIssueDecisionReason(StrEnum):
+    FALSE_POSITIVE = "false_positive"
+    PROTECTED_BY_CONTROL = "protected_by_control"
+    NOT_REPRODUCIBLE = "not_reproducible"
+    DUPLICATE = "duplicate"
+    OUT_OF_SCOPE = "out_of_scope"
+    INTENTIONAL_BEHAVIOR = "intentional_behavior"
+    RISK_ACCEPTED = "risk_accepted"
+    OTHER = "other"
+
+
 class AgentTask(Base):
     __tablename__ = "agent_tasks"
 
@@ -371,6 +389,12 @@ class ReviewIssue(Base):
             "severity",
             "created_at",
         ),
+        Index(
+            "ix_review_issues_decision_statistics",
+            "decision_status",
+            "decision_reason_code",
+            "decided_at",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
@@ -392,11 +416,50 @@ class ReviewIssue(Base):
         default=ReviewIssueVerificationStatus.UNVERIFIED,
     )
     verification_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decision_status: Mapped[ReviewIssueDecisionStatus] = mapped_column(
+        Enum(ReviewIssueDecisionStatus, native_enum=False, length=32),
+        nullable=False,
+        default=ReviewIssueDecisionStatus.UNVERIFIED,
+    )
+    decision_reason_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    decision_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decided_by_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    decided_by_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
 
     batch: Mapped[ReviewIssueBatch] = relationship("ReviewIssueBatch", back_populates="issues")
+
+
+class ReviewIssueStatusChange(Base):
+    """Append-only audit event for human decisions and automated verification."""
+
+    __tablename__ = "review_issue_status_changes"
+    __table_args__ = (
+        Index("ix_review_issue_status_changes_issue_created", "issue_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    issue_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("review_issues.id"), nullable=False, index=True
+    )
+    previous_status: Mapped[ReviewIssueDecisionStatus] = mapped_column(
+        Enum(ReviewIssueDecisionStatus, native_enum=False, length=32), nullable=False
+    )
+    new_status: Mapped[ReviewIssueDecisionStatus] = mapped_column(
+        Enum(ReviewIssueDecisionStatus, native_enum=False, length=32), nullable=False
+    )
+    previous_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    new_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    previous_reason_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    new_reason_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    actor_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    actor_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    dimension: Mapped[str] = mapped_column(String(32), nullable=False, default="decision")
+    source: Mapped[str] = mapped_column(String(64), nullable=False, default="review_console")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
 
 
 class Repository(Base):
