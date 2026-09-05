@@ -245,10 +245,12 @@ PR 的 Task 历史中。
 只读或修改权限、按 PR/MR 查看全部意见、获取 PR/MR 检视完成状态、独立人工裁定、结构化拒绝
 理由、待补充状态和完整状态轨迹。独立统计页按日期时间查看有效意见、用户确认贡献与误报最多的
 五个仓库。主应用通过专用服务令牌提供
-版本化接口，浏览器只使用裁定台的 `HttpOnly` 会话 Cookie。
+版本化接口，浏览器只使用裁定台的 `HttpOnly` 会话 Cookie。访问控制模块与裁定业务解耦，支持
+OIDC Authorization Code + PKCE SSO、本地账号回退、SSO 身份独立映射和 IdP 管理员组映射。
 
 配置 `REVIEW_CONSOLE_API_TOKEN`、不少于 32 字符的 `REVIEW_CONSOLE_SESSION_SECRET` 和首次
-管理员密码 `REVIEW_CONSOLE_ADMIN_PASSWORD` 后启动：
+管理员密码 `REVIEW_CONSOLE_ADMIN_PASSWORD` 后启动。所有值从仓库根目录 `.env` 读取；可直接参考
+`.env.example` 中的 `REVIEW_CONSOLE_SSO_*` 配置身份源、客户端、回调地址和声明映射：
 
 ```bash
 docker compose --profile review-console up --build

@@ -42,6 +42,9 @@ class ConsoleUser(Base):
     grants: Mapped[list["RepositoryGrant"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    sso_identities: Mapped[list["SsoIdentity"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
 
 
 class RepositoryGrant(Base):
@@ -71,3 +74,27 @@ class RepositoryGrant(Base):
     )
 
     user: Mapped[ConsoleUser] = relationship(back_populates="grants")
+
+
+class SsoIdentity(Base):
+    __tablename__ = "sso_identities"
+    __table_args__ = (
+        UniqueConstraint("issuer", "subject", name="uq_sso_identity_subject"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid4())
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("console_users.id"), nullable=False, index=True
+    )
+    issuer: Mapped[str] = mapped_column(String(512), nullable=False)
+    subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    last_login_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+    user: Mapped[ConsoleUser] = relationship(back_populates="sso_identities")

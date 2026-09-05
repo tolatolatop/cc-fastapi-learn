@@ -13,7 +13,8 @@ button, input, select, textarea { font: inherit; }
 .login-brand > p:not(.eyebrow) { max-width: 570px; color: #b5c4cd; font-size: 17px; line-height: 1.8; }
 .trace-sample { display: flex; align-items: center; gap: 15px; margin-top: 48px; color: #8096a4; font-size: 13px; }.trace-sample svg { width: 15px; }.trace-sample strong { color: #69cfcc; }
 .login-panel { display: grid; place-items: center; padding: 40px; background: #f7f9fa; }
-.login-panel form { width: min(100%, 390px); }.login-panel h2 { margin: 12px 0 8px; font: 620 31px/1.2 'Space Grotesk Variable', sans-serif; }.login-panel .muted { margin-bottom: 40px; }
+.login-card { width: min(100%, 390px); }.login-panel h2 { margin: 12px 0 8px; font: 620 31px/1.2 'Space Grotesk Variable', sans-serif; }.login-panel .muted { margin-bottom: 40px; }
+.local-login-form { width: 100%; }.sso-login { display: inline-flex; gap: 9px; align-items: center; justify-content: center; min-height: 46px; }.login-divider { display: flex; align-items: center; gap: 12px; margin: 25px 0; color: #83929b; font-size: 11px; }.login-divider::before, .login-divider::after { height: 1px; flex: 1; content: ''; background: #d8e0e4; }.login-divider span { flex: none; }.login-method-loading { padding: 18px 0; color: #788994; font-size: 13px; }
 .form-error { margin: 12px 0; padding: 10px 12px; border-left: 3px solid #c44536; background: #fff0ed; color: #9a3025; font-size: 14px; }
 .topbar { height: 68px; display: grid; grid-template-columns: 280px 1fr 280px; align-items: stretch; padding: 0 24px; color: #e9f0f2; background: #132437; box-shadow: 0 2px 14px #15283b24; }
 .wordmark, .profile { display: flex; align-items: center; }.wordmark > span { width: 34px; height: 34px; display: grid; place-items: center; margin-right: 11px; background: #167d8d; }.wordmark strong { font: 620 16px 'Space Grotesk Variable'; }.wordmark small { margin-left: 9px; color: #728b9b; font: 10px 'Space Grotesk Variable'; letter-spacing: .12em; }

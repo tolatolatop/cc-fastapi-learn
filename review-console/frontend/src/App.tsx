@@ -1,8 +1,8 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react'
-import { ArrowRight, ArrowUpDown, BarChart3, Check, Clock3, Code2, Copy, ExternalLink, FileText, HelpCircle, History, Link2, LogOut, Search, ShieldCheck, Users, X } from 'lucide-react'
+import { ArrowRight, ArrowUpDown, BarChart3, Check, Clock3, Code2, Copy, ExternalLink, FileText, HelpCircle, History, Link2, LogIn, LogOut, Search, ShieldCheck, Users, X } from 'lucide-react'
 import { Button, Form, Modal, Table } from 'react-bootstrap'
 import { api } from './api'
-import type { DecisionReason, HistoryItem, Issue, IssueStatus, Permission, PullRequest, PullRequestCompletionStatus, Repository, Statistics, User } from './types'
+import type { AuthConfig, DecisionReason, HistoryItem, Issue, IssueStatus, Permission, PullRequest, PullRequestCompletionStatus, Repository, Statistics, User } from './types'
 
 const statusMeta: Record<IssueStatus, { label: string; className: string }> = {
   unverified: { label: '待裁定', className: 'pending' },
@@ -87,10 +87,14 @@ function writePullRequestUrl(pullRequest: PullRequest, replace = false) {
 }
 
 function Login({ onLogin }: { onLogin: (user: User) => void }) {
+  const [authConfig, setAuthConfig] = useState<AuthConfig | null>(null)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    api.authConfig().then(setAuthConfig).catch((reason) => setError((reason as Error).message))
+  }, [])
   async function submit(event: FormEvent) {
     event.preventDefault()
     setBusy(true); setError('')
@@ -108,13 +112,18 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
       <div className="trace-sample"><span>发现</span><ArrowRight /><span>复核</span><ArrowRight /><strong>裁定</strong></div>
     </section>
     <section className="login-panel">
-      <form onSubmit={submit}>
-        <p className="eyebrow">REVIEW CONSOLE</p><h2>登录检视裁定台</h2><p className="muted">使用管理员分配的审核账号</p>
-        <Form.Group className="mb-3"><Form.Label>用户名</Form.Label><Form.Control autoFocus value={username} onChange={(e) => setUsername(e.target.value)} /></Form.Group>
-        <Form.Group className="mb-4"><Form.Label>密码</Form.Label><Form.Control type="password" value={password} onChange={(e) => setPassword(e.target.value)} /></Form.Group>
+      <div className="login-card">
+        <p className="eyebrow">REVIEW CONSOLE</p><h2>登录检视裁定台</h2><p className="muted">{authConfig ? authConfig.sso_enabled ? '使用企业身份完成安全验证' : '使用管理员分配的审核账号' : '正在读取可用的登录方式'}</p>
+        {!authConfig && !error && <div className="login-method-loading">正在读取登录方式…</div>}
+        {authConfig?.sso_enabled && <Button as="a" href={`/api/v1/auth/sso/login?next=${encodeURIComponent(`${window.location.pathname}${window.location.search}${window.location.hash}`)}`} className="sso-login w-100"><LogIn size={18} />{authConfig.sso_button_label}</Button>}
+        {authConfig?.sso_enabled && authConfig.local_login_enabled && <div className="login-divider"><span>或使用本地账号</span></div>}
+        {authConfig?.local_login_enabled && <form className="local-login-form" onSubmit={submit}>
+          <Form.Group className="mb-3"><Form.Label>用户名</Form.Label><Form.Control autoFocus={!authConfig.sso_enabled} value={username} onChange={(e) => setUsername(e.target.value)} /></Form.Group>
+          <Form.Group className="mb-4"><Form.Label>密码</Form.Label><Form.Control type="password" value={password} onChange={(e) => setPassword(e.target.value)} /></Form.Group>
+          <Button type="submit" variant={authConfig.sso_enabled ? 'outline-secondary' : undefined} className="w-100" disabled={busy || !username || !password}>{busy ? '正在验证…' : '登录'}</Button>
+        </form>}
         {error && <div className="form-error">{error}</div>}
-        <Button type="submit" className="w-100" disabled={busy || !username || !password}>{busy ? '正在验证…' : '登录'}</Button>
-      </form>
+      </div>
     </section>
   </main>
 }
@@ -351,7 +360,7 @@ function UserAdmin({ repositories, currentUserId }: { repositories: Repository[]
   useEffect(() => { void load() }, [load])
   async function create(event: FormEvent) { event.preventDefault(); try { await api.createUser(form); setShowCreate(false); setForm({ username: '', display_name: '', password: '', is_admin: false }); await load() } catch (e) { setError((e as Error).message) } }
   async function saveGrant(event: FormEvent) { event.preventDefault(); if (!selected || !grantRepo) return; const repo = repositories[Number(grantRepo)]; try { await api.putGrant(selected.id, { provider: repo.provider, project_path: repo.project_path, permission }); await load() } catch (reason) { setError((reason as Error).message) } }
-  return <div className="admin-page"><header className="content-header"><div><p className="eyebrow">ACCESS CONTROL</p><h1>角色与仓库权限</h1></div><Button onClick={() => setShowCreate(true)}>新增用户</Button></header>{error && <div className="form-error">{error}</div>}<div className="admin-grid"><section className="user-list"><Table responsive hover><thead><tr><th>用户</th><th>角色</th><th>状态</th></tr></thead><tbody>{users.map((user) => <tr key={user.id} className={selected?.id === user.id ? 'selected' : ''} onClick={() => setSelected(user)}><td><strong>{user.display_name}</strong><small>@{user.username}</small></td><td>{user.is_admin ? '管理员' : '审核者'}</td><td>{user.is_active ? '启用' : '停用'}</td></tr>)}</tbody></Table></section><section className="grant-panel">{selected && <><div className="grant-heading"><div><h2>{selected.display_name}</h2><p>{selected.is_admin ? '管理员默认拥有全部仓库修改权限' : '按仓库授予只读或修改权限'}</p></div><div className="user-controls"><Form.Check type="switch" label="管理员" checked={selected.is_admin} disabled={selected.id === currentUserId} onChange={async (event) => { try { await api.updateUser(selected.id, { is_admin: event.target.checked }); await load() } catch (reason) { setError((reason as Error).message) } }} /><Form.Check type="switch" label={selected.is_active ? '已启用' : '已停用'} checked={selected.is_active} disabled={selected.id === currentUserId} onChange={async (event) => { try { await api.updateUser(selected.id, { is_active: event.target.checked }); await load() } catch (reason) { setError((reason as Error).message) } }} /></div></div>{!selected.is_admin && <><form className="grant-form" onSubmit={saveGrant}><Form.Select value={grantRepo} onChange={(e) => setGrantRepo(e.target.value)} required><option value="">选择仓库</option>{repositories.map((repo, index) => <option key={`${repo.provider}/${repo.project_path}`} value={index}>{repo.provider} / {repo.project_path}</option>)}</Form.Select><Form.Select value={permission} onChange={(e) => setPermission(e.target.value as Permission)}><option value="read">只读</option><option value="write">可修改</option></Form.Select><Button type="submit">保存授权</Button></form><div className="grant-list">{selected.grants.map((grant) => <div key={grant.id}><span><small>{grant.provider}</small><strong>{grant.project_path}</strong></span><span className={`permission ${grant.permission}`}>{grant.permission === 'write' ? '可修改' : '只读'}</span><Button variant="link" onClick={async () => { await api.deleteGrant(selected.id, grant.id); await load() }}>移除</Button></div>)}</div></>}</>}</section></div>
+  return <div className="admin-page"><header className="content-header"><div><p className="eyebrow">ACCESS CONTROL</p><h1>角色与仓库权限</h1></div><Button onClick={() => setShowCreate(true)}>新增用户</Button></header>{error && <div className="form-error">{error}</div>}<div className="admin-grid"><section className="user-list"><Table responsive hover><thead><tr><th>用户</th><th>角色</th><th>状态</th></tr></thead><tbody>{users.map((user) => <tr key={user.id} className={selected?.id === user.id ? 'selected' : ''} onClick={() => setSelected(user)}><td><strong>{user.display_name}</strong><small>@{user.username} · {user.auth_source === 'sso' ? 'SSO' : '本地账号'}</small></td><td>{user.is_admin ? '管理员' : '审核者'}</td><td>{user.is_active ? '启用' : '停用'}</td></tr>)}</tbody></Table></section><section className="grant-panel">{selected && <><div className="grant-heading"><div><h2>{selected.display_name}</h2><p>{selected.is_admin ? '管理员默认拥有全部仓库修改权限' : '按仓库授予只读或修改权限'}</p></div><div className="user-controls"><Form.Check type="switch" label="管理员" checked={selected.is_admin} disabled={selected.id === currentUserId} onChange={async (event) => { try { await api.updateUser(selected.id, { is_admin: event.target.checked }); await load() } catch (reason) { setError((reason as Error).message) } }} /><Form.Check type="switch" label={selected.is_active ? '已启用' : '已停用'} checked={selected.is_active} disabled={selected.id === currentUserId} onChange={async (event) => { try { await api.updateUser(selected.id, { is_active: event.target.checked }); await load() } catch (reason) { setError((reason as Error).message) } }} /></div></div>{!selected.is_admin && <><form className="grant-form" onSubmit={saveGrant}><Form.Select value={grantRepo} onChange={(e) => setGrantRepo(e.target.value)} required><option value="">选择仓库</option>{repositories.map((repo, index) => <option key={`${repo.provider}/${repo.project_path}`} value={index}>{repo.provider} / {repo.project_path}</option>)}</Form.Select><Form.Select value={permission} onChange={(e) => setPermission(e.target.value as Permission)}><option value="read">只读</option><option value="write">可修改</option></Form.Select><Button type="submit">保存授权</Button></form><div className="grant-list">{selected.grants.map((grant) => <div key={grant.id}><span><small>{grant.provider}</small><strong>{grant.project_path}</strong></span><span className={`permission ${grant.permission}`}>{grant.permission === 'write' ? '可修改' : '只读'}</span><Button variant="link" onClick={async () => { await api.deleteGrant(selected.id, grant.id); await load() }}>移除</Button></div>)}</div></>}</>}</section></div>
     <Modal show={showCreate} onHide={() => setShowCreate(false)} centered><form onSubmit={create}><Modal.Header closeButton><Modal.Title>新增审核用户</Modal.Title></Modal.Header><Modal.Body><Form.Group className="mb-3"><Form.Label>用户名</Form.Label><Form.Control value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required /></Form.Group><Form.Group className="mb-3"><Form.Label>显示名称</Form.Label><Form.Control value={form.display_name} onChange={(e) => setForm({ ...form, display_name: e.target.value })} required /></Form.Group><Form.Group className="mb-3"><Form.Label>初始密码（至少 10 位）</Form.Label><Form.Control type="password" minLength={10} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required /></Form.Group><Form.Check type="switch" label="设为管理员" checked={form.is_admin} onChange={(e) => setForm({ ...form, is_admin: e.target.checked })} /></Modal.Body><Modal.Footer><Button variant="outline-secondary" onClick={() => setShowCreate(false)}>取消</Button><Button type="submit">创建用户</Button></Modal.Footer></form></Modal>
   </div>
 }

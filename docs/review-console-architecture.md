@@ -7,9 +7,9 @@
 主应用数据库。浏览器只访问裁定台后端；服务间通过 `/v1/review-console/*` 契约通信。
 
 ```text
-浏览器 ──用户会话──> 裁定台后端 ──服务令牌 + 操作者身份──> 主应用 API
-                         │                                  │
-                  用户、仓库授权库                    意见、追加式审计库
+企业身份源 ──OIDC──> 浏览器 ──用户会话──> 裁定台后端 ──服务令牌 + 操作者身份──> 主应用 API
+                                              │                                  │
+                                      身份、用户、仓库授权库                意见、追加式审计库
 ```
 
 这种划分让两个系统能分别部署和扩缩容，也避免向浏览器暴露主应用的服务令牌。主应用不接受
@@ -22,8 +22,14 @@
 - `write`：包含只读能力，并可修改指定仓库下意见的状态及说明。
 - 非管理员没有隐式权限。停用用户后，已有会话也会在下一次请求时失效。
 
-仓库是权限的最小边界。授权存放在裁定台数据库，不耦合代码托管平台的成员模型，后续可以在
-这一层接入 OIDC/LDAP 组映射而不修改主应用。
+仓库是权限的最小边界。访问控制代码独立位于 `review_console.access_control`，其中会话依赖、OIDC
+协议、身份建档、角色与仓库策略、管理接口彼此分层；意见裁定业务只依赖 `current_user` 和仓库策略，
+不处理登录协议或用户管理。授权存放在裁定台数据库，不耦合代码托管平台的成员模型。
+
+OIDC SSO 使用 Authorization Code + PKCE。回调校验签名、issuer、audience、state 和 nonce；首次登录
+按 issuer + subject 创建独立身份映射及本地用户，默认没有任何仓库权限。系统不会因用户名或邮箱相同
+而自动绑定已有本地账号。可配置一个 IdP 组映射为管理员；未配置管理员组时，SSO 用户的管理员角色
+仍由裁定台维护。本地账号登录可在 SSO 验证完成后关闭。
 
 ## 状态与审计
 
@@ -69,28 +75,41 @@ PR/MR 完成状态由主应用聚合其全部检视批次和意见后返回：`p
 非管理员统计请求会显式携带全部授权仓库范围；管理员可读取全局统计。时间过滤以当前最终裁定时间
 为准，贡献按意见的当前最终裁定人计数，因此反复修改不会放大贡献。
 
+认证接口额外包含公开的 `GET /v1/auth/config`、发起登录的 `GET /v1/auth/sso/login` 和 OIDC 回调
+`GET /v1/auth/sso/callback`。前端只根据公开配置决定显示 SSO 或本地登录，不会读取客户端密钥。
+
 ## 部署
 
-生成至少 32 字节的随机会话密钥和独立服务令牌，不要与 `API_TOKEN` 共用：
+在仓库根目录复制 `.env.example` 为 `.env`，生成至少 32 字节的随机会话密钥和独立服务令牌，不要
+与 `API_TOKEN` 共用。启用 SSO 时至少设置以下值：
 
 ```bash
-export REVIEW_CONSOLE_API_TOKEN='<random-service-token>'
-export REVIEW_CONSOLE_SESSION_SECRET='<random-session-secret-at-least-32-chars>'
-export REVIEW_CONSOLE_ADMIN_PASSWORD='<initial-admin-password>'
+REVIEW_CONSOLE_SSO_ENABLED="true"
+REVIEW_CONSOLE_SSO_ISSUER_URL="https://id.example.com/realms/company"
+REVIEW_CONSOLE_SSO_CLIENT_ID="review-console"
+REVIEW_CONSOLE_SSO_CLIENT_SECRET="<client-secret>"
+REVIEW_CONSOLE_SSO_REDIRECT_URI="https://review.example.com/api/v1/auth/sso/callback"
+REVIEW_CONSOLE_SSO_ADMIN_GROUP="review-console-admins"
+REVIEW_CONSOLE_COOKIE_SECURE="true"
 docker compose --profile review-console up --build
 ```
+
+回调地址必须与身份源注册值完全一致。默认客户端认证方式是 `client_secret_basic`，也支持
+`client_secret_post` 和配合 PKCE 的 `none`。声明名称、scope、签名算法、按钮文案和超时均可通过
+`.env.example` 中列出的环境变量调整。确认 SSO 和至少一个管理员账号可用后，可设置
+`REVIEW_CONSOLE_LOCAL_LOGIN_ENABLED=false` 关闭密码登录。
 
 主控制台仍在 `18080`，独立裁定台默认在 `18090`。首次启动且数据库中没有管理员时，环境变量中的
 初始账号会创建管理员；已有管理员时不会覆盖密码。生产环境应在首次登录后轮换初始密码变量，使用
 TLS，并将两个后端部署在私有网络中。备份时必须同时备份两个数据库：主库保存审计事实，裁定台库
 保存身份和授权。
 
-## 后续演进
+## 身份与会话安全
 
-当前会话使用 `HttpOnly + SameSite=Strict` 的签名短期 Cookie、密码使用 PBKDF2-SHA256；生产 TLS 环境
-应设置 `REVIEW_CONSOLE_COOKIE_SECURE=true`。接入企业身份源时可替换裁定台认证层；权限表、
-主应用契约与审计模型无需改变。后续新增修复跟踪等业务状态时，应继续使用独立字段并显式定义状态
-迁移，而不是复用人工裁定枚举。
+业务会话使用 `HttpOnly + SameSite=Strict` 的签名短期 Cookie，OIDC 临时流程使用十分钟有效的签名
+`HttpOnly + SameSite=Lax` Cookie，以支持身份源跨站回跳；密码使用 PBKDF2-SHA256。生产 TLS 环境必须
+设置 `REVIEW_CONSOLE_COOKIE_SECURE=true`。客户端密钥、会话密钥和服务令牌只从环境变量读取，不进入
+前端构建产物或数据库。
 
 完整功能优先级和当前完成度见
 [`review-console-roadmap.md`](review-console-roadmap.md)。

@@ -1,4 +1,4 @@
-import type { DecisionReason, Grant, HistoryItem, Issue, IssueStatus, PullRequest, Repository, Statistics, User } from './types'
+import type { AuthConfig, DecisionReason, Grant, HistoryItem, Issue, IssueStatus, PullRequest, Repository, Statistics, User } from './types'
 
 const root = '/api'
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -22,6 +22,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  authConfig: () => request<AuthConfig>('/v1/auth/config'),
   login: (username: string, password: string) => request<{ user: User }>('/v1/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
   logout: () => request<void>('/v1/auth/logout', { method: 'POST' }),
   me: () => request<User>('/v1/auth/me'),

@@ -27,11 +27,7 @@ def verify_password(password: str, encoded: str) -> bool:
         return False
 
 
-def create_session(user_id: str, secret: str, hours: int) -> str:
-    payload = {
-        "sub": user_id,
-        "exp": int((datetime.now(timezone.utc) + timedelta(hours=hours)).timestamp()),
-    }
+def create_signed_payload(payload: dict, secret: str) -> str:
     body = base64.urlsafe_b64encode(
         json.dumps(payload, separators=(",", ":")).encode()
     ).rstrip(b"=")
@@ -41,7 +37,7 @@ def create_session(user_id: str, secret: str, hours: int) -> str:
     )
 
 
-def read_session(token: str, secret: str) -> str | None:
+def read_signed_payload(token: str, secret: str) -> dict | None:
     try:
         body_text, signature_text = token.split(".", 1)
         body = body_text.encode()
@@ -54,8 +50,29 @@ def read_session(token: str, secret: str) -> str | None:
         payload = json.loads(
             base64.urlsafe_b64decode(body_text + "=" * (-len(body_text) % 4))
         )
+        if not isinstance(payload, dict):
+            return None
         if int(payload["exp"]) <= int(datetime.now(timezone.utc).timestamp()):
             return None
-        return str(payload["sub"])
+        return payload
     except (ValueError, KeyError, TypeError, json.JSONDecodeError):
         return None
+
+
+def create_session(user_id: str, secret: str, hours: int) -> str:
+    return create_signed_payload(
+        {
+            "sub": user_id,
+            "exp": int(
+                (datetime.now(timezone.utc) + timedelta(hours=hours)).timestamp()
+            ),
+        },
+        secret,
+    )
+
+
+def read_session(token: str, secret: str) -> str | None:
+    payload = read_signed_payload(token, secret)
+    if payload is None or "sub" not in payload:
+        return None
+    return str(payload["sub"])

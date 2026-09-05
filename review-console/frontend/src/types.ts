@@ -11,8 +11,14 @@ export interface User {
   display_name: string
   is_admin: boolean
   is_active: boolean
+  auth_source: 'local' | 'sso'
   created_at: string
   grants: Grant[]
+}
+export interface AuthConfig {
+  local_login_enabled: boolean
+  sso_enabled: boolean
+  sso_button_label: string
 }
 export interface Repository {
   provider: string
