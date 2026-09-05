@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react'
-import { ArrowRight, BarChart3, Check, Clock3, Code2, ExternalLink, FileText, HelpCircle, History, Link2, LogOut, Search, ShieldCheck, Users, X } from 'lucide-react'
-import { Button, Form, Modal, Offcanvas, Table } from 'react-bootstrap'
+import { ArrowRight, ArrowUpDown, BarChart3, Check, Clock3, Code2, Copy, ExternalLink, FileText, HelpCircle, History, Link2, LogOut, Search, ShieldCheck, Users, X } from 'lucide-react'
+import { Button, Form, Modal, Table } from 'react-bootstrap'
 import { api } from './api'
 import type { DecisionReason, HistoryItem, Issue, IssueStatus, Permission, PullRequest, PullRequestCompletionStatus, Repository, Statistics, User } from './types'
 
@@ -48,6 +48,20 @@ function pullRequestKey(pullRequest: Pick<PullRequest, 'provider' | 'project_pat
 function repositoryFor(pullRequest: PullRequest | null, repositories: Repository[]) {
   if (!pullRequest) return null
   return repositories.find((repository) => repository.provider === pullRequest.provider && repository.project_path === pullRequest.project_path) || null
+}
+
+function issueLocation(issue: Issue) {
+  if (!issue.file_path) return '未标注文件'
+  return issue.line_number === null ? `${issue.file_path}（未标注行号）` : `${issue.file_path}:${issue.line_number}`
+}
+
+function compareIssueLocation(left: Issue, right: Issue) {
+  const leftPath = left.file_path?.toLocaleLowerCase() || '\uffff'
+  const rightPath = right.file_path?.toLocaleLowerCase() || '\uffff'
+  const pathOrder = leftPath.localeCompare(rightPath, undefined, { numeric: true, sensitivity: 'base' })
+  if (pathOrder) return pathOrder
+  const lineOrder = (left.line_number ?? Number.MAX_SAFE_INTEGER) - (right.line_number ?? Number.MAX_SAFE_INTEGER)
+  return lineOrder || left.issue_no - right.issue_no
 }
 
 function requestedPullRequest(pullRequests: PullRequest[]) {
@@ -144,17 +158,16 @@ function IssueDetail({ issue, permission, onClose, onSaved }: { issue: Issue | n
     catch (reason) { setError((reason as Error).message) } finally { setBusy(false) }
   }
   const noteLabel = issue?.status === 'not_accepted' ? '拒绝理由' : issue?.status === 'needs_info' ? '待补充内容' : '裁定说明'
-  return <Offcanvas className="issue-detail-drawer" placement="end" show={Boolean(issue)} onHide={onClose}>
-    <Offcanvas.Header closeButton><Offcanvas.Title>意见详情</Offcanvas.Title></Offcanvas.Header>
-    <Offcanvas.Body>{issue && <form onSubmit={submit}>
+  return <Modal dialogClassName="issue-detail-modal" show={Boolean(issue)} onHide={onClose} centered scrollable size="lg">
+    {issue && <form onSubmit={submit}><Modal.Header closeButton><Modal.Title>意见详情</Modal.Title></Modal.Header><Modal.Body>
       <div className="detail-heading"><span className={`severity ${issue.severity}`}>{issue.severity}</span><span className={`status ${statusMeta[issue.status].className}`}>{statusMeta[issue.status].label}</span><h2>{issue.title}</h2><p>{issue.description}</p></div>
-      <dl className="detail-facts"><div><dt>位置</dt><dd>{issue.file_path || '未标注文件'}{issue.line_number ? `:${issue.line_number}` : ''}</dd></div><div><dt>分类</dt><dd>{issue.category || '未分类'}</dd></div><div><dt>意见编号</dt><dd>#{issue.issue_no}</dd></div><div><dt>自动修复验证</dt><dd>{issue.verification_status === 'accepted' ? '通过' : issue.verification_status === 'not_accepted' ? '未通过' : '未验证'}</dd></div><div><dt>检视版本</dt><dd>{issue.review_head_sha?.slice(0, 12) || '未知'}</dd></div><div><dt>合并版本</dt><dd>{issue.merged_sha?.slice(0, 12) || '未合并'}</dd></div><div><dt>检视批次</dt><dd>{issue.batch_status} · {formatTime(issue.batch_created_at)}</dd></div><div><dt>裁定人</dt><dd>{issue.decided_by_name ? `${issue.decided_by_name} · ${issue.decided_at ? formatTime(issue.decided_at) : ''}` : '尚未裁定'}</dd></div></dl>
+      <dl className="detail-facts"><div><dt>位置</dt><dd>{issueLocation(issue)}</dd></div><div><dt>分类</dt><dd>{issue.category || '未分类'}</dd></div><div><dt>意见编号</dt><dd>#{issue.issue_no}</dd></div><div><dt>自动修复验证</dt><dd>{issue.verification_status === 'accepted' ? '通过' : issue.verification_status === 'not_accepted' ? '未通过' : '未验证'}</dd></div><div><dt>检视版本</dt><dd>{issue.review_head_sha?.slice(0, 12) || '未知'}</dd></div><div><dt>合并版本</dt><dd>{issue.merged_sha?.slice(0, 12) || '未合并'}</dd></div><div><dt>检视批次</dt><dd>{issue.batch_status} · {formatTime(issue.batch_created_at)}</dd></div><div><dt>裁定人</dt><dd>{issue.decided_by_name ? `${issue.decided_by_name} · ${issue.decided_at ? formatTime(issue.decided_at) : ''}` : '尚未裁定'}</dd></div></dl>
       {issue.status === 'not_accepted' && <Form.Group className="mb-3"><Form.Label>拒绝原因分类</Form.Label><Form.Select value={reasonCode} disabled={permission !== 'write'} onChange={(event) => setReasonCode(event.target.value as DecisionReason | '')} required><option value="">选择原因</option>{Object.entries(reasonMeta).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Form.Select></Form.Group>}
       <Form.Group><Form.Label>{noteLabel}</Form.Label><Form.Control as="textarea" rows={5} value={note} disabled={permission !== 'write'} onChange={(event) => setNote(event.target.value)} placeholder={issue.status === 'needs_info' ? '写明需要补充的事实或上下文…' : '补充判断依据…'} /></Form.Group>
       {error && <div className="form-error">{error}</div>}
-      {permission === 'write' ? <div className="detail-save"><Button type="submit" disabled={busy}>{busy ? '保存中…' : `保存${noteLabel}`}</Button></div> : <p className="read-only-hint">你对该仓库拥有只读权限。</p>}
-    </form>}</Offcanvas.Body>
-  </Offcanvas>
+      {permission !== 'write' && <p className="read-only-hint">你对该仓库拥有只读权限。</p>}
+    </Modal.Body><Modal.Footer><Button variant="outline-secondary" type="button" onClick={onClose}>关闭</Button>{permission === 'write' && <Button type="submit" disabled={busy}>{busy ? '保存中…' : `保存${noteLabel}`}</Button>}</Modal.Footer></form>}
+  </Modal>
 }
 
 function IssueWorkspace({ repositories, routeVersion }: { repositories: Repository[]; routeVersion: number }) {
@@ -163,6 +176,8 @@ function IssueWorkspace({ repositories, routeVersion }: { repositories: Reposito
   const [issues, setIssues] = useState<Issue[]>([])
   const [status, setStatus] = useState('')
   const [query, setQuery] = useState('')
+  const [queueQuery, setQueueQuery] = useState('')
+  const [pendingFirst, setPendingFirst] = useState(false)
   const [pullRequestsLoading, setPullRequestsLoading] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -170,6 +185,7 @@ function IssueWorkspace({ repositories, routeVersion }: { repositories: Reposito
   const [detail, setDetail] = useState<Issue | null>(null)
   const [busyDecision, setBusyDecision] = useState<{ issueId: string; status: IssueStatus } | null>(null)
   const [copied, setCopied] = useState(false)
+  const [copiedLocationId, setCopiedLocationId] = useState<string | null>(null)
   useEffect(() => {
     let cancelled = false
     setPullRequestsLoading(true); setError('')
@@ -229,14 +245,40 @@ function IssueWorkspace({ repositories, routeVersion }: { repositories: Reposito
     try { await navigator.clipboard.writeText(window.location.href); setCopied(true); window.setTimeout(() => setCopied(false), 1600) }
     catch { setError('无法复制链接，请直接复制浏览器地址。') }
   }
+  async function copyIssueLocation(issue: Issue) {
+    if (!issue.file_path || issue.line_number === null) return
+    try { await navigator.clipboard.writeText(`${issue.file_path}:${issue.line_number}`); setCopiedLocationId(issue.id); window.setTimeout(() => setCopiedLocationId(null), 1600) }
+    catch { setError('无法复制文件位置，请手动选择路径和行号。') }
+  }
+  const queueKeywords = queueQuery.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean)
+  const visiblePullRequests = pullRequests
+    .filter((pullRequest) => {
+      if (!queueKeywords.length) return true
+      const searchable = `${pullRequest.provider} ${pullRequest.project_path} ${pullRequest.pr_number} #${pullRequest.pr_number} ${pullRequest.pr_url || ''}`.toLocaleLowerCase()
+      return queueKeywords.every((keyword) => searchable.includes(keyword))
+    })
+    .sort((left, right) => {
+      if (queueKeywords.length) {
+        const pendingOrder = Number(right.pending_total > 0) - Number(left.pending_total > 0)
+        if (pendingOrder) return pendingOrder
+      }
+      return new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime()
+    })
+  const visibleIssues = [...issues].sort((left, right) => {
+    if (pendingFirst) {
+      const pendingOrder = Number(right.status === 'unverified') - Number(left.status === 'unverified')
+      if (pendingOrder) return pendingOrder
+    }
+    return compareIssueLocation(left, right)
+  })
   return <div className="workspace-grid review-pr-workspace">
-    <aside className="pr-rail"><div className="pr-rail-head"><p className="rail-label">PR / MR 审核队列</p><strong>{pullRequests.length}</strong></div>{pullRequestsLoading ? <div className="rail-empty">正在汇总…</div> : pullRequests.map((pullRequest) => <button key={pullRequestKey(pullRequest)} className={selectedPr && pullRequestKey(selectedPr) === pullRequestKey(pullRequest) ? 'active' : ''} onClick={() => selectPullRequest(pullRequest)}><span className="pr-rail-number">#{pullRequest.pr_number}<small>{pullRequest.provider}</small></span><strong>{pullRequest.project_path}</strong><span className="pr-rail-progress"><i style={{ width: `${pullRequest.issue_total ? pullRequest.reviewed_total / pullRequest.issue_total * 100 : 100}%` }} /><small>{pullRequest.pending_total} 条待裁定</small></span><span className={`completion ${pullRequest.completion_status}`}>{completionMeta[pullRequest.completion_status]}</span></button>)}{!pullRequestsLoading && !pullRequests.length && <div className="rail-empty">授权范围内暂无 PR/MR</div>}</aside>
+    <aside className="pr-rail"><div className="pr-rail-head"><p className="rail-label">PR / MR 审核队列</p><strong>{visiblePullRequests.length}/{pullRequests.length}</strong></div><label className="pr-rail-search"><Search size={15} /><Form.Control value={queueQuery} onChange={(event) => setQueueQuery(event.target.value)} placeholder="仓库、PR ID 或 PR 地址" aria-label="搜索审核队列" /><small>多个关键字用空格分隔</small></label><div className="pr-rail-list">{pullRequestsLoading ? <div className="rail-empty">正在汇总…</div> : visiblePullRequests.map((pullRequest) => <button key={pullRequestKey(pullRequest)} className={selectedPr && pullRequestKey(selectedPr) === pullRequestKey(pullRequest) ? 'active' : ''} onClick={() => selectPullRequest(pullRequest)}><span className="pr-rail-number">#{pullRequest.pr_number}<small>{pullRequest.provider}</small></span><strong>{pullRequest.project_path}</strong><span className="pr-rail-progress"><i style={{ width: `${pullRequest.issue_total ? pullRequest.reviewed_total / pullRequest.issue_total * 100 : 100}%` }} /><small>{pullRequest.pending_total} 条待裁定</small></span><span className={`completion ${pullRequest.completion_status}`}>{completionMeta[pullRequest.completion_status]}</span></button>)}{!pullRequestsLoading && !visiblePullRequests.length && <div className="rail-empty">没有匹配的 PR/MR；请调整关键字</div>}</div></aside>
     <section className="review-content">
       {selectedPr && selectedRepository ? <><header className="content-header pr-content-header"><div><p className="eyebrow">{selectedPr.provider} / {selectedPr.project_path}</p><h1>PR / MR #{selectedPr.pr_number}</h1><span className={`permission ${selectedRepository.permission}`}>{selectedRepository.permission === 'write' ? '可修改' : '只读'}</span><div className="pr-header-links"><Button variant="link" size="sm" onClick={() => void copyDirectLink()}><Link2 size={15} />{copied ? '已复制链接' : '复制直达链接'}</Button>{selectedPr.pr_url && <Button as="a" variant="link" size="sm" href={selectedPr.pr_url} target="_blank" rel="noreferrer"><ExternalLink size={15} />打开代码平台</Button>}</div></div><div className="status-tally"><span><b>{selectedPr.issue_total}</b>全部意见</span><span><b>{selectedPr.reviewed_total}</b>已裁定</span><span><b>{selectedPr.pending_total}</b>待裁定</span><strong className={`completion ${selectedPr.completion_status}`}>{completionMeta[selectedPr.completion_status]}</strong></div></header>
-      <div className="filters"><label><Search size={17} /><Form.Control value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索标题、说明或文件" /></label><Form.Select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="unverified">待裁定</option><option value="accepted">接受</option><option value="not_accepted">拒绝</option><option value="needs_info">待补充</option></Form.Select></div>
-      {error && <div className="form-error">{error}</div>}{loading ? <div className="empty-state">正在读取检视意见…</div> : !issues.length ? <div className="empty-state">{selectedPr.completion_status === 'no_issues' ? '该 PR/MR 已检视完毕，没有发现问题' : '当前筛选下没有检视意见'}</div> : <div className="compact-issue-list">{issues.map((issue) => <article className="compact-issue-card" key={issue.id}>
+      <div className="filters"><label><Search size={17} /><Form.Control value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索标题、说明或文件" /></label><Form.Select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="unverified">待裁定</option><option value="accepted">接受</option><option value="not_accepted">拒绝</option><option value="needs_info">待补充</option></Form.Select><Button className={`pending-first-sort ${pendingFirst ? 'active' : ''}`} variant="outline-secondary" aria-pressed={pendingFirst} onClick={() => setPendingFirst((active) => !active)}><ArrowUpDown size={15} />待裁定优先</Button></div>
+      {error && <div className="form-error">{error}</div>}{loading ? <div className="empty-state">正在读取检视意见…</div> : !visibleIssues.length ? <div className="empty-state">{selectedPr.completion_status === 'no_issues' ? '该 PR/MR 已检视完毕，没有发现问题' : '当前筛选下没有检视意见'}</div> : <div className="compact-issue-list">{visibleIssues.map((issue) => <article className="compact-issue-card" key={issue.id}>
         <div className={`severity-cell ${issue.severity}`}><span>问题等级</span><strong>{issue.severity}</strong></div>
-        <div className="issue-location"><span>文件 / 行号</span><strong title={issue.file_path || '未标注文件'}>{issue.file_path || '未标注文件'}</strong><small>{issue.line_number ? `第 ${issue.line_number} 行` : '未标注行号'}</small></div>
+        <div className="issue-location"><span>文件 / 行号</span><Button variant="link" className="copy-location" disabled={!issue.file_path || issue.line_number === null} title={issue.file_path && issue.line_number !== null ? `复制 ${issue.file_path}:${issue.line_number}` : '缺少路径或行号，无法复制'} onClick={() => void copyIssueLocation(issue)}><strong>{issueLocation(issue)}</strong><small>{copiedLocationId === issue.id ? '已复制' : <Copy size={13} />}</small></Button></div>
         <div className="issue-opinion"><span>检视意见</span><strong>{issue.title}</strong><p>{issue.description}</p></div>
         <div className="compact-issue-actions"><Button className="detail-button" variant="link" size="sm" onClick={() => setDetail(issue)}><FileText size={15} />详情</Button><div className="inline-decisions" aria-label="状态裁定">{(['unverified', 'accepted', 'not_accepted', 'needs_info'] as IssueStatus[]).map((value) => <Button key={value} variant="outline-secondary" size="sm" className={`${statusMeta[value].className} ${issue.status === value ? 'active' : ''}`} disabled={selectedRepository.permission !== 'write' || busyDecision?.issueId === issue.id || issue.status === value} onClick={() => void setIssueStatus(issue, value)}>{value === 'accepted' ? <Check /> : value === 'not_accepted' ? <X /> : value === 'needs_info' ? <HelpCircle /> : <Clock3 />}{busyDecision?.issueId === issue.id && busyDecision.status === value ? '保存中' : statusMeta[value].label}</Button>)}</div></div>
       </article>)}</div>}</> : <div className="empty-state">{pullRequestsLoading ? '正在汇总 PR/MR…' : error || '授权范围内暂无 PR/MR 检视记录'}</div>}
