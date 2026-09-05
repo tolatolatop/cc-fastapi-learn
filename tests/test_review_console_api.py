@@ -237,25 +237,26 @@ def test_pull_request_listing_detail_and_issue_filter():
     assert issues.json() == {"items": [], "total": 0}
 
 
-def test_needs_info_keeps_pull_request_pending_and_requires_detail():
+def test_needs_info_keeps_pull_request_pending_and_allows_detail_later():
     client, _ = build_client()
     issue = client.get("/v1/review-console/issues/issue-1", headers=headers()).json()
-    missing_note = client.put(
+    updated = client.put(
         "/v1/review-console/issues/issue-1/status",
         headers=headers(),
         json={"status": "needs_info", "expected_updated_at": issue["updated_at"]},
     )
-    assert missing_note.status_code == 422
-    updated = client.put(
+    assert updated.status_code == 200
+    with_detail = client.put(
         "/v1/review-console/issues/issue-1/status",
         headers=headers(),
         json={
             "status": "needs_info",
             "note": "Please confirm the retry boundary.",
-            "expected_updated_at": issue["updated_at"],
+            "expected_updated_at": updated.json()["updated_at"],
         },
     )
-    assert updated.status_code == 200
+    assert with_detail.status_code == 200
+    assert with_detail.json()["note"] == "Please confirm the retry boundary."
     pull_request = client.get(
         "/v1/review-console/pull-request",
         headers=headers(),

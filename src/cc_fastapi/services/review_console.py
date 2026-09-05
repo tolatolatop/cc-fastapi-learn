@@ -304,8 +304,6 @@ class ReviewConsoleService:
                 raise ValueError("rejection category and detail are required")
         elif reason_code is not None:
             raise ValueError("reason code is only valid for rejected decisions")
-        if new_status == ReviewIssueDecisionStatus.NEEDS_INFO and not note:
-            raise ValueError("note is required when more information is needed")
         row = db.execute(
             select(ReviewIssue, ReviewIssueBatch)
             .join(ReviewIssueBatch, ReviewIssueBatch.id == ReviewIssue.batch_id)

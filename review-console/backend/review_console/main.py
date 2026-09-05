@@ -89,8 +89,6 @@ class StatusUpdateRequest(BaseModel):
                 raise ValueError("拒绝时必须选择原因分类并填写详细理由")
         elif self.reason_code is not None:
             raise ValueError("只有拒绝意见时可以填写拒绝原因分类")
-        if self.status == "needs_info" and not self.note:
-            raise ValueError("需要补充信息时必须填写说明")
         return self
 
 

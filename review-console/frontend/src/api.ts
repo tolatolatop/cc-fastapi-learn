@@ -39,6 +39,10 @@ export const api = {
     const remaining = await Promise.all(pages)
     return { items: [...first.items, ...remaining.flatMap((page) => page.items)], total: first.total }
   },
+  pullRequest: (repo: Repository, prNumber: string) => {
+    const params = new URLSearchParams({ provider: repo.provider, project_path: repo.project_path, pr_number: prNumber })
+    return request<PullRequest>(`/v1/pull-request?${params}`)
+  },
   issues: async (repo: Repository, prNumber: string, status: string, query: string) => {
     const params = new URLSearchParams({ provider: repo.provider, project_path: repo.project_path, limit: '200' })
     if (prNumber) params.append('pr_number', prNumber)

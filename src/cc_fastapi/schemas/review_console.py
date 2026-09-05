@@ -101,8 +101,6 @@ class ReviewConsoleStatusUpdateRequest(BaseModel):
                 raise ValueError("rejection reason detail is required")
         elif self.reason_code is not None:
             raise ValueError("reason_code is only valid when status is not_accepted")
-        if self.status == ReviewIssueDecisionStatus.NEEDS_INFO and not self.note:
-            raise ValueError("note is required when status is needs_info")
         return self
 
 
