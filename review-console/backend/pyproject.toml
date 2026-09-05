@@ -1,0 +1,18 @@
+[project]
+name = "cc-review-console"
+version = "0.1.0"
+requires-python = ">=3.12,<4.0"
+dependencies = [
+  "fastapi[standard]>=0.133.1,<0.134.0",
+  "uvicorn>=0.35.0,<0.36.0",
+  "sqlalchemy>=2.0.43,<3.0.0",
+  "pydantic-settings>=2.10.1,<3.0.0",
+  "httpx>=0.28.0,<0.29.0",
+]
+
+[tool.poetry]
+packages = [{include = "review_console"}]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
