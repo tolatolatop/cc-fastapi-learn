@@ -30,11 +30,11 @@ const completionMeta: Record<PullRequestCompletionStatus, string> = {
   failed: '流程失败',
 }
 
-type Page = 'issues' | 'history' | 'statistics' | 'users'
+type Page = 'issues' | 'statistics' | 'users'
 
 function pageFromUrl(): Page {
   const value = new URLSearchParams(window.location.search).get('view')
-  return value === 'history' || value === 'statistics' || value === 'users' ? value : 'issues'
+  return value === 'statistics' || value === 'users' ? value : 'issues'
 }
 
 function formatTime(value: string) {
@@ -143,7 +143,7 @@ function RejectModal({ issue, onClose, onSaved }: { issue: Issue | null; onClose
   </Modal>
 }
 
-function IssueDetail({ issue, permission, onClose, onSaved }: { issue: Issue | null; permission: Permission | null; onClose: () => void; onSaved: (issue: Issue) => void }) {
+function IssueDetail({ issue, permission, onClose, onOpenHistory, onSaved }: { issue: Issue | null; permission: Permission | null; onClose: () => void; onOpenHistory: (issue: Issue) => void; onSaved: (issue: Issue) => void }) {
   const [reasonCode, setReasonCode] = useState<DecisionReason | ''>('')
   const [note, setNote] = useState('')
   const [error, setError] = useState('')
@@ -166,7 +166,28 @@ function IssueDetail({ issue, permission, onClose, onSaved }: { issue: Issue | n
       <Form.Group><Form.Label>{noteLabel}</Form.Label><Form.Control as="textarea" rows={5} value={note} disabled={permission !== 'write'} onChange={(event) => setNote(event.target.value)} placeholder={issue.status === 'needs_info' ? '写明需要补充的事实或上下文…' : '补充判断依据…'} /></Form.Group>
       {error && <div className="form-error">{error}</div>}
       {permission !== 'write' && <p className="read-only-hint">你对该仓库拥有只读权限。</p>}
-    </Modal.Body><Modal.Footer><Button variant="outline-secondary" type="button" onClick={onClose}>关闭</Button>{permission === 'write' && <Button type="submit" disabled={busy}>{busy ? '保存中…' : `保存${noteLabel}`}</Button>}</Modal.Footer></form>}
+    </Modal.Body><Modal.Footer><Button className="history-launch" variant="outline-primary" type="button" onClick={() => onOpenHistory(issue)}><History size={15} />打开变更历史</Button><Button variant="outline-secondary" type="button" onClick={onClose}>关闭</Button>{permission === 'write' && <Button type="submit" disabled={busy}>{busy ? '保存中…' : `保存${noteLabel}`}</Button>}</Modal.Footer></form>}
+  </Modal>
+}
+
+function IssueHistoryModal({ issue, onClose }: { issue: Issue | null; onClose: () => void }) {
+  const [history, setHistory] = useState<HistoryItem[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    let cancelled = false
+    if (!issue) { setHistory([]); setError(''); return }
+    setLoading(true); setError('')
+    api.history(issue.id)
+      .then((result) => { if (!cancelled) setHistory([...result.items].sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime())) })
+      .catch((reason) => { if (!cancelled) setError((reason as Error).message) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [issue])
+  return <Modal dialogClassName="issue-history-modal" show={Boolean(issue)} onHide={onClose} centered size="lg">
+    <Modal.Header closeButton><div><p className="eyebrow">NEWEST TO OLDEST</p><Modal.Title>变更历史</Modal.Title>{issue && <p className="history-issue-title">#{issue.issue_no} · {issue.title}</p>}</div></Modal.Header>
+    <Modal.Body><div className="history-modal-scroll">{error ? <div className="form-error">{error}</div> : loading ? <div className="history-modal-empty">正在读取变更记录…</div> : !history.length ? <div className="history-modal-empty">这条意见还没有状态变更记录</div> : <div className="timeline">{history.map((item) => <article key={item.id}><span className="timeline-dot" /><div className="timeline-meta"><strong>{item.actor_name}<small>{item.dimension === 'decision' ? '人工裁定' : '自动验证'}</small></strong><time>{formatTime(item.created_at)}</time></div><div className="status-transition"><span className={`status ${statusMeta[item.previous_status].className}`}>{statusMeta[item.previous_status].label}</span><ArrowRight size={14} /><span className={`status ${statusMeta[item.new_status].className}`}>{statusMeta[item.new_status].label}</span>{item.new_reason_code && <span className="reason-chip">{reasonMeta[item.new_reason_code]}</span>}</div>{item.new_note && <p>{item.new_note}</p>}</article>)}</div>}</div></Modal.Body>
+    <Modal.Footer><Button variant="outline-secondary" onClick={onClose}>关闭</Button></Modal.Footer>
   </Modal>
 }
 
@@ -183,6 +204,7 @@ function IssueWorkspace({ repositories, routeVersion }: { repositories: Reposito
   const [error, setError] = useState('')
   const [rejecting, setRejecting] = useState<Issue | null>(null)
   const [detail, setDetail] = useState<Issue | null>(null)
+  const [historyIssue, setHistoryIssue] = useState<Issue | null>(null)
   const [busyDecision, setBusyDecision] = useState<{ issueId: string; status: IssueStatus } | null>(null)
   const [copied, setCopied] = useState(false)
   const [copiedLocationId, setCopiedLocationId] = useState<string | null>(null)
@@ -237,7 +259,7 @@ function IssueWorkspace({ repositories, routeVersion }: { repositories: Reposito
     finally { setBusyDecision(null) }
   }
   function selectPullRequest(pullRequest: PullRequest) {
-    setSelectedPr(pullRequest); setDetail(null); setRejecting(null); setCopied(false); setError(''); writePullRequestUrl(pullRequest)
+    setSelectedPr(pullRequest); setDetail(null); setHistoryIssue(null); setRejecting(null); setCopied(false); setError(''); writePullRequestUrl(pullRequest)
   }
   async function copyDirectLink() {
     if (!selectedPr) return
@@ -284,46 +306,8 @@ function IssueWorkspace({ repositories, routeVersion }: { repositories: Reposito
       </article>)}</div>}</> : <div className="empty-state">{pullRequestsLoading ? '正在汇总 PR/MR…' : error || '授权范围内暂无 PR/MR 检视记录'}</div>}
     </section>
     <RejectModal issue={rejecting} onClose={() => setRejecting(null)} onSaved={(updated) => { void handleSaved(updated) }} />
-    <IssueDetail issue={detail} permission={selectedRepository?.permission || null} onClose={() => setDetail(null)} onSaved={(updated) => { void handleSaved(updated) }} />
-  </div>
-}
-
-function HistoryWorkspace({ repositories }: { repositories: Repository[] }) {
-  const [repository, setRepository] = useState<Repository | null>(repositories[0] || null)
-  const [pullRequests, setPullRequests] = useState<PullRequest[]>([])
-  const [pullRequest, setPullRequest] = useState<PullRequest | null>(null)
-  const [issues, setIssues] = useState<Issue[]>([])
-  const [issue, setIssue] = useState<Issue | null>(null)
-  const [history, setHistory] = useState<HistoryItem[]>([])
-  const [error, setError] = useState('')
-
-  useEffect(() => { if (repositories.length && !repository) setRepository(repositories[0]) }, [repositories, repository])
-  useEffect(() => {
-    if (!repository) return
-    setPullRequest(null); setIssue(null); setHistory([]); setError('')
-    api.pullRequests(repository).then((result) => { setPullRequests(result.items); setPullRequest(result.items[0] || null) }).catch((reason) => setError((reason as Error).message))
-  }, [repository])
-  useEffect(() => {
-    if (!repository || !pullRequest) { setIssues([]); return }
-    setIssue(null); setHistory([]); setError('')
-    api.issues(repository, pullRequest.pr_number, '', '').then((result) => { setIssues(result.items); setIssue(result.items[0] || null) }).catch((reason) => setError((reason as Error).message))
-  }, [repository, pullRequest])
-  useEffect(() => {
-    if (!issue) { setHistory([]); return }
-    setError('')
-    api.history(issue.id).then((result) => setHistory(result.items)).catch((reason) => setError((reason as Error).message))
-  }, [issue])
-
-  return <div className="workspace-grid history-workspace">
-    <aside className="repo-rail"><p className="rail-label">授权仓库</p>{repositories.map((repo) => <button key={`${repo.provider}/${repo.project_path}`} className={repository?.provider === repo.provider && repository.project_path === repo.project_path ? 'active' : ''} onClick={() => setRepository(repo)}><span className="provider">{repo.provider}</span><strong>{repo.project_path}</strong><small>{repo.issue_total} 条检视意见</small></button>)}</aside>
-    <section className="review-content"><header className="content-header"><div><p className="eyebrow">AUDIT TRAIL</p><h1>状态变更历史</h1></div></header>
-      {error && <div className="form-error">{error}</div>}
-      <div className="history-scope"><Form.Select value={pullRequest?.pr_number || ''} onChange={(event) => setPullRequest(pullRequests.find((item) => item.pr_number === event.target.value) || null)}><option value="">选择 PR/MR</option>{pullRequests.map((item) => <option key={item.pr_number} value={item.pr_number}>PR / MR #{item.pr_number} · {completionMeta[item.completion_status]}</option>)}</Form.Select></div>
-      <div className="audit-layout"><aside className="audit-issue-list"><p className="rail-label">选择检视意见</p>{issues.map((item) => <button key={item.id} className={issue?.id === item.id ? 'active' : ''} onClick={() => setIssue(item)}><span className={`severity ${item.severity}`}>{item.severity}</span><strong>{item.title}</strong><small>{statusMeta[item.status].label} · #{item.issue_no}</small></button>)}{pullRequest && !issues.length && <div className="audit-empty">该 PR/MR 没有检视意见</div>}</aside>
-        <section className="audit-record"><div className="audit-record-head"><p className="eyebrow">CHANGE LOG</p><h2>{issue?.title || '选择一条意见查看历史'}</h2>{issue && <span className={`status ${statusMeta[issue.status].className}`}>当前：{statusMeta[issue.status].label}</span>}</div>
-          {!issue ? <div className="empty-state">请从左侧选择检视意见</div> : !history.length ? <div className="empty-state">这条意见还没有状态变更记录</div> : <div className="timeline">{history.map((item) => <article key={item.id}><span className="timeline-dot" /><div className="timeline-meta"><strong>{item.actor_name}<small>{item.dimension === 'decision' ? '人工裁定' : '自动验证'}</small></strong><time>{formatTime(item.created_at)}</time></div><div className="status-transition"><span className={`status ${statusMeta[item.previous_status].className}`}>{statusMeta[item.previous_status].label}</span><ArrowRight size={14} /><span className={`status ${statusMeta[item.new_status].className}`}>{statusMeta[item.new_status].label}</span>{item.new_reason_code && <span className="reason-chip">{reasonMeta[item.new_reason_code]}</span>}</div>{item.new_note && <p>{item.new_note}</p>}</article>)}</div>}
-        </section></div>
-    </section>
+    <IssueDetail issue={detail} permission={selectedRepository?.permission || null} onClose={() => setDetail(null)} onOpenHistory={(issue) => { setDetail(null); setHistoryIssue(issue) }} onSaved={(updated) => { void handleSaved(updated) }} />
+    <IssueHistoryModal issue={historyIssue} onClose={() => setHistoryIssue(null)} />
   </div>
 }
 
@@ -394,5 +378,5 @@ export default function App() {
   if (checkingSession) return <div className="session-loading">正在验证会话…</div>
   if (!user) return <Login onLogin={setUser} />
   const currentPage = page === 'users' && !user.is_admin ? 'issues' : page
-  return <div className="app-shell"><nav className="topbar"><div className="wordmark"><span><ShieldCheck size={20} /></span><strong>检视裁定台</strong><small>REVIEW CONTROL</small></div><div className="nav-tabs"><button className={currentPage === 'issues' ? 'active' : ''} onClick={() => navigate('issues')}><Code2 />意见审核</button><button className={currentPage === 'history' ? 'active' : ''} onClick={() => navigate('history')}><History />变更历史</button><button className={currentPage === 'statistics' ? 'active' : ''} onClick={() => navigate('statistics')}><BarChart3 />数据统计</button>{user.is_admin && <button className={currentPage === 'users' ? 'active' : ''} onClick={() => navigate('users')}><Users />角色管理</button>}</div><div className="profile"><span><strong>{user.display_name}</strong><small>{user.is_admin ? '管理员' : '审核者'}</small></span><button aria-label="退出登录" onClick={async () => { await api.logout(); setUser(null) }}><LogOut size={18} /></button></div></nav>{currentPage === 'issues' ? <IssueWorkspace repositories={repositories} routeVersion={routeVersion} /> : currentPage === 'history' ? <HistoryWorkspace repositories={repositories} /> : currentPage === 'statistics' ? <StatisticsWorkspace /> : <UserAdmin repositories={repositories} currentUserId={user.id} />}</div>
+  return <div className="app-shell"><nav className="topbar"><div className="wordmark"><span><ShieldCheck size={20} /></span><strong>检视裁定台</strong><small>REVIEW CONTROL</small></div><div className="nav-tabs"><button className={currentPage === 'issues' ? 'active' : ''} onClick={() => navigate('issues')}><Code2 />意见审核</button><button className={currentPage === 'statistics' ? 'active' : ''} onClick={() => navigate('statistics')}><BarChart3 />数据统计</button>{user.is_admin && <button className={currentPage === 'users' ? 'active' : ''} onClick={() => navigate('users')}><Users />角色管理</button>}</div><div className="profile"><span><strong>{user.display_name}</strong><small>{user.is_admin ? '管理员' : '审核者'}</small></span><button aria-label="退出登录" onClick={async () => { await api.logout(); setUser(null) }}><LogOut size={18} /></button></div></nav>{currentPage === 'issues' ? <IssueWorkspace repositories={repositories} routeVersion={routeVersion} /> : currentPage === 'statistics' ? <StatisticsWorkspace /> : <UserAdmin repositories={repositories} currentUserId={user.id} />}</div>
 }
