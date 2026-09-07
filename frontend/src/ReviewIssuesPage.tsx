@@ -563,7 +563,7 @@ function ReviewBatchDrawer({ batch, onClose, onChanged, onOpenTask, onContinueCo
           {detail.status === 'verifying' && (
             <div className="review-console-handoff">
               <ShieldCheck size={18} />
-              <div><strong>人工裁定已迁移到独立检视裁定台</strong><span>此处仅展示结果；仓库审核者请在裁定台修改状态并填写依据。</span></div>
+              <div><strong>人工裁定已迁移到独立检视操作台</strong><span>此处仅展示结果；仓库审核者请在操作台修改状态并填写依据。</span></div>
             </div>
           )}
 

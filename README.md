@@ -212,7 +212,7 @@ cc-fastapi-admin status
 检视结果回收使用 `review_issue_batches` 记录一次回收和合入后验证流程，使用
 `review_issues` 保存 Agent 提取的问题。接口只承担自动化数据采集与统计，不提供问题管理操作台。
 主控制台侧边栏的“检视统计”页面可查看采纳率、筛选回收批次并录入批次及问题。人工状态裁定已
-迁移到独立检视裁定台，主控制台仅展示结果。
+迁移到独立检视操作台，主控制台仅展示结果。
 
 ```text
 POST  /v1/review-issue-batches
@@ -239,13 +239,13 @@ GET   /v1/review-issues/summary
 不可变终态；问题保留 `unverified`，不会进入验证流程。该内部锚点不会出现在任务管理列表或该
 PR 的 Task 历史中。
 
-## 独立检视裁定台
+## 独立检视操作台
 
-裁定台位于 `review-console/`，前后端、数据库和部署入口均与主控制台分离。它支持按仓库授予
+操作台位于 `review-console/`，前后端、数据库和部署入口均与主控制台分离。它支持按仓库授予
 只读或修改权限、按 PR/MR 查看全部意见、获取 PR/MR 检视完成状态、独立人工裁定、结构化拒绝
 理由、待补充状态和完整状态轨迹。独立统计页按日期时间查看有效意见、用户确认贡献与误报最多的
 五个仓库。主应用通过专用服务令牌提供
-版本化接口，浏览器只使用裁定台的 `HttpOnly` 会话 Cookie。访问控制模块与裁定业务解耦，支持
+版本化接口，浏览器只使用操作台的 `HttpOnly` 会话 Cookie。访问控制模块与裁定业务解耦，支持
 OIDC Authorization Code + PKCE SSO、本地账号回退、SSO 身份独立映射和 IdP 管理员组映射。
 
 配置 `REVIEW_CONSOLE_API_TOKEN`、不少于 32 字符的 `REVIEW_CONSOLE_SESSION_SECRET` 和首次
@@ -256,7 +256,7 @@ OIDC Authorization Code + PKCE SSO、本地账号回退、SSO 身份独立映射
 docker compose --profile review-console up --build
 ```
 
-裁定台默认监听 `18090`。完整的系统边界、权限模型、接口契约和生产部署注意事项见
+操作台默认监听 `18090`。完整的系统边界、权限模型、接口契约和生产部署注意事项见
 [`docs/review-console-architecture.md`](docs/review-console-architecture.md)。
 
 ## 列表分页
