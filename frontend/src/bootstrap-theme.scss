@@ -1,0 +1,78 @@
+$font-family-sans-serif: 'IBM Plex Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+$font-family-monospace: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+
+// The console intentionally uses a 150% root size. Scale Bootstrap's rem-based
+// primitives back to the existing 16px visual baseline.
+$font-size-base: 0.666667rem;
+$font-size-sm: 0.583333rem;
+$font-size-lg: 0.75rem;
+$spacer: 0.666667rem;
+
+$primary: #315ff4;
+$secondary: #657175;
+$success: #198865;
+$warning: #aa7419;
+$danger: #df5a43;
+$light: #f4f6f6;
+$dark: #202b2e;
+$body-color: #1b2528;
+$body-bg: #e9edef;
+$border-color: #d9dfe1;
+
+$border-radius: 0.333333rem;
+$border-radius-sm: 0.25rem;
+$border-radius-lg: 0.5rem;
+$border-radius-xl: 0.666667rem;
+$box-shadow: 0 18px 48px rgba(31, 45, 49, 0.12);
+$focus-ring-width: 0.125rem;
+$focus-ring-opacity: 0.16;
+
+$input-btn-padding-y: 0.333333rem;
+$input-btn-padding-x: 0.625rem;
+$input-btn-font-size: 0.625rem;
+$input-btn-focus-width: 0.125rem;
+$input-bg: #ffffff;
+$input-color: #344044;
+$input-border-color: #d9dfe1;
+$input-placeholder-color: #a0a9ac;
+$input-focus-border-color: #8fa6f9;
+$input-focus-box-shadow: 0 0 0 0.125rem rgba(49, 95, 244, 0.1);
+$form-select-indicator-color: #768287;
+
+$btn-font-weight: 600;
+$btn-font-size: 0.75rem;
+$btn-padding-y: 0;
+$btn-box-shadow: none;
+$btn-focus-box-shadow: 0 0 0 0.125rem rgba(49, 95, 244, 0.16);
+
+$modal-content-bg: #fafbfb;
+$modal-content-border-color: #d8dfe1;
+$modal-content-border-radius: 0.583333rem;
+$modal-content-box-shadow-sm-up: $box-shadow;
+$modal-backdrop-bg: #111a1d;
+$modal-backdrop-opacity: 0.42;
+
+$offcanvas-horizontal-width: 24rem;
+$offcanvas-bg-color: #fafbfb;
+$offcanvas-border-color: #d7dddf;
+
+$table-bg: transparent;
+$table-hover-bg: #f7f9ff;
+
+@import 'bootstrap/scss/bootstrap';
+
+.btn {
+  display: inline-flex;
+  min-height: 39px;
+  align-items: center;
+  justify-content: center;
+  gap: 0.333333rem;
+}
+
+.btn-primary {
+  box-shadow: 0 5px 13px rgba(49, 95, 244, 0.17);
+}
+
+.btn-primary:hover {
+  box-shadow: 0 7px 17px rgba(49, 95, 244, 0.23);
+}

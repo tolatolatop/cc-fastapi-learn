@@ -2,6 +2,7 @@ default_queue: default
 queues:
   default:
     workers: 1
+    # default_model: claude-sonnet-4-5
   slow:
     workers: 1
   high_priority:

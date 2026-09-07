@@ -69,12 +69,56 @@ def test_create_get_and_logs():
     assert detail.json()["prompt"] == "hello"
     assert detail.json()["model"]
     assert detail.json()["metadata"] == {"source": "test"}
+    assert detail.json()["session_id"] is None
     assert detail.json()["agent_mode"] is True
     assert detail.json()["unattended"] is True
 
     logs = client.get(f"/v1/agent-tasks/{task_id}/logs")
     assert logs.status_code == 200
     assert logs.json()["total"] >= 1
+
+
+def test_list_tasks_supports_pagination_filters_and_global_summary():
+    client = build_client()
+    task_ids = []
+    for prompt, queue_name in [("alpha task", "default"), ("beta task", "slow"), ("gamma task", "default")]:
+        response = client.post("/v1/agent-tasks", json={"prompt": prompt, "queue_name": queue_name})
+        assert response.status_code == 200
+        task_ids.append(response.json()["task_id"])
+    assert client.post(f"/v1/agent-tasks/{task_ids[-1]}/cancel").status_code == 200
+
+    page = client.get("/v1/agent-tasks", params={"offset": 1, "limit": 1})
+
+    assert page.status_code == 200
+    assert page.json()["total"] == 3
+    assert len(page.json()["items"]) == 1
+    assert page.json()["summary"] == {
+        "total": 3,
+        "status_counts": {
+            "queued": 2,
+            "running": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 1,
+            "abandoned": 0,
+        },
+        "queues": [
+            {"name": "default", "total": 2, "queued": 1, "running": 0},
+            {"name": "slow", "total": 1, "queued": 1, "running": 0},
+        ],
+    }
+
+    searched = client.get("/v1/agent-tasks", params={"q": "beta", "limit": 20})
+    assert searched.status_code == 200
+    assert searched.json()["total"] == 1
+    assert searched.json()["items"][0]["prompt"] == "beta task"
+
+    filtered = client.get(
+        "/v1/agent-tasks",
+        params=[("status", "queued"), ("status", "cancelled"), ("queue", "default")],
+    )
+    assert filtered.status_code == 200
+    assert filtered.json()["total"] == 2
 
 
 def test_get_task_context_returns_empty_when_not_written():
@@ -124,6 +168,10 @@ def test_retry_task_creates_new_queued_task():
     assert response.json()["status"] == "queued"
     assert response.json()["queue_name"] == "slow"
     assert client.get(f"/v1/agent-tasks/{original_task_id}").json()["status"] == "cancelled"
+
+    duplicate = client.post(f"/v1/agent-tasks/{original_task_id}/retry")
+    assert duplicate.status_code == 409
+    assert duplicate.json()["detail"] == "task retry was already created"
 
 
 def test_retry_task_not_found_returns_404():

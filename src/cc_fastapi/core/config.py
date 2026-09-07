@@ -5,6 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 DEFAULT_GITLAB_WEBHOOK_PROMPT_TEMPLATE_PATH = "config/templates/gitlab_webhook_prompt.j2"
+DEFAULT_GITHUB_WEBHOOK_PROMPT_TEMPLATE_PATH = "config/templates/github_webhook_prompt.j2"
 
 
 class Settings(BaseSettings):
@@ -37,18 +38,31 @@ class Settings(BaseSettings):
     debug_log_filename: str = Field(default="debug.log", alias="DEBUG_LOG_FILENAME")
     debug_log_utc: bool = Field(default=True, alias="DEBUG_LOG_UTC")
     api_token: str = Field(default="", alias="API_TOKEN")
+    review_console_api_token: str = Field(default="", alias="REVIEW_CONSOLE_API_TOKEN")
     gitlab_webhook_secret: str = Field(default="", alias="GITLAB_WEBHOOK_SECRET")
     gitlab_webhook_prompt_template_path: str = Field(
         default=DEFAULT_GITLAB_WEBHOOK_PROMPT_TEMPLATE_PATH,
         alias="GITLAB_WEBHOOK_PROMPT_TEMPLATE_PATH",
     )
     gitlab_webhook_queue_name: str = Field(default="", alias="GITLAB_WEBHOOK_QUEUE_NAME")
+    gitlab_webhook_model: str = Field(default="", alias="GITLAB_WEBHOOK_MODEL")
+    github_webhook_secret: str = Field(default="", alias="GITHUB_WEBHOOK_SECRET")
+    github_webhook_prompt_template_path: str = Field(
+        default=DEFAULT_GITHUB_WEBHOOK_PROMPT_TEMPLATE_PATH,
+        alias="GITHUB_WEBHOOK_PROMPT_TEMPLATE_PATH",
+    )
+    github_webhook_queue_name: str = Field(default="", alias="GITHUB_WEBHOOK_QUEUE_NAME")
+    github_webhook_model: str = Field(default="", alias="GITHUB_WEBHOOK_MODEL")
     max_attempts: int = Field(default=3, alias="MAX_ATTEMPTS")
 
     @property
     def resolved_database_url(self) -> str:
         external = self.postgres_external_url.strip()
         if external:
+            if external.startswith("postgres://"):
+                external = f"postgresql://{external.removeprefix('postgres://')}"
+            if external.startswith("postgresql://"):
+                return f"postgresql+psycopg://{external.removeprefix('postgresql://')}"
             return external
         return self.database_url
 
@@ -57,6 +71,12 @@ class Settings(BaseSettings):
         if self.gitlab_webhook_prompt_template_path.strip():
             return self.gitlab_webhook_prompt_template_path
         return DEFAULT_GITLAB_WEBHOOK_PROMPT_TEMPLATE_PATH
+
+    @property
+    def resolved_github_webhook_prompt_template_path(self) -> str:
+        if self.github_webhook_prompt_template_path.strip():
+            return self.github_webhook_prompt_template_path
+        return DEFAULT_GITHUB_WEBHOOK_PROMPT_TEMPLATE_PATH
 
 
 @lru_cache(maxsize=1)
