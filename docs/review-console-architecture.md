@@ -34,7 +34,8 @@ OIDC SSO 使用 Authorization Code + PKCE。回调校验签名、issuer、audien
 ## 状态与审计
 
 人工裁定使用独立四态契约：`unverified`（待分析）、`accepted`（接受）、`not_accepted`（拒绝）和
-`needs_info`（待补充）。拒绝必须选择标准原因分类并填写详细理由；待补充可先单击设置状态，再从意见详情补写所需信息。
+`needs_info`（待补充）。拒绝必须选择标准原因分类并填写详细理由。操作台不再提供进入待补充状态的按钮，
+但会继续展示和筛选已有的待补充记录，并允许将其改为待分析、接受或拒绝。
 自动修复验证继续使用独立的 `verification_status`，不会被人工裁定接口改写。每次真实变化都会在
 主应用写入 `review_issue_status_changes`，记录维度、前后状态、前后原因、操作者 ID/名称、来源和
 UTC 时间；历史 API 只读，不提供更新或删除入口。
