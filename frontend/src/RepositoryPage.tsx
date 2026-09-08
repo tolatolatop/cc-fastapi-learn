@@ -364,7 +364,7 @@ export default function RepositoryPage({ onOpenSettings }: RepositoryPageProps) 
           {loading ? (
             <div className="state-message"><RefreshCw size={24} className="spin" /><strong>正在读取仓库目录</strong><p>关联检视批次和问题结论…</p></div>
           ) : error ? (
-            <div className="state-message error-state"><CircleAlert size={26} /><strong>无法读取仓库</strong><p>{error}</p><div>{error === 'invalid api token' && <Button variant="outline-secondary" onClick={onOpenSettings}><KeyRound size={16} />填写 Token</Button>}<Button variant="primary" onClick={() => loadRepositories()}><RefreshCw size={16} />重试连接</Button></div></div>
+            <div className="state-message error-state"><CircleAlert size={26} /><strong>无法读取仓库</strong><p>{error}</p><div>{(error === 'invalid api token' || error === 'authentication required') && <Button variant="outline-secondary" onClick={onOpenSettings}><KeyRound size={16} />填写 Token</Button>}<Button variant="primary" onClick={() => loadRepositories()}><RefreshCw size={16} />重试连接</Button></div></div>
           ) : overview.items.length === 0 ? (
             <div className="state-message"><LibraryBig size={27} /><strong>{summary.repository_total ? '没有匹配的仓库' : '仓库目录还是空的'}</strong><p>{summary.repository_total ? '调整平台、Tag 或搜索条件后再试。' : '同步历史 Webhook 与检视意见，或通过 REST API 添加仓库。'}</p></div>
           ) : (

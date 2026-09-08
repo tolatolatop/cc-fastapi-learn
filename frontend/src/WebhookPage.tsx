@@ -298,7 +298,7 @@ export default function WebhookPage({ onOpenTask, onOpenSettings }: WebhookPageP
             <div className="state-message error-state">
               <CircleAlert size={26} /><strong>无法读取 Webhook 记录</strong><p>{error}</p>
               <div>
-                {error === 'invalid api token' && <Button variant="outline-secondary" onClick={onOpenSettings}><KeyRound size={16} />填写 Token</Button>}
+                {(error === 'invalid api token' || error === 'authentication required') && <Button variant="outline-secondary" onClick={onOpenSettings}><KeyRound size={16} />填写 Token</Button>}
                 <Button variant="primary" onClick={() => loadRecords()}><RefreshCw size={16} />重试连接</Button>
               </div>
             </div>

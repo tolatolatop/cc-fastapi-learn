@@ -1,8 +1,8 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
 
 DEFAULT_GITLAB_WEBHOOK_PROMPT_TEMPLATE_PATH = "config/templates/gitlab_webhook_prompt.j2"
 DEFAULT_GITHUB_WEBHOOK_PROMPT_TEMPLATE_PATH = "config/templates/github_webhook_prompt.j2"
@@ -38,6 +38,25 @@ class Settings(BaseSettings):
     debug_log_filename: str = Field(default="debug.log", alias="DEBUG_LOG_FILENAME")
     debug_log_utc: bool = Field(default=True, alias="DEBUG_LOG_UTC")
     api_token: str = Field(default="", alias="API_TOKEN")
+    oidc_enabled: bool = Field(default=False, alias="OIDC_ENABLED")
+    oidc_issuer_url: str = Field(default="", alias="OIDC_ISSUER_URL")
+    oidc_client_id: str = Field(default="", alias="OIDC_CLIENT_ID")
+    oidc_client_secret: str = Field(default="", alias="OIDC_CLIENT_SECRET")
+    oidc_client_auth_method: Literal[
+        "client_secret_basic", "client_secret_post", "none"
+    ] = Field(default="client_secret_basic", alias="OIDC_CLIENT_AUTH_METHOD")
+    oidc_redirect_uri: str = Field(default="", alias="OIDC_REDIRECT_URI")
+    oidc_scopes: str = Field(default="openid profile email", alias="OIDC_SCOPES")
+    oidc_audience: str = Field(default="", alias="OIDC_AUDIENCE")
+    oidc_signing_algorithms: str = Field(default="RS256", alias="OIDC_SIGNING_ALGORITHMS")
+    oidc_session_secret: str = Field(default="", alias="OIDC_SESSION_SECRET")
+    oidc_session_hours: int = Field(default=12, ge=1, le=168, alias="OIDC_SESSION_HOURS")
+    oidc_cookie_secure: bool = Field(default=False, alias="OIDC_COOKIE_SECURE")
+    oidc_username_claim: str = Field(default="preferred_username", alias="OIDC_USERNAME_CLAIM")
+    oidc_display_name_claim: str = Field(default="name", alias="OIDC_DISPLAY_NAME_CLAIM")
+    oidc_email_claim: str = Field(default="email", alias="OIDC_EMAIL_CLAIM")
+    oidc_button_label: str = Field(default="使用企业账号登录", alias="OIDC_BUTTON_LABEL")
+    oidc_timeout_seconds: float = Field(default=10.0, ge=1.0, le=60.0, alias="OIDC_TIMEOUT_SECONDS")
     review_console_api_token: str = Field(default="", alias="REVIEW_CONSOLE_API_TOKEN")
     gitlab_webhook_secret: str = Field(default="", alias="GITLAB_WEBHOOK_SECRET")
     gitlab_webhook_prompt_template_path: str = Field(
@@ -77,6 +96,27 @@ class Settings(BaseSettings):
         if self.github_webhook_prompt_template_path.strip():
             return self.github_webhook_prompt_template_path
         return DEFAULT_GITHUB_WEBHOOK_PROMPT_TEMPLATE_PATH
+
+    def validate_oidc_runtime(self) -> None:
+        if not self.oidc_enabled:
+            return
+        required = {
+            "OIDC_ISSUER_URL": self.oidc_issuer_url,
+            "OIDC_CLIENT_ID": self.oidc_client_id,
+            "OIDC_REDIRECT_URI": self.oidc_redirect_uri,
+            "OIDC_SESSION_SECRET": self.oidc_session_secret,
+        }
+        missing = [name for name, value in required.items() if not value.strip()]
+        if missing:
+            raise RuntimeError(f"missing OIDC configuration: {', '.join(missing)}")
+        if len(self.oidc_session_secret) < 32:
+            raise RuntimeError("OIDC_SESSION_SECRET must contain at least 32 characters")
+        if "openid" not in self.oidc_scopes.split():
+            raise RuntimeError("OIDC_SCOPES must include openid")
+        if self.oidc_client_auth_method != "none" and not self.oidc_client_secret.strip():
+            raise RuntimeError(
+                "OIDC_CLIENT_SECRET is required for the configured client authentication method"
+            )
 
 
 @lru_cache(maxsize=1)

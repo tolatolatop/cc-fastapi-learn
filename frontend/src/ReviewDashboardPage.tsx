@@ -566,7 +566,7 @@ export default function ReviewDashboardPage({ onOpenSettings, onOpenTask }: Revi
       </section>
 
       {error ? (
-        <section className="state-message error-state review-dashboard-error"><CircleAlert size={26} /><strong>无法读取检视看板</strong><p>{error}</p><div>{error === 'invalid api token' && <Button variant="outline-secondary" onClick={onOpenSettings}><KeyRound size={16} />填写 Token</Button>}<Button variant="primary" onClick={() => loadDashboard()}><RefreshCw size={16} />重试连接</Button></div></section>
+        <section className="state-message error-state review-dashboard-error"><CircleAlert size={26} /><strong>无法读取检视看板</strong><p>{error}</p><div>{(error === 'invalid api token' || error === 'authentication required') && <Button variant="outline-secondary" onClick={onOpenSettings}><KeyRound size={16} />填写 Token</Button>}<Button variant="primary" onClick={() => loadDashboard()}><RefreshCw size={16} />重试连接</Button></div></section>
       ) : (
         <>
           <section className="review-evidence-board" aria-label="问题处理证据轨道">

@@ -30,6 +30,19 @@ import type {
 
 const API_ROOT = '/api'
 
+export interface AuthConfig {
+  oidc_enabled: boolean
+  login_url: string | null
+  button_label: string
+}
+
+export interface AuthUser {
+  sub: string
+  username: string
+  display_name: string
+  email: string
+}
+
 interface TaskListOptions {
   offset?: number
   limit?: number
@@ -115,6 +128,7 @@ function tokenHeaders(): HeadersInit {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_ROOT}${path}`, {
     ...init,
+    credentials: 'same-origin',
     headers: {
       ...tokenHeaders(),
       ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
@@ -135,11 +149,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw error
   }
 
+  if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
 }
 
 export const api = {
   health: () => request<{ status: string }>('/healthz'),
+  authConfig: () => request<AuthConfig>('/v1/auth/config'),
+  currentUser: () => request<AuthUser>('/v1/auth/me'),
+  logout: () => request<void>('/v1/auth/logout', { method: 'POST' }),
   listProviders: () => request<ProviderCapabilityListResponse>('/v1/providers'),
   listTasks: ({ offset = 0, limit = 20, statuses = [], queue, query }: TaskListOptions = {}) => request<TaskListResponse>(queryPath('/v1/agent-tasks', [
     ['offset', offset],

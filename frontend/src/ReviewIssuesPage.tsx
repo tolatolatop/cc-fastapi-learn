@@ -780,7 +780,7 @@ export default function ReviewIssuesPage({ onOpenSettings, onOpenTask }: ReviewI
           {loading ? (
             <div className="state-message"><RefreshCw size={24} className="spin" /><strong>正在读取检视统计</strong><p>加载回收批次和采纳结果…</p></div>
           ) : error ? (
-            <div className="state-message error-state"><CircleAlert size={26} /><strong>无法读取检视数据</strong><p>{error}</p><div>{error === 'invalid api token' && <Button variant="outline-secondary" onClick={onOpenSettings}><KeyRound size={16} />填写 Token</Button>}<Button variant="primary" onClick={() => loadData()}><RefreshCw size={16} />重试连接</Button></div></div>
+            <div className="state-message error-state"><CircleAlert size={26} /><strong>无法读取检视数据</strong><p>{error}</p><div>{(error === 'invalid api token' || error === 'authentication required') && <Button variant="outline-secondary" onClick={onOpenSettings}><KeyRound size={16} />填写 Token</Button>}<Button variant="primary" onClick={() => loadData()}><RefreshCw size={16} />重试连接</Button></div></div>
           ) : batches.length === 0 ? (
             <div className="state-message review-empty-state"><ShieldCheck size={27} /><strong>{statistics.batch_total ? '没有匹配的回收批次' : '还没有检视统计数据'}</strong><p>{statistics.batch_total ? '调整仓库、PR、状态或问题等级后再试。' : '录入第一份检视结果，开始观察问题采纳情况。'}</p>{!statistics.batch_total && <Button variant="primary" onClick={() => setEntryOpen(true)}><Plus size={16} />录入检视</Button>}</div>
           ) : (

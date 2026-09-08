@@ -41,6 +41,37 @@ docker compose up --build
 BACKEND_PORT=8000 FRONTEND_HOST=127.0.0.1 FRONTEND_PORT=8080 API_TOKEN=your-token docker compose up --build
 ```
 
+## OAuth 2.0 / OpenID Connect
+
+主 API 和 Web 控制台支持标准 OAuth 2.0 Bearer Token 与 OpenID Connect 登录，并保留
+`X-API-Token` 兼容入口。浏览器登录使用 OIDC Discovery、Authorization Code + PKCE、`state`、
+`nonce`、JWKS 签名校验以及 `HttpOnly` 会话 Cookie；API 客户端可直接发送由同一授权服务器签发的
+JWT Access Token：
+
+```http
+Authorization: Bearer <access-token>
+```
+
+最小配置如下。`OIDC_REDIRECT_URI` 必须与身份服务中登记的 URI 完全一致；生产 HTTPS 环境应设置
+`OIDC_COOKIE_SECURE=true`。`OIDC_SESSION_SECRET` 至少 32 字符，建议使用密码学安全随机值。
+
+```dotenv
+OIDC_ENABLED="true"
+OIDC_ISSUER_URL="https://id.example.com/realms/company"
+OIDC_CLIENT_ID="cc-console"
+OIDC_CLIENT_SECRET="<client-secret>"
+OIDC_CLIENT_AUTH_METHOD="client_secret_basic"
+OIDC_REDIRECT_URI="https://console.example.com/api/v1/auth/callback"
+OIDC_SCOPES="openid profile email"
+OIDC_AUDIENCE="cc-console"
+OIDC_SESSION_SECRET="<at-least-32-random-characters>"
+OIDC_COOKIE_SECURE="true"
+```
+
+支持 `client_secret_basic`、`client_secret_post` 和公共客户端的 `none`。启用后，控制台右上角
+“连接设置”会显示企业账号登录入口。OAuth/OIDC 与 `API_TOKEN` 可同时启用，任一认证方式成功即可
+访问受保护 API；两者都未启用时保持原有的开放访问行为。
+
 ## 前端本地开发
 
 后端运行在 `localhost:18000` 时：

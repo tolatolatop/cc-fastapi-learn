@@ -26,6 +26,7 @@ import {
 } from 'lucide-react'
 import { Button, Form, Modal, Offcanvas, Table } from 'react-bootstrap'
 import { api } from './api'
+import type { AuthConfig, AuthUser } from './api'
 import Pagination from './Pagination'
 import RepositoryPage from './RepositoryPage'
 import ReviewWorkspace from './ReviewWorkspace'
@@ -271,11 +272,33 @@ interface SettingsModalProps {
 
 function SettingsModal({ onClose, onSaved }: SettingsModalProps) {
   const [token, setToken] = useState(() => localStorage.getItem('cc-api-token') || '')
+  const [authConfig, setAuthConfig] = useState<AuthConfig | null>(null)
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null)
+
+  useEffect(() => {
+    api.authConfig().then((config) => {
+      setAuthConfig(config)
+      if (config.oidc_enabled) {
+        api.currentUser().then(setAuthUser).catch(() => setAuthUser(null))
+      }
+    }).catch(() => setAuthConfig(null))
+  }, [])
 
   function save(event: FormEvent) {
     event.preventDefault()
     if (token.trim()) localStorage.setItem('cc-api-token', token.trim())
     else localStorage.removeItem('cc-api-token')
+    onSaved()
+  }
+
+  function startOidcLogin() {
+    const next = `${window.location.pathname}${window.location.search}${window.location.hash}`
+    window.location.assign(`/api${authConfig?.login_url}?next=${encodeURIComponent(next)}`)
+  }
+
+  async function logout() {
+    await api.logout()
+    setAuthUser(null)
     onSaved()
   }
 
@@ -297,6 +320,22 @@ function SettingsModal({ onClose, onSaved }: SettingsModalProps) {
             </div>
             <small>仅保存在当前浏览器的本地存储中。</small>
           </label>
+          {authConfig?.oidc_enabled && (
+            <div className="field">
+              <span>OAuth 2.0 / OpenID Connect</span>
+              {authUser ? (
+                <>
+                  <strong>{authUser.display_name}</strong>
+                  <small>{authUser.email || authUser.username}</small>
+                  <Button type="button" variant="outline-secondary" onClick={logout}>退出企业账号</Button>
+                </>
+              ) : (
+                <Button type="button" variant="outline-primary" onClick={startOidcLogin}>
+                  <KeyRound size={17} />{authConfig.button_label}
+                </Button>
+              )}
+            </div>
+          )}
           <div className="modal-actions">
             <Button type="button" variant="outline-secondary" onClick={onClose}>取消</Button>
             <Button type="submit" variant="primary"><Check size={17} />保存并重连</Button>
@@ -862,7 +901,7 @@ function App() {
                   <strong>无法读取任务</strong>
                   <p>{error}</p>
                   <div>
-                    {error === 'invalid api token' && <Button variant="outline-secondary" onClick={() => setSettingsOpen(true)}><KeyRound size={16} />填写 Token</Button>}
+                    {(error === 'invalid api token' || error === 'authentication required') && <Button variant="outline-secondary" onClick={() => setSettingsOpen(true)}><KeyRound size={16} />填写 Token</Button>}
                     <Button variant="primary" onClick={() => loadDashboard()}><RefreshCw size={16} />重试连接</Button>
                   </div>
                 </div>
