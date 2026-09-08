@@ -25,6 +25,13 @@ class Settings(BaseSettings):
         default=True, alias="REVIEW_CONSOLE_LOCAL_LOGIN_ENABLED"
     )
     sso_enabled: bool = Field(default=False, alias="REVIEW_CONSOLE_SSO_ENABLED")
+    oauth_bearer_enabled: bool = Field(
+        default=False, alias="REVIEW_CONSOLE_OAUTH_BEARER_ENABLED"
+    )
+    oauth_audience: str = Field(default="", alias="REVIEW_CONSOLE_OAUTH_AUDIENCE")
+    oauth_token_type: str = Field(
+        default="at+jwt", alias="REVIEW_CONSOLE_OAUTH_TOKEN_TYPE"
+    )
     sso_issuer_url: str = Field(default="", alias="REVIEW_CONSOLE_SSO_ISSUER_URL")
     sso_client_id: str = Field(default="", alias="REVIEW_CONSOLE_SSO_CLIENT_ID")
     sso_client_secret: str = Field(
@@ -71,21 +78,35 @@ class Settings(BaseSettings):
             )
         if not self.upstream_token:
             raise RuntimeError("REVIEW_CONSOLE_API_TOKEN must be configured")
-        if not self.local_login_enabled and not self.sso_enabled:
+        if not self.local_login_enabled and not self.sso_enabled and not self.oauth_bearer_enabled:
             raise RuntimeError("at least one review console login method must be enabled")
-        if not self.sso_enabled:
+        if not self.sso_enabled and not self.oauth_bearer_enabled:
             return
         required = {
             "REVIEW_CONSOLE_SSO_ISSUER_URL": self.sso_issuer_url,
-            "REVIEW_CONSOLE_SSO_CLIENT_ID": self.sso_client_id,
-            "REVIEW_CONSOLE_SSO_REDIRECT_URI": self.sso_redirect_uri,
         }
+        if self.sso_enabled:
+            required["REVIEW_CONSOLE_SSO_CLIENT_ID"] = self.sso_client_id
+            required["REVIEW_CONSOLE_SSO_REDIRECT_URI"] = self.sso_redirect_uri
+        if self.oauth_bearer_enabled:
+            required["REVIEW_CONSOLE_OAUTH_AUDIENCE"] = self.oauth_audience
+            required["REVIEW_CONSOLE_OAUTH_TOKEN_TYPE"] = self.oauth_token_type
         missing = [name for name, value in required.items() if not value.strip()]
         if missing:
-            raise RuntimeError(f"missing SSO configuration: {', '.join(missing)}")
-        if "openid" not in self.sso_scopes.split():
+            raise RuntimeError(f"missing federated authentication configuration: {', '.join(missing)}")
+        if self.sso_enabled and "openid" not in self.sso_scopes.split():
             raise RuntimeError("REVIEW_CONSOLE_SSO_SCOPES must include openid")
         if (
+            self.sso_enabled
+            and self.oauth_bearer_enabled
+            and self.oauth_audience == self.sso_client_id
+        ):
+            raise RuntimeError(
+                "REVIEW_CONSOLE_OAUTH_AUDIENCE must differ from REVIEW_CONSOLE_SSO_CLIENT_ID"
+            )
+        if (
+            self.sso_enabled
+            and
             self.sso_client_auth_method != "none"
             and not self.sso_client_secret.strip()
         ):

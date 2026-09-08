@@ -109,7 +109,11 @@ def _identity_query(issuer: str, subject: str):
 
 
 def find_or_create_sso_user(
-    db: Session, claims: dict[str, Any], settings: Settings
+    db: Session,
+    claims: dict[str, Any],
+    settings: Settings,
+    *,
+    synchronize_profile: bool = True,
 ) -> ConsoleUser:
     issuer = str(claims["iss"]).rstrip("/")
     subject = str(claims["sub"])
@@ -118,9 +122,10 @@ def find_or_create_sso_user(
         user = identity.user
         if not user.is_active:
             raise InactiveSsoUserError
-        user.display_name = _display_name(claims, settings, user.username)
-        if settings.sso_admin_group:
-            user.is_admin = _is_admin(claims, settings)
+        if synchronize_profile:
+            user.display_name = _display_name(claims, settings, user.username)
+            if settings.sso_admin_group:
+                user.is_admin = _is_admin(claims, settings)
         identity.last_login_at = utc_now()
         user.updated_at = utc_now()
         db.commit()
@@ -132,7 +137,7 @@ def find_or_create_sso_user(
         username=username,
         display_name=_display_name(claims, settings, username),
         password_hash="!sso",
-        is_admin=_is_admin(claims, settings),
+        is_admin=_is_admin(claims, settings) if synchronize_profile else False,
     )
     user.sso_identities.append(SsoIdentity(issuer=issuer, subject=subject))
     db.add(user)

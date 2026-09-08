@@ -18,6 +18,7 @@ export interface User {
 export interface AuthConfig {
   local_login_enabled: boolean
   sso_enabled: boolean
+  oauth_bearer_enabled: boolean
   sso_button_label: string
 }
 export interface Repository {

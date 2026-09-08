@@ -278,6 +278,8 @@ PR 的 Task 历史中。
 五个仓库。主应用通过专用服务令牌提供
 版本化接口，浏览器只使用操作台的 `HttpOnly` 会话 Cookie。访问控制模块与裁定业务解耦，支持
 OIDC Authorization Code + PKCE SSO、本地账号回退、SSO 身份独立映射和 IdP 管理员组映射。
+受保护接口还可选择接受标准 OAuth 2.0 JWT Bearer Access Token；Bearer 身份使用相同的
+`iss + sub` 用户映射，因此会复用已有角色、停用状态和仓库授权。
 
 配置 `REVIEW_CONSOLE_API_TOKEN`、不少于 32 字符的 `REVIEW_CONSOLE_SESSION_SECRET` 和首次
 管理员密码 `REVIEW_CONSOLE_ADMIN_PASSWORD` 后启动。所有值从仓库根目录 `.env` 读取；可直接参考
@@ -286,6 +288,19 @@ OIDC Authorization Code + PKCE SSO、本地账号回退、SSO 身份独立映射
 ```bash
 docker compose --profile review-console up --build
 ```
+
+如需让自动化客户端通过 OAuth 2.0 调用 Review Console API，再配置：
+
+```dotenv
+REVIEW_CONSOLE_OAUTH_BEARER_ENABLED="true"
+REVIEW_CONSOLE_OAUTH_AUDIENCE="review-console-api"
+REVIEW_CONSOLE_OAUTH_TOKEN_TYPE="at+jwt"
+```
+
+随后使用 `Authorization: Bearer <access-token>`。`REVIEW_CONSOLE_OAUTH_AUDIENCE` 必须与 Access
+Token 的 `aud` 一致；它与用于验证 OIDC ID Token 的 `REVIEW_CONSOLE_SSO_CLIENT_ID` 分开，避免把
+ID Token 当作 API Access Token。默认还要求 RFC 9068 的 `typ=at+jwt`；仅当身份源使用其他已签名
+Access Token 类型时才调整 `REVIEW_CONSOLE_OAUTH_TOKEN_TYPE`。
 
 操作台默认监听 `18090`。完整的系统边界、权限模型、接口契约和生产部署注意事项见
 [`docs/review-console-architecture.md`](docs/review-console-architecture.md)。

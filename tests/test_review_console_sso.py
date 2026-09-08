@@ -48,6 +48,19 @@ class FakeOidcClient:
             "groups": ["review-console-admins"],
         }
 
+    def validate_access_token(self, token: str) -> dict:
+        if token not in {"valid-access-token", "valid-admin-group-access-token"}:
+            raise OidcValidationError("invalid access token")
+        return {
+            "iss": "https://identity.example",
+            "sub": "api-operator-7",
+            "preferred_username": "api-operator",
+            "name": "API Operator",
+            "groups": ["review-console-admins"]
+            if token == "valid-admin-group-access-token"
+            else [],
+        }
+
 
 @pytest.fixture
 def sso_environment(monkeypatch):
@@ -119,6 +132,7 @@ def test_sso_login_uses_signed_flow_pkce_and_creates_identity(sso_environment):
     assert config.json() == {
         "local_login_enabled": False,
         "sso_enabled": True,
+        "oauth_bearer_enabled": False,
         "sso_button_label": "使用企业账号登录",
     }
 
@@ -273,3 +287,241 @@ def test_oidc_client_validates_signature_audience_issuer_and_nonce(
     assert claims["sub"] == "employee-42"
     with pytest.raises(OidcValidationError, match="nonce"):
         client._validate_id_token(metadata, token, nonce="wrong-nonce")
+
+
+def test_oauth2_bearer_access_token_authenticates_console_user(
+    sso_environment, monkeypatch
+):
+    monkeypatch.setenv("REVIEW_CONSOLE_OAUTH_BEARER_ENABLED", "true")
+    monkeypatch.setenv("REVIEW_CONSOLE_OAUTH_AUDIENCE", "review-console-api")
+    get_settings.cache_clear()
+    client, sessions, _ = build_client()
+
+    response = client.get(
+        "/v1/auth/me", headers={"Authorization": "Bearer valid-access-token"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["username"] == "api-operator"
+    assert response.json()["auth_source"] == "sso"
+    with sessions() as db:
+        identity = db.scalar(
+            select(SsoIdentity).where(SsoIdentity.subject == "api-operator-7")
+        )
+        assert identity is not None
+
+
+def test_invalid_oauth2_bearer_token_returns_bearer_challenge(
+    sso_environment, monkeypatch
+):
+    monkeypatch.setenv("REVIEW_CONSOLE_OAUTH_BEARER_ENABLED", "true")
+    monkeypatch.setenv("REVIEW_CONSOLE_OAUTH_AUDIENCE", "review-console-api")
+    get_settings.cache_clear()
+    client, _, _ = build_client()
+
+    response = client.get(
+        "/v1/auth/me", headers={"Authorization": "Bearer invalid-access-token"}
+    )
+
+    assert response.status_code == 401
+    assert response.headers["www-authenticate"] == "Bearer"
+
+
+def test_oauth2_bearer_rejects_inactive_mapped_user(sso_environment, monkeypatch):
+    monkeypatch.setenv("REVIEW_CONSOLE_OAUTH_BEARER_ENABLED", "true")
+    monkeypatch.setenv("REVIEW_CONSOLE_OAUTH_AUDIENCE", "review-console-api")
+    get_settings.cache_clear()
+    client, sessions, _ = build_client()
+    with sessions() as db:
+        user = ConsoleUser(
+            username="disabled-api-operator",
+            display_name="Disabled API Operator",
+            password_hash="!sso",
+            is_active=False,
+        )
+        user.sso_identities.append(
+            SsoIdentity(
+                issuer="https://identity.example",
+                subject="api-operator-7",
+            )
+        )
+        db.add(user)
+        db.commit()
+
+    response = client.get(
+        "/v1/auth/me", headers={"Authorization": "Bearer valid-access-token"}
+    )
+
+    assert response.status_code == 403
+
+
+def test_oauth2_bearer_does_not_overwrite_existing_sso_profile(
+    sso_environment, monkeypatch
+):
+    monkeypatch.setenv("REVIEW_CONSOLE_OAUTH_BEARER_ENABLED", "true")
+    monkeypatch.setenv("REVIEW_CONSOLE_OAUTH_AUDIENCE", "review-console-api")
+    get_settings.cache_clear()
+    client, sessions, _ = build_client()
+    with sessions() as db:
+        user = ConsoleUser(
+            username="oidc-admin",
+            display_name="OIDC Administrator",
+            password_hash="!sso",
+            is_admin=True,
+        )
+        user.sso_identities.append(
+            SsoIdentity(
+                issuer="https://identity.example",
+                subject="api-operator-7",
+            )
+        )
+        db.add(user)
+        db.commit()
+
+    response = client.get(
+        "/v1/auth/me", headers={"Authorization": "Bearer valid-access-token"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["display_name"] == "OIDC Administrator"
+    assert response.json()["is_admin"] is True
+
+
+def test_oauth2_bearer_never_auto_grants_admin_to_new_user(
+    sso_environment, monkeypatch
+):
+    monkeypatch.setenv("REVIEW_CONSOLE_OAUTH_BEARER_ENABLED", "true")
+    monkeypatch.setenv("REVIEW_CONSOLE_OAUTH_AUDIENCE", "review-console-api")
+    get_settings.cache_clear()
+    client, _, _ = build_client()
+
+    response = client.get(
+        "/v1/auth/me",
+        headers={"Authorization": "Bearer valid-admin-group-access-token"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["is_admin"] is False
+
+
+def test_review_console_openapi_advertises_oauth2_bearer(sso_environment):
+    document = app.openapi()
+    scheme = document["components"]["securitySchemes"]["ReviewConsoleOAuth2Bearer"]
+    assert scheme["type"] == "http"
+    assert scheme["scheme"] == "bearer"
+
+
+def test_access_token_azp_is_not_compared_with_resource_audience(
+    sso_environment, monkeypatch
+):
+    monkeypatch.setenv("REVIEW_CONSOLE_OAUTH_BEARER_ENABLED", "true")
+    monkeypatch.setenv("REVIEW_CONSOLE_OAUTH_AUDIENCE", "review-console-api")
+    get_settings.cache_clear()
+    settings = get_settings()
+    client = OidcClient(settings)
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(private_key.public_key()))
+    public_jwk.update({"kid": "signing-key", "use": "sig", "alg": "RS256"})
+    now = datetime.now(UTC)
+    token = jwt.encode(
+        {
+            "iss": settings.sso_issuer_url,
+            "sub": "api-operator-7",
+            "aud": "review-console-api",
+            "azp": settings.sso_client_id,
+            "iat": now,
+            "exp": now + timedelta(minutes=5),
+        },
+        private_key,
+        algorithm="RS256",
+        headers={"kid": "signing-key", "typ": "at+jwt"},
+    )
+    monkeypatch.setattr(client, "_get_json", lambda url, **kwargs: {"keys": [public_jwk]})
+    metadata = {
+        "issuer": settings.sso_issuer_url,
+        "authorization_endpoint": "https://identity.example/authorize",
+        "token_endpoint": "https://identity.example/token",
+        "jwks_uri": "https://identity.example/keys",
+    }
+    monkeypatch.setattr(client, "_metadata", lambda: metadata)
+
+    claims = client.validate_access_token(token)
+    assert claims["azp"] == settings.sso_client_id
+
+
+def test_oidc_id_token_cannot_be_used_as_oauth2_access_token(
+    sso_environment, monkeypatch
+):
+    monkeypatch.setenv("REVIEW_CONSOLE_OAUTH_BEARER_ENABLED", "true")
+    monkeypatch.setenv("REVIEW_CONSOLE_OAUTH_AUDIENCE", "review-console-api")
+    get_settings.cache_clear()
+    settings = get_settings()
+    client = OidcClient(settings)
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(private_key.public_key()))
+    public_jwk.update({"kid": "signing-key", "use": "sig", "alg": "RS256"})
+    now = datetime.now(UTC)
+    id_token = jwt.encode(
+        {
+            "iss": settings.sso_issuer_url,
+            "sub": "employee-42",
+            "aud": "review-console-api",
+            "iat": now,
+            "exp": now + timedelta(minutes=5),
+        },
+        private_key,
+        algorithm="RS256",
+        headers={"kid": "signing-key", "typ": "JWT"},
+    )
+    metadata = {
+        "issuer": settings.sso_issuer_url,
+        "authorization_endpoint": "https://identity.example/authorize",
+        "token_endpoint": "https://identity.example/token",
+        "jwks_uri": "https://identity.example/keys",
+    }
+    monkeypatch.setattr(client, "_metadata", lambda: metadata)
+    monkeypatch.setattr(client, "_get_json", lambda url, **kwargs: {"keys": [public_jwk]})
+
+    with pytest.raises(OidcValidationError, match="token type"):
+        client.validate_access_token(id_token)
+
+
+def test_oauth_and_oidc_audiences_must_be_distinct(sso_environment, monkeypatch):
+    monkeypatch.setenv("REVIEW_CONSOLE_OAUTH_BEARER_ENABLED", "true")
+    monkeypatch.setenv("REVIEW_CONSOLE_OAUTH_AUDIENCE", "review-console")
+    get_settings.cache_clear()
+
+    with pytest.raises(RuntimeError, match="must differ"):
+        get_settings().validate_runtime()
+
+
+def test_oauth2_bearer_only_mode_does_not_require_oidc_client_credentials(
+    sso_environment, monkeypatch
+):
+    monkeypatch.setenv("REVIEW_CONSOLE_LOCAL_LOGIN_ENABLED", "false")
+    monkeypatch.setenv("REVIEW_CONSOLE_SSO_ENABLED", "false")
+    monkeypatch.setenv("REVIEW_CONSOLE_OAUTH_BEARER_ENABLED", "true")
+    monkeypatch.setenv("REVIEW_CONSOLE_OAUTH_AUDIENCE", "review-console-api")
+    monkeypatch.setenv("REVIEW_CONSOLE_SSO_CLIENT_ID", "")
+    monkeypatch.setenv("REVIEW_CONSOLE_SSO_CLIENT_SECRET", "")
+    monkeypatch.setenv("REVIEW_CONSOLE_SSO_REDIRECT_URI", "")
+    get_settings.cache_clear()
+
+    get_settings().validate_runtime()
+
+
+def test_oidc_discovery_requires_exact_issuer_match(sso_environment, monkeypatch):
+    client = OidcClient(get_settings())
+    monkeypatch.setattr(
+        client,
+        "_get_json",
+        lambda url, **kwargs: {
+            "issuer": "https://identity.example/",
+            "authorization_endpoint": "https://identity.example/authorize",
+            "token_endpoint": "https://identity.example/token",
+            "jwks_uri": "https://identity.example/keys",
+        },
+    )
+
+    with pytest.raises(OidcValidationError, match="issuer"):
+        client._metadata()

@@ -78,6 +78,9 @@ PR/MR 完成状态由主应用聚合其全部检视批次和意见后返回：`p
 
 认证接口额外包含公开的 `GET /v1/auth/config`、发起登录的 `GET /v1/auth/sso/login` 和 OIDC 回调
 `GET /v1/auth/sso/callback`。前端只根据公开配置决定显示 SSO 或本地登录，不会读取客户端密钥。
+启用 OAuth 2.0 Bearer 后，所有原本接受会话 Cookie 的受保护接口也接受标准
+`Authorization: Bearer <access-token>`。服务通过同一身份源的 Discovery 与 JWKS 校验 JWT Access
+Token 的签名、issuer、audience 和有效期，再按 `iss + sub` 映射到同一套用户、角色及仓库权限。
 
 ## 部署
 
@@ -90,6 +93,9 @@ REVIEW_CONSOLE_SSO_ISSUER_URL="https://id.example.com/realms/company"
 REVIEW_CONSOLE_SSO_CLIENT_ID="review-console"
 REVIEW_CONSOLE_SSO_CLIENT_SECRET="<client-secret>"
 REVIEW_CONSOLE_SSO_REDIRECT_URI="https://review.example.com/api/v1/auth/sso/callback"
+REVIEW_CONSOLE_OAUTH_BEARER_ENABLED="true"
+REVIEW_CONSOLE_OAUTH_AUDIENCE="review-console-api"
+REVIEW_CONSOLE_OAUTH_TOKEN_TYPE="at+jwt"
 REVIEW_CONSOLE_SSO_ADMIN_GROUP="review-console-admins"
 REVIEW_CONSOLE_COOKIE_SECURE="true"
 docker compose --profile review-console up --build

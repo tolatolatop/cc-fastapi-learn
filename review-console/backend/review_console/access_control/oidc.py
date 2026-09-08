@@ -52,10 +52,11 @@ class OidcClient:
         return payload
 
     def _metadata(self) -> dict[str, Any]:
-        issuer = self.settings.sso_issuer_url.rstrip("/")
-        metadata = self._get_json(f"{issuer}/.well-known/openid-configuration")
+        issuer = self.settings.sso_issuer_url
+        discovery_url = f"{issuer.rstrip('/')}/.well-known/openid-configuration"
+        metadata = self._get_json(discovery_url)
         discovered_issuer = metadata.get("issuer")
-        if not isinstance(discovered_issuer, str) or discovered_issuer.rstrip("/") != issuer:
+        if not isinstance(discovered_issuer, str) or discovered_issuer != issuer:
             raise OidcValidationError("OIDC issuer mismatch")
         for field in ("authorization_endpoint", "token_endpoint", "jwks_uri"):
             if not isinstance(metadata.get(field), str):
@@ -112,8 +113,15 @@ class OidcClient:
             raise OidcUnavailableError("OIDC token endpoint returned invalid JSON")
         return payload
 
-    def _validate_id_token(
-        self, metadata: dict[str, Any], token: str, *, nonce: str
+    def _validate_jwt(
+        self,
+        metadata: dict[str, Any],
+        token: str,
+        *,
+        audience: str,
+        nonce: str | None = None,
+        validate_authorized_party: bool = True,
+        required_token_type: str | None = None,
     ) -> dict[str, Any]:
         try:
             header = jwt.get_unverified_header(token)
@@ -125,6 +133,8 @@ class OidcClient:
             ]
             if algorithm not in allowed_algorithms:
                 raise OidcValidationError("OIDC signing algorithm is not allowed")
+            if required_token_type is not None and str(header.get("typ", "")).casefold() != required_token_type.casefold():
+                raise OidcValidationError("OAuth access token type mismatch")
             jwks = self._get_json(metadata["jwks_uri"])
             keys = jwt.PyJWKSet.from_dict(jwks).keys
             key_id = header.get("kid")
@@ -135,28 +145,40 @@ class OidcClient:
                 token,
                 key=matching[0].key,
                 algorithms=allowed_algorithms,
-                audience=self.settings.sso_client_id,
+                audience=audience,
                 issuer=metadata["issuer"],
                 options={"require": ["exp", "iat", "iss", "sub", "aud"]},
             )
         except OidcError:
             raise
         except (jwt.PyJWTError, KeyError, TypeError, ValueError) as exc:
-            raise OidcValidationError("OIDC ID token validation failed") from exc
-        if not secrets.compare_digest(str(claims.get("nonce", "")), nonce):
+            raise OidcValidationError("OIDC JWT validation failed") from exc
+        if nonce is not None and not secrets.compare_digest(
+            str(claims.get("nonce", "")), nonce
+        ):
             raise OidcValidationError("OIDC nonce mismatch")
-        audience = claims.get("aud")
+        token_audience = claims.get("aud")
         authorized_party = claims.get("azp")
-        if (
-            isinstance(audience, list)
-            and len(audience) > 1
-            and authorized_party != self.settings.sso_client_id
-        ) or (
-            authorized_party is not None
-            and authorized_party != self.settings.sso_client_id
+        if validate_authorized_party and (
+            (
+                isinstance(token_audience, list)
+                and len(token_audience) > 1
+                and authorized_party != audience
+            )
+            or (authorized_party is not None and authorized_party != audience)
         ):
             raise OidcValidationError("OIDC authorized party mismatch")
         return claims
+
+    def _validate_id_token(
+        self, metadata: dict[str, Any], token: str, *, nonce: str
+    ) -> dict[str, Any]:
+        return self._validate_jwt(
+            metadata,
+            token,
+            audience=self.settings.sso_client_id,
+            nonce=nonce,
+        )
 
     def authenticate(
         self, *, code: str, code_verifier: str, nonce: str
@@ -177,3 +199,13 @@ class OidcClient:
             subject = claims["sub"]
             claims = {**claims, **userinfo, "iss": issuer, "sub": subject}
         return claims
+
+    def validate_access_token(self, token: str) -> dict[str, Any]:
+        metadata = self._metadata()
+        return self._validate_jwt(
+            metadata,
+            token,
+            audience=self.settings.oauth_audience,
+            validate_authorized_party=False,
+            required_token_type=self.settings.oauth_token_type,
+        )

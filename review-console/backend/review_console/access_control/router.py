@@ -9,7 +9,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from review_console.access_control.dependencies import admin_user, current_user
+from review_console.access_control.dependencies import (
+    admin_user,
+    current_user,
+    get_oidc_client,
+)
 from review_console.access_control.oidc import (
     OidcClient,
     OidcUnavailableError,
@@ -45,10 +49,6 @@ SSO_FLOW_COOKIE = "review_console_sso_flow"
 SSO_FLOW_MINUTES = 10
 
 
-def get_oidc_client() -> OidcClient:
-    return OidcClient(get_settings())
-
-
 def _set_session_cookie(response: Response, user_id: str, settings: Settings) -> None:
     response.set_cookie(
         "review_console_session",
@@ -76,6 +76,7 @@ def auth_config() -> dict:
     return {
         "local_login_enabled": settings.local_login_enabled,
         "sso_enabled": settings.sso_enabled,
+        "oauth_bearer_enabled": settings.oauth_bearer_enabled,
         "sso_button_label": settings.sso_button_label,
     }
 
