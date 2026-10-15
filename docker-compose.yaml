@@ -62,6 +62,7 @@ services:
       GITHUB_WEBHOOK_QUEUE_NAME: "${GITHUB_WEBHOOK_QUEUE_NAME:-}"
     volumes:
       - app_data:/app/data
+      - claude_sessions:/home/ccagent/.claude
     restart: unless-stopped
 
   frontend:
@@ -126,4 +127,5 @@ services:
 
 volumes:
   app_data:
+  claude_sessions:
   review_console_data:

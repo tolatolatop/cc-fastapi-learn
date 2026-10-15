@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import uuid4
 
@@ -20,7 +20,7 @@ from sqlalchemy.types import JSON
 
 
 def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class Base(DeclarativeBase):
@@ -30,10 +30,22 @@ class Base(DeclarativeBase):
 class TaskStatus(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
+    PAUSING = "pausing"
+    PAUSED = "paused"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELLED = "cancelled"
     ABANDONED = "abandoned"
+
+
+ACTIVE_TASK_STATUSES = (TaskStatus.QUEUED, TaskStatus.RUNNING, TaskStatus.PAUSING, TaskStatus.PAUSED)
+
+
+class TaskQueueControl(Base):
+    __tablename__ = "task_queue_control"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class WorkflowRunStatus(StrEnum):
@@ -117,6 +129,10 @@ class AgentTask(Base):
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
     worker_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     session_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    execution_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resume_pending: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    running_remaining_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     abandoned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     abandoned_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)

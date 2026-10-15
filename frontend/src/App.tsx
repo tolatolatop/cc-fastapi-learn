@@ -14,6 +14,8 @@ import {
   Layers3,
   LibraryBig,
   Menu,
+  Pause,
+  Play,
   Plus,
   Radio,
   RefreshCw,
@@ -30,12 +32,14 @@ import type { AuthConfig, AuthUser } from './api'
 import Pagination from './Pagination'
 import RepositoryPage from './RepositoryPage'
 import ReviewWorkspace from './ReviewWorkspace'
-import type { CreateTaskPayload, QueueItem, TaskContext, TaskItem, TaskLog, TaskStatus } from './types'
+import type { CreateTaskPayload, QueueItem, TaskContext, TaskControl, TaskItem, TaskLog, TaskStatus } from './types'
 import WebhookPage from './WebhookPage'
 
 const STATUS_META: Record<TaskStatus, { label: string; short: string }> = {
   queued: { label: '等待中', short: '等待' },
   running: { label: '执行中', short: '执行' },
+  pausing: { label: '暂停中', short: '暂停中' },
+  paused: { label: '暂停', short: '暂停' },
   succeeded: { label: '已完成', short: '完成' },
   failed: { label: '失败', short: '失败' },
   cancelled: { label: '已取消', short: '取消' },
@@ -46,6 +50,8 @@ const FILTERS: Array<{ value: TaskStatus | 'all'; label: string }> = [
   { value: 'all', label: '全部任务' },
   { value: 'running', label: '执行中' },
   { value: 'queued', label: '等待中' },
+  { value: 'pausing', label: '暂停中' },
+  { value: 'paused', label: '暂停' },
   { value: 'succeeded', label: '已完成' },
   { value: 'failed', label: '异常' },
 ]
@@ -362,7 +368,7 @@ interface DetailDrawerProps {
 function DetailDrawer({ task, logs, context, loading, now, onClose, onCancel, onRetry, onRefresh, onNotify, retrying }: DetailDrawerProps) {
   const [tab, setTab] = useState<'overview' | 'context' | 'logs'>('overview')
   const [promptExpanded, setPromptExpanded] = useState(false)
-  const canCancel = task.status === 'running' || task.status === 'queued'
+  const canCancel = ['running', 'queued', 'pausing', 'paused'].includes(task.status)
   const canRetry = ['succeeded', 'failed', 'cancelled', 'abandoned'].includes(task.status)
   const promptText = task.prompt || '未提供 Prompt'
   const promptIsLong = task.prompt.length > 180 || task.prompt.split('\n').length > 5
@@ -558,7 +564,10 @@ function App() {
   })
   const [tasks, setTasks] = useState<TaskItem[]>([])
   const [total, setTotal] = useState(0)
-  const [counts, setCounts] = useState({ all: 0, queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0, abandoned: 0 })
+  const [counts, setCounts] = useState({ all: 0, queued: 0, running: 0, pausing: 0, paused: 0, succeeded: 0, failed: 0, cancelled: 0, abandoned: 0 })
+  const [taskControl, setTaskControl] = useState<TaskControl | null>(null)
+  const [controlBusy, setControlBusy] = useState(false)
+  const [controlError, setControlError] = useState('')
   const [queueCounts, setQueueCounts] = useState<Record<string, { total: number; queued: number; running: number }>>({})
   const [queues, setQueues] = useState<QueueItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -592,7 +601,7 @@ function App() {
         : statusFilter === 'failed'
           ? ['failed', 'abandoned']
           : [statusFilter]
-      const [taskResponse, queueResponse] = await Promise.all([
+      const [taskResponse, queueResponse, controlResponse] = await Promise.all([
         api.listTasks({
           offset: (taskPage - 1) * taskPageSize,
           limit: taskPageSize,
@@ -601,12 +610,14 @@ function App() {
           query: debouncedSearch.trim() || undefined,
         }),
         api.listQueues(),
+        api.getTaskControl(),
       ])
       setTasks(taskResponse.items)
       setTotal(taskResponse.total)
       setCounts({ all: taskResponse.summary.total, ...taskResponse.summary.status_counts })
       setQueueCounts(Object.fromEntries(taskResponse.summary.queues.map((queue) => [queue.name, queue])))
       setQueues(queueResponse.items)
+      setTaskControl(controlResponse)
       setError('')
       setApiOnline(true)
       setSelectedTask((current) => current ? taskResponse.items.find((item) => item.id === current.id) || current : null)
@@ -619,6 +630,19 @@ function App() {
       setRefreshing(false)
     }
   }, [debouncedSearch, queueFilter, statusFilter, taskPage, taskPageSize])
+
+  async function changeTaskControl(action: 'pause' | 'resume') {
+    setControlBusy(true)
+    setControlError('')
+    try {
+      setTaskControl(await (action === 'pause' ? api.pauseAllTasks() : api.resumeAllTasks()))
+      await loadDashboard(true)
+    } catch (requestError) {
+      setControlError(messageFrom(requestError))
+    } finally {
+      setControlBusy(false)
+    }
+  }
 
   const loadDetail = useCallback(async (id: string, showLoader = true) => {
     if (showLoader) setDetailLoading(true)
@@ -823,6 +847,18 @@ function App() {
             </div>
             <Button variant="primary" className="mobile-create" onClick={() => setCreateOpen(true)}><Plus size={18} />新建任务</Button>
           </section>
+
+          <section className="task-control-bar" aria-label="全部任务控制">
+            <div role="status" aria-live="polite">
+              <strong>{taskControl?.state === 'pausing' ? '暂停中' : taskControl?.state === 'paused' ? '暂停' : '任务调度'}</strong>
+              {taskControl && (taskControl.paused_count > 0 || taskControl.pausing_count > 0) && <span>{taskControl.paused_count} 个暂停 · {taskControl.pausing_count} 个暂停中</span>}
+            </div>
+            <div className="d-flex gap-2">
+              <Button variant="outline-secondary" disabled={!taskControl || taskControl.paused || controlBusy} onClick={() => changeTaskControl('pause')}><Pause size={16} />全部暂停</Button>
+              <Button variant="outline-primary" disabled={!taskControl || controlBusy || taskControl.pausing_count > 0 || (!taskControl.paused && !taskControl.paused_count)} onClick={() => changeTaskControl('resume')}><Play size={16} />全部恢复</Button>
+            </div>
+          </section>
+          {controlError && <div className="alert alert-danger" role="alert">{controlError}</div>}
 
           <section className="queue-rail" id="queue-rail" aria-label="队列实时状态">
             <div className="rail-summary">

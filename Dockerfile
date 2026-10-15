@@ -22,7 +22,7 @@ COPY docker-entrypoint.sh /usr/local/bin/cc-fastapi-entrypoint
 COPY docker-admin-entrypoint.sh /usr/local/bin/cc-fastapi-admin
 
 RUN chmod +x /usr/local/bin/cc-fastapi-entrypoint /usr/local/bin/cc-fastapi-admin \
-    && mkdir -p /app/data \
+    && mkdir -p /app/data /home/ccagent/.claude \
     && chown -R ccagent:ccagent /app /home/ccagent
 
 EXPOSE 8000

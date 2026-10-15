@@ -6,6 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from cc_fastapi.db.models import (
+    ACTIVE_TASK_STATUSES,
     AgentTask,
     AgentTaskRetryLink,
     TaskStatus,
@@ -28,7 +29,6 @@ from cc_fastapi.workflows.base import (
 )
 from cc_fastapi.workflows.correlations import change_request_correlation
 from cc_fastapi.workflows.registry import WorkflowRegistry
-
 
 logger = logging.getLogger(__name__)
 
@@ -217,7 +217,7 @@ class WorkflowEngine:
                     .where(
                         WorkflowTaskLink.workflow_run_id == old_run.id,
                         WorkflowTaskLink.is_active.is_(True),
-                        AgentTask.status.in_([TaskStatus.QUEUED, TaskStatus.RUNNING]),
+                        AgentTask.status.in_(ACTIVE_TASK_STATUSES),
                     )
                     .order_by(WorkflowTaskLink.ordinal.asc())
                     .with_for_update()
@@ -263,6 +263,8 @@ class WorkflowEngine:
         return superseded
 
     def start(self, db: Session, event: WorkflowEvent) -> WorkflowExecution:
+        # Match pause/resume lock order before acquiring workflow/task rows.
+        self.queue._lock_control(db)
         workflow = self.registry.resolve(event)
         run = self._new_run(event, workflow.name, workflow.version)
         db.add(run)
@@ -360,8 +362,9 @@ class WorkflowEngine:
 
     def handle_task_terminal(self, db: Session, task_id: str) -> list[WorkflowRun]:
         self._begin_sqlite_write_transaction(db)
+        self.queue._lock_control(db)
         task = db.get(AgentTask, task_id)
-        if task is None or task.status in {TaskStatus.QUEUED, TaskStatus.RUNNING}:
+        if task is None or task.status in ACTIVE_TASK_STATUSES:
             db.rollback()
             return []
 
@@ -454,8 +457,8 @@ class WorkflowEngine:
                         .with_for_update()
                     )
                 )
-                active = any(item.status in {TaskStatus.QUEUED, TaskStatus.RUNNING} for item in linked_tasks)
-                failed = any(item.status != TaskStatus.SUCCEEDED for item in linked_tasks if item.status not in {TaskStatus.QUEUED, TaskStatus.RUNNING})
+                active = any(item.status in ACTIVE_TASK_STATUSES for item in linked_tasks)
+                failed = any(item.status != TaskStatus.SUCCEEDED for item in linked_tasks if item.status not in ACTIVE_TASK_STATUSES)
                 completed_step_names = set(
                     db.scalars(
                         select(WorkflowStepRun.step_name).where(
@@ -465,7 +468,7 @@ class WorkflowEngine:
                     )
                 )
                 all_terminal_tasks_processed = all(
-                    item.status in {TaskStatus.QUEUED, TaskStatus.RUNNING}
+                    item.status in ACTIVE_TASK_STATUSES
                     or f"after_task:{item.id}" in completed_step_names
                     for item in linked_tasks
                 )
@@ -504,7 +507,7 @@ class WorkflowEngine:
                 .where(
                     WorkflowRun.status == WorkflowRunStatus.RUNNING,
                     WorkflowTaskLink.is_active.is_(True),
-                    AgentTask.status.not_in([TaskStatus.QUEUED, TaskStatus.RUNNING]),
+                    AgentTask.status.not_in(ACTIVE_TASK_STATUSES),
                 )
                 .distinct()
             )
@@ -517,6 +520,7 @@ class WorkflowEngine:
     def retry_task(self, db: Session, original_task_id: str) -> AgentTask | None:
         """Atomically claim and replace one task retry attempt."""
         self._begin_sqlite_write_transaction(db)
+        self.queue._lock_control(db)
         try:
             original_link = db.scalar(
                 select(WorkflowTaskLink)

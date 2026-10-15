@@ -2,11 +2,20 @@ from pathlib import Path
 
 import pytest
 from claude_agent_sdk._errors import ProcessError
-from claude_agent_sdk.types import AssistantMessage, ResultMessage, SystemMessage, TextBlock
+from claude_agent_sdk.types import (
+    AssistantMessage,
+    ResultMessage,
+    SystemMessage,
+    TextBlock,
+)
 
 from cc_fastapi.core.config import get_settings
 from cc_fastapi.services import claude_client as claude_client_module
-from cc_fastapi.services.claude_client import AgentTaskCancelledError, ClaudeClient, ClaudeExecutionError
+from cc_fastapi.services.claude_client import (
+    AgentTaskCancelledError,
+    ClaudeClient,
+    ClaudeExecutionError,
+)
 
 
 def test_claude_client_uses_agent_options(monkeypatch):
@@ -277,3 +286,173 @@ def test_claude_client_stops_stream_when_task_is_cancelled(monkeypatch):
             unattended=True,
             should_cancel=lambda: True,
         )
+
+
+@pytest.mark.parametrize('interrupt_returns_result', [True, False])
+def test_pause_interrupts_silent_agent_and_closes_before_ack(monkeypatch, interrupt_returns_result):
+    import anyio
+
+    from cc_fastapi.services.claude_client import AgentTaskPausedError
+
+    monkeypatch.setenv('ANTHROPIC_API_KEY', 'test-key')
+    monkeypatch.setattr(claude_client_module, 'CONTROL_POLL_SECONDS', 0.01)
+    monkeypatch.setattr(claude_client_module, 'INTERRUPT_GRACE_SECONDS', 0.02)
+    get_settings.cache_clear()
+    events = []
+
+    class FakeClient:
+        def __init__(self, *, options):
+            self.interrupted = anyio.Event()
+
+        async def connect(self):
+            pass
+
+        async def disconnect(self):
+            events.append('closed')
+
+        async def query(self, prompt):
+            events.append('started')
+
+        async def receive_response(self):
+            yield SystemMessage(subtype='init', data={'session_id': 'saved-session'})
+            await self.interrupted.wait()
+            if not interrupt_returns_result:
+                await anyio.sleep_forever()
+            yield ResultMessage(
+                subtype='error_during_execution', duration_ms=1, duration_api_ms=1,
+                is_error=True, num_turns=1, session_id='saved-session',
+                usage={}, result='interrupted',
+            )
+
+        async def interrupt(self):
+            events.append('interrupt')
+            self.interrupted.set()
+
+    monkeypatch.setattr(claude_client_module, 'ClaudeSDKClient', FakeClient)
+    session_ids = []
+    with pytest.raises(AgentTaskPausedError):
+        ClaudeClient().run_agent_task(
+            prompt='do work', model='test', metadata=None,
+            should_pause=lambda: True, on_session_id=session_ids.append,
+        )
+    assert events == ['started', 'interrupt', 'closed']
+    assert session_ids == ['saved-session']
+
+
+def test_resume_passes_exact_session_without_replaying_original_prompt(monkeypatch):
+    monkeypatch.setenv('ANTHROPIC_API_KEY', 'test-key')
+    get_settings.cache_clear()
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, *, options):
+            captured['options'] = options
+
+        async def connect(self):
+            pass
+
+        async def disconnect(self):
+            captured['closed'] = True
+
+        async def query(self, prompt):
+            captured['prompt'] = prompt
+
+        async def receive_response(self):
+            yield ResultMessage(
+                subtype='success', duration_ms=1, duration_api_ms=1, is_error=False,
+                num_turns=1, session_id='saved-session', usage={}, result='done',
+            )
+
+    monkeypatch.setattr(claude_client_module, 'ClaudeSDKClient', FakeClient)
+    result = ClaudeClient().run_agent_task(
+        prompt='original instructions', model='test', metadata=None,
+        should_pause=lambda: False, resume_session_id='saved-session',
+        claude_agent_options={'fork_session': True, 'continue_conversation': True},
+    )
+    assert captured['options'].resume == 'saved-session'
+    assert not captured['options'].fork_session
+    assert not captured['options'].continue_conversation
+    assert captured['prompt'] != 'original instructions'
+    assert captured['closed']
+    assert result['session_id'] == 'saved-session'
+
+
+@pytest.mark.parametrize('pause', [False, True])
+def test_real_sdk_control_protocol_resume_and_interrupt(monkeypatch, pause):
+    """Exercise the installed SDK with a local transport, without an API call."""
+    import json
+
+    import anyio
+    from claude_agent_sdk import ClaudeSDKClient
+
+    from cc_fastapi.services.claude_client import AgentTaskPausedError
+
+    monkeypatch.setenv('ANTHROPIC_API_KEY', 'test-key')
+    monkeypatch.setattr(claude_client_module, 'CONTROL_POLL_SECONDS', 0.01)
+    get_settings.cache_clear()
+    events = []
+
+    class Transport:
+        def __init__(self):
+            self.sender, self.receiver = anyio.create_memory_object_stream(20)
+
+        async def connect(self):
+            events.append('connected')
+
+        async def write(self, data):
+            msg = json.loads(data)
+            if msg['type'] == 'control_request':
+                subtype = msg['request']['subtype']
+                events.append(subtype)
+                await self.sender.send({
+                    'type': 'control_response', 'response': {
+                        'subtype': 'success', 'request_id': msg['request_id'], 'response': {},
+                    },
+                })
+                if subtype == 'interrupt':
+                    await self.send_result()
+            elif msg['type'] == 'user':
+                await self.sender.send({
+                    'type': 'system', 'subtype': 'init', 'session_id': 'saved-session',
+                })
+                if not pause:
+                    await self.send_result()
+
+        async def send_result(self):
+            await self.sender.send({
+                'type': 'result', 'subtype': 'success', 'duration_ms': 1,
+                'duration_api_ms': 1, 'is_error': False, 'num_turns': 1,
+                'session_id': 'saved-session', 'usage': {}, 'result': 'done',
+            })
+
+        async def read_messages(self):
+            async for msg in self.receiver:
+                yield msg
+
+        async def close(self):
+            events.append('closed')
+            await self.sender.aclose()
+
+        async def end_input(self):
+            pass
+
+        def is_ready(self):
+            return True
+
+    def make_client(*, options):
+        assert options.resume == 'saved-session'
+        return ClaudeSDKClient(options=options, transport=Transport())
+
+    monkeypatch.setattr(claude_client_module, 'ClaudeSDKClient', make_client)
+    params = {
+        'prompt': 'original task', 'model': 'test', 'metadata': None,
+        'should_pause': lambda: pause, 'resume_session_id': 'saved-session',
+    }
+    if pause:
+        with pytest.raises(AgentTaskPausedError):
+            ClaudeClient().run_agent_task(**params)
+        assert 'interrupt' in events
+    else:
+        assert ClaudeClient().run_agent_task(**params)['output_text'] == 'done'
+    assert 'initialize' in events
+    assert events[-1] == 'closed'

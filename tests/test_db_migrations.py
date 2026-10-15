@@ -108,3 +108,21 @@ def test_apply_schema_migrations_adds_human_decision_fields_and_audit_dimension(
             "SELECT decision_status FROM review_issues WHERE id = 'issue-1'"
         ).scalar_one()
     assert status_after_restart == "UNVERIFIED"
+
+
+def test_pause_schema_migration_preserves_legacy_tasks_and_is_repeatable():
+    engine = create_engine('sqlite+pysqlite:///:memory:')
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            'CREATE TABLE agent_tasks (id VARCHAR(36) PRIMARY KEY, status VARCHAR(32))'
+        )
+        connection.exec_driver_sql("INSERT INTO agent_tasks VALUES ('legacy', 'QUEUED')")
+    apply_schema_migrations(engine)
+    apply_schema_migrations(engine)
+    assert 'task_queue_control' in inspect(engine).get_table_names()
+    with engine.connect() as connection:
+        row = connection.exec_driver_sql(
+            'SELECT status, resume_pending, paused_at, execution_token, running_remaining_seconds '
+            "FROM agent_tasks WHERE id = 'legacy'"
+        ).one()
+    assert row == ('QUEUED', 0, None, None, None)

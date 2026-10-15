@@ -21,6 +21,7 @@ import type {
   ReviewIssueStatistics,
   ReviewIssueVerificationStatus,
   TaskContext,
+  TaskControl,
   TaskItem,
   TaskListResponse,
   TaskLogListResponse,
@@ -167,6 +168,9 @@ export const api = {
     ['q', query],
   ])),
   listQueues: () => request<QueueListResponse>('/v1/agent-tasks/queues/available'),
+  getTaskControl: () => request<TaskControl>('/v1/agent-tasks/control/status'),
+  pauseAllTasks: () => request<TaskControl>('/v1/agent-tasks/control/pause', { method: 'POST' }),
+  resumeAllTasks: () => request<TaskControl>('/v1/agent-tasks/control/resume', { method: 'POST' }),
   listWebhooks: ({ offset = 0, limit = 20, eventType, provider, query }: WebhookListOptions = {}) => request<WebhookTriggerListResponse>(queryPath('/v1/webhooks', [
     ['offset', offset],
     ['limit', limit],

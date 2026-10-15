@@ -37,6 +37,8 @@ import type {
 const TASK_STATUS_META: Record<TaskStatus, { label: string; short: string }> = {
   queued: { label: '排队中', short: '等待' },
   running: { label: '执行中', short: '执行' },
+  pausing: { label: '暂停中', short: '暂停中' },
+  paused: { label: '暂停', short: '暂停' },
   succeeded: { label: '已成功', short: '成功' },
   failed: { label: '失败', short: '失败' },
   cancelled: { label: '已取消', short: '取消' },

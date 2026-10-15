@@ -25,6 +25,8 @@ import type { TaskStatus, WebhookTrigger } from './types'
 const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
   queued: '等待中',
   running: '执行中',
+  pausing: '暂停中',
+  paused: '暂停',
   succeeded: '已完成',
   failed: '失败',
   cancelled: '已取消',

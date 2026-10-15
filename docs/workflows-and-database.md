@@ -199,12 +199,21 @@ PostgreSQL/MySQL 使用 `SELECT ... FOR UPDATE` 行锁。SQLite 不支持行级 
 | --- | --- |
 | `queued` | 等待 Worker 领取 |
 | `running` | Worker 已领取并正在执行 |
+| `pausing` | 已请求暂停，等待 Agent 中断并关闭本轮执行 |
+| `paused` | 暂停，等待恢复；属于非终态 |
 | `succeeded` | 成功完成并写入结果 |
 | `failed` | 已耗尽自动重试次数 |
 | `cancelled` | 用户或 Workflow 主动取消 |
 | `abandoned` | 队列超时、运行超时、服务关闭或启动恢复时中止 |
 
 自动重试是同一 Task 从 `running` 回到 `queued`；它被 Worker 再次领取时增加 `attempt`。手动 Retry 会在一个事务中创建全新的 Task、写入 Retry Link、替换 Workflow Link 并重开 Workflow。
+
+全局暂停由 `task_queue_control` 单例记录持久化。入队、领取、暂停和恢复通过同一控制行
+串行化，避免暂停后仍领取新任务。`paused_at` 和 `running_remaining_seconds` 用于排除
+暂停时长；`resume_pending` 标记需要续接会话的任务。恢复沿用原 Task 和 Workflow Link，
+不增加 `attempt`。每轮领取生成独立的 `execution_token`，旧轮次不能覆盖新轮次的状态、
+会话或输出。`pausing` 和 `paused` 不触发 Workflow 的终态处理，仍可被取消或被新的
+PR/MR 事件替代。暂停状态下重启不会将这些任务标记为 `abandoned`。
 
 ### Workflow Run 状态
 

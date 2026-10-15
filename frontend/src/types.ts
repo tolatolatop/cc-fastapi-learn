@@ -1,4 +1,11 @@
-export type TaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'abandoned'
+export type TaskStatus = 'queued' | 'running' | 'pausing' | 'paused' | 'succeeded' | 'failed' | 'cancelled' | 'abandoned'
+
+export interface TaskControl {
+  state: 'active' | 'pausing' | 'paused'
+  paused: boolean
+  pausing_count: number
+  paused_count: number
+}
 
 export interface TaskItem {
   id: string
@@ -11,6 +18,7 @@ export interface TaskItem {
   attempt: number
   max_attempts: number
   session_id: string | null
+  paused_at: string | null
   agent_mode: boolean
   unattended: boolean
   created_at: string

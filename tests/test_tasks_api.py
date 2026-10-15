@@ -1,6 +1,6 @@
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -97,6 +97,8 @@ def test_list_tasks_supports_pagination_filters_and_global_summary():
         "status_counts": {
             "queued": 2,
             "running": 0,
+            "pausing": 0,
+            "paused": 0,
             "succeeded": 0,
             "failed": 0,
             "cancelled": 1,
@@ -220,3 +222,30 @@ def test_create_task_with_absolute_cwd_returns_400():
     )
     assert response.status_code == 400
     assert "cwd must be a relative path" in response.json()["detail"]
+
+
+def test_pause_resume_endpoints_keep_task_ids_and_new_tasks_paused():
+    client = build_client()
+    task_id = client.post('/v1/agent-tasks', json={'prompt': 'first'}).json()['task_id']
+    assert client.get('/v1/agent-tasks/control/status').json()['state'] == 'active'
+    paused = client.post('/v1/agent-tasks/control/pause')
+    assert paused.status_code == 200
+    assert paused.json()['state'] == 'paused'
+    assert paused.json()['paused_count'] == 1
+    second = client.post('/v1/agent-tasks', json={'prompt': 'second'}).json()
+    assert second['status'] == 'paused'
+    filtered = client.get('/v1/agent-tasks', params={'status': 'paused'}).json()
+    assert filtered['total'] == 2
+    assert filtered['summary']['status_counts']['paused'] == 2
+    assert client.get(f'/v1/agent-tasks/{task_id}').json()['paused_at']
+    assert client.post('/v1/agent-tasks/control/resume').json()['state'] == 'active'
+    assert client.get(f'/v1/agent-tasks/{task_id}').json()['status'] == 'queued'
+    assert client.post('/v1/agent-tasks/control/resume').status_code == 200
+
+
+def test_pause_controls_require_api_token(monkeypatch):
+    monkeypatch.setenv('API_TOKEN', 'synthetic-test-token')
+    get_settings.cache_clear()
+    client = build_client()
+    for method, path in [('get', 'status'), ('post', 'pause'), ('post', 'resume')]:
+        assert getattr(client, method)(f'/v1/agent-tasks/control/{path}').status_code == 401

@@ -7504,3 +7504,23 @@ main {
     flex-direction: column;
   }
 }
+
+.task-control-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.task-control-bar > div:first-child {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.task-control-bar span { color: var(--bs-secondary-color); }
+.status-paused { color: var(--bs-secondary-text-emphasis); background: var(--bs-secondary-bg-subtle); }
+.status-pausing { color: var(--bs-warning-text-emphasis); background: var(--bs-warning-bg-subtle); }

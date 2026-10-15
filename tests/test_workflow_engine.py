@@ -9,9 +9,9 @@ from cc_fastapi.db.models import (
     AgentTaskRetryLink,
     Base,
     TaskStatus,
+    WorkflowCorrelation,
     WorkflowRun,
     WorkflowRunStatus,
-    WorkflowCorrelation,
     WorkflowStepRun,
     WorkflowStepStatus,
     WorkflowTaskLink,
@@ -308,3 +308,30 @@ def test_concurrent_manual_retry_creates_only_one_replacement(tmp_path):
         assert db.scalar(select(func.count()).select_from(AgentTaskRetryLink)) == 1
         assert db.get(AgentTask, replacement_ids[0]) is not None
         assert db.scalar(select(func.count()).select_from(AgentTask)) == 3
+
+
+def test_paused_tasks_remain_nonterminal_and_resume_original_workflow():
+    db = make_db()
+    engine = WorkflowEngine(WorkflowRegistry([MultiTaskWorkflow()]))
+    execution = engine.start(
+        db, WorkflowEvent(provider='gitlab', event_type='merge_completed', payload={'ref': 'main'}),
+    )
+    db.commit()
+    ids = [task.id for task in execution.tasks]
+    engine.queue.pause_all(db)
+    assert engine.reconcile_terminal_tasks(db) == 0
+    for task_id in ids:
+        assert engine.handle_task_terminal(db, task_id) == []
+    db.refresh(execution.run)
+    assert execution.run.status == WorkflowRunStatus.RUNNING
+    assert 'completed_tasks' not in execution.run.context_json
+    engine.queue.resume_all(db)
+    for task_id in ids:
+        task = db.get(AgentTask, task_id)
+        task.status = TaskStatus.SUCCEEDED
+        task.result = {'ok': True}
+        db.commit()
+        engine.handle_task_terminal(db, task_id)
+    db.refresh(execution.run)
+    assert execution.run.status == WorkflowRunStatus.SUCCEEDED
+    assert set(execution.run.context_json['completed_tasks']) == set(ids)

@@ -1,7 +1,9 @@
 import logging
 from copy import deepcopy
-from datetime import timedelta
+from datetime import UTC, timedelta
+from math import ceil
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import Select, String, cast, func, or_, select, update
 from sqlalchemy.orm import Session
@@ -9,7 +11,15 @@ from sqlalchemy.orm import Session
 from cc_fastapi.core.config import get_settings
 from cc_fastapi.core.internal_tasks import REVIEW_ISSUE_IMPORT_QUEUE_NAME
 from cc_fastapi.core.queue_config import get_queue_config
-from cc_fastapi.db.models import AgentTask, AgentTaskContext, AgentTaskLog, TaskStatus, utc_now
+from cc_fastapi.db.models import (
+    ACTIVE_TASK_STATUSES,
+    AgentTask,
+    AgentTaskContext,
+    AgentTaskLog,
+    TaskQueueControl,
+    TaskStatus,
+    utc_now,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -20,9 +30,159 @@ class QueueNotFoundError(ValueError):
         self.queue_name = queue_name
 
 
+class TaskControlConflict(ValueError):
+    pass
+
+
 class TaskQueueService:
     def __init__(self) -> None:
         self.settings = get_settings()
+
+    def _lock_control(self, db: Session) -> TaskQueueControl:
+        """Serialize enqueue/claim/pause/resume, including across processes.
+
+        The upsert acquires SQLite's write lock without rolling back a caller's
+        workflow transaction. Row locking serves the same purpose on SQL servers.
+        """
+        dialect = db.get_bind().dialect.name
+        if dialect == "sqlite":
+            from sqlalchemy.dialects.sqlite import insert
+            statement = insert(TaskQueueControl).values(id=1, paused=False).on_conflict_do_nothing()
+        elif dialect == "postgresql":
+            from sqlalchemy.dialects.postgresql import insert
+            statement = insert(TaskQueueControl).values(id=1, paused=False).on_conflict_do_nothing()
+        else:
+            from sqlalchemy.dialects.mysql import insert
+            statement = insert(TaskQueueControl).values(id=1, paused=False).on_duplicate_key_update(id=1)
+        db.execute(statement)
+        return db.scalars(
+            select(TaskQueueControl).where(TaskQueueControl.id == 1).with_for_update()
+            .execution_options(populate_existing=True)
+        ).one()
+
+    def control_status(self, db: Session) -> dict[str, Any]:
+        paused = bool(db.scalar(select(TaskQueueControl.paused).where(TaskQueueControl.id == 1)))
+        counts = dict(db.execute(
+            select(AgentTask.status, func.count()).where(
+                AgentTask.status.in_([TaskStatus.PAUSING, TaskStatus.PAUSED]),
+            ).group_by(AgentTask.status)
+        ).all())
+        pausing_count = counts.get(TaskStatus.PAUSING, 0)
+        if paused:
+            pausing_count += db.scalar(select(func.count()).select_from(AgentTask).where(
+                self._stopping_terminal_tasks(),
+            )) or 0
+        return {
+            "state": "pausing" if pausing_count else "paused" if paused else "active",
+            "paused": paused,
+            "pausing_count": pausing_count,
+            "paused_count": counts.get(TaskStatus.PAUSED, 0),
+        }
+
+    def pause_all(self, db: Session) -> dict[str, Any]:
+        control = self._lock_control(db)
+        control.paused = True
+        now = utc_now()
+        tasks = list(db.scalars(select(AgentTask).where(
+            AgentTask.status.in_([TaskStatus.QUEUED, TaskStatus.RUNNING]),
+        ).order_by(AgentTask.id).with_for_update().execution_options(populate_existing=True)))
+        for task in tasks:
+            running = task.status == TaskStatus.RUNNING
+            task.status = TaskStatus.PAUSING if running else TaskStatus.PAUSED
+            task.paused_at = now
+            if running:
+                task.resume_pending = True
+                if task.running_expire_at:
+                    task.running_remaining_seconds = max(0, ceil(
+                        (task.running_expire_at.replace(tzinfo=UTC) - now).total_seconds()
+                    ))
+            self.log_event(db, task.id, "INFO", task.status.value, "global pause requested", None)
+        db.commit()
+        return self.control_status(db)
+
+    def resume_all(self, db: Session) -> dict[str, Any]:
+        control = self._lock_control(db)
+        if db.scalar(select(AgentTask.id).where(or_(
+            AgentTask.status == TaskStatus.PAUSING, self._stopping_terminal_tasks(),
+        )).limit(1)):
+            db.rollback()
+            raise TaskControlConflict("仍有任务暂停中，请等待停止完成后再恢复")
+        tasks = list(db.scalars(select(AgentTask).where(
+            AgentTask.status == TaskStatus.PAUSED,
+        ).order_by(AgentTask.id).with_for_update().execution_options(populate_existing=True)))
+        missing = [task.id for task in tasks if task.resume_pending and not task.session_id]
+        if missing:
+            db.rollback()
+            raise TaskControlConflict(f"任务缺少可恢复的会话，保持暂停：{', '.join(missing)}")
+        now = utc_now()
+        for task in tasks:
+            if task.paused_at:
+                elapsed = now - task.paused_at.replace(tzinfo=UTC)
+                task.queue_expire_at = task.queue_expire_at.replace(tzinfo=UTC) + elapsed
+            # A running task's old enqueue deadline may have elapsed while it ran.
+            if task.resume_pending:
+                task.queue_expire_at = now + timedelta(hours=self.settings.queue_ttl_hours)
+            task.status = TaskStatus.QUEUED
+            task.paused_at = None
+            task.worker_id = None
+            task.error_message = None
+            self.log_event(db, task.id, "INFO", "resumed", "global pause released", None)
+        control.paused = False
+        db.commit()
+        return self.control_status(db)
+
+    @staticmethod
+    def _stopping_terminal_tasks():
+        # Cancellation can win the state transition before the SDK has stopped.
+        return AgentTask.status.in_([TaskStatus.CANCELLED, TaskStatus.ABANDONED]) & (
+            AgentTask.execution_token.is_not(None)
+        )
+
+    def release_execution(self, db: Session, task_id: str, execution_token: str | None) -> None:
+        db.rollback()
+        db.execute(update(AgentTask).where(
+            AgentTask.id == task_id, AgentTask.execution_token == execution_token,
+            AgentTask.status.not_in(ACTIVE_TASK_STATUSES),
+        ).values(execution_token=None))
+        db.commit()
+
+    def is_task_pausing(self, db: Session, task_id: str) -> bool:
+        # End read transactions so PostgreSQL/MySQL polling sees new requests.
+        db.rollback()
+        return db.scalar(select(AgentTask.status).where(AgentTask.id == task_id)) == TaskStatus.PAUSING
+
+    def mark_paused(
+        self, db: Session, task_id: str, execution_token: str | None,
+        *, error: str | None = None, not_started: bool = False, stopped: bool = True,
+    ) -> bool:
+        self._lock_control(db)
+        task = db.scalars(select(AgentTask).where(
+            AgentTask.id == task_id, AgentTask.execution_token == execution_token,
+            AgentTask.status.in_([TaskStatus.PAUSING, TaskStatus.RUNNING]),
+        ).with_for_update().execution_options(populate_existing=True)).first()
+        if task is None:
+            db.rollback()
+            return False
+        now = utc_now()
+        if not task.paused_at:
+            task.paused_at = now
+            if task.running_expire_at:
+                task.running_remaining_seconds = max(0, ceil(
+                    (task.running_expire_at.replace(tzinfo=UTC) - now).total_seconds()
+                ))
+        if not_started and not task.session_id:
+            task.resume_pending = False
+            task.attempt = max(0, task.attempt - 1)
+        task.status = TaskStatus.PAUSED if stopped else TaskStatus.PAUSING
+        if stopped:
+            task.worker_id = None
+            task.execution_token = None
+        else:
+            task.resume_pending = True
+        task.error_message = error
+        self.log_event(db, task.id, "ERROR" if error else "INFO", task.status.value, error or "task paused", None)
+        db.commit()
+        return True
 
     @staticmethod
     def _begin_sqlite_write_transaction(db: Session) -> None:
@@ -55,8 +215,10 @@ class TaskQueueService:
             resolved_model = queue_default_model.strip()
         if resolved_model is None:
             resolved_model = self.settings.anthropic_model
+        control = self._lock_control(db)
         task = AgentTask(
-            status=TaskStatus.QUEUED,
+            status=TaskStatus.PAUSED if control.paused else TaskStatus.QUEUED,
+            paused_at=now if control.paused else None,
             queue_name=target_queue,
             priority=priority,
             payload={
@@ -74,7 +236,8 @@ class TaskQueueService:
         db.add(task)
         db.flush()
         self.log_event(
-            db, task.id, "INFO", "queued", "task queued", {"priority": priority, "queue_name": target_queue}
+            db, task.id, "INFO", task.status.value, "task enqueued",
+            {"priority": priority, "queue_name": target_queue},
         )
         if commit:
             db.commit()
@@ -111,7 +274,7 @@ class TaskQueueService:
         if task is None:
             return True
         db.refresh(task, attribute_names=["status"])
-        return task.status == TaskStatus.CANCELLED
+        return task.status in (TaskStatus.CANCELLED, TaskStatus.ABANDONED)
 
     def retry_task(self, db: Session, task_id: str, *, commit: bool = True) -> AgentTask | None:
         original_task = self.get_task(db, task_id)
@@ -136,12 +299,22 @@ class TaskQueueService:
     def get_task_context(self, db: Session, task_id: str) -> AgentTaskContext | None:
         return db.get(AgentTaskContext, task_id)
 
-    def set_task_session_id(self, db: Session, task_id: str, session_id: str) -> None:
+    def set_task_session_id(
+        self, db: Session, task_id: str, session_id: str, *, execution_token: str | None = None,
+    ) -> None:
         normalized_session_id = session_id.strip()
         if not normalized_session_id:
             return
-        task = self.get_task(db, task_id)
+        if execution_token:
+            self._lock_control(db)
+        task = db.get(AgentTask, task_id, populate_existing=True)
+        if execution_token and (task is None or task.execution_token != execution_token
+                                or task.status not in (TaskStatus.RUNNING, TaskStatus.PAUSING)):
+            db.rollback()
+            return
         if task is None or task.session_id == normalized_session_id:
+            if execution_token:
+                db.rollback()
             return
         task.session_id = normalized_session_id
         self.log_event(
@@ -221,7 +394,7 @@ class TaskQueueService:
             update(AgentTask)
             .where(
                 AgentTask.id == task_id,
-                AgentTask.status.in_([TaskStatus.QUEUED, TaskStatus.RUNNING]),
+                AgentTask.status.in_(ACTIVE_TASK_STATUSES),
             )
             .values(status=TaskStatus.CANCELLED, finished_at=now)
         )
@@ -241,6 +414,9 @@ class TaskQueueService:
         return task
 
     def claim_next_task(self, db: Session, worker_id: str, queue_name: str) -> AgentTask | None:
+        if self._lock_control(db).paused:
+            db.rollback()
+            return None
         candidate_query = (
             select(AgentTask.id)
             .where(
@@ -255,23 +431,25 @@ class TaskQueueService:
         if not candidate:
             db.rollback()
             return None
-        if db.get_bind().dialect.name == "sqlite":
-            self._begin_sqlite_write_transaction(db)
-            candidate = db.scalar(candidate_query)
-            if not candidate:
-                db.rollback()
-                return None
-
+        candidate_task = db.get(AgentTask, candidate, populate_existing=True)
         now = utc_now()
+        resuming = candidate_task.resume_pending
+        running_seconds = (
+            candidate_task.running_remaining_seconds
+            if resuming and candidate_task.running_remaining_seconds is not None
+            else self.settings.running_ttl_hours * 3600
+        )
         result = db.execute(
             update(AgentTask)
             .where(AgentTask.id == candidate, AgentTask.status == TaskStatus.QUEUED)
             .values(
                 status=TaskStatus.RUNNING,
                 worker_id=worker_id,
-                started_at=now,
-                running_expire_at=now + timedelta(hours=self.settings.running_ttl_hours),
-                attempt=AgentTask.attempt + 1,
+                started_at=candidate_task.started_at if resuming else now,
+                running_expire_at=now + timedelta(seconds=running_seconds),
+                attempt=AgentTask.attempt if resuming else AgentTask.attempt + 1,
+                execution_token=str(uuid4()),
+                session_id=candidate_task.session_id if resuming else None,
             )
         )
         if result.rowcount == 0:
@@ -298,18 +476,26 @@ class TaskQueueService:
         db.refresh(task)
         return task
 
-    def mark_success(self, db: Session, task_id: str, result_payload: dict[str, Any]) -> bool:
+    def mark_success(
+        self, db: Session, task_id: str, result_payload: dict[str, Any],
+        *, execution_token: str | None = None,
+    ) -> bool:
         values: dict[str, Any] = {
             "status": TaskStatus.SUCCEEDED,
             "result": result_payload,
             "finished_at": utc_now(),
+            "resume_pending": False,
         }
         result_session_id = result_payload.get("session_id")
         if isinstance(result_session_id, str) and result_session_id.strip():
             values["session_id"] = result_session_id.strip()
         result = db.execute(
             update(AgentTask)
-            .where(AgentTask.id == task_id, AgentTask.status == TaskStatus.RUNNING)
+            .where(
+                AgentTask.id == task_id,
+                AgentTask.status.in_([TaskStatus.RUNNING, TaskStatus.PAUSING]),
+                *([AgentTask.execution_token == execution_token] if execution_token else []),
+            )
             .values(**values)
         )
         if result.rowcount == 0:
@@ -334,7 +520,9 @@ class TaskQueueService:
         task_id: str,
         error_message: str,
         error_metadata: dict[str, Any] | None = None,
+        *, execution_token: str | None = None,
     ) -> bool:
+        control = self._lock_control(db)
         now = utc_now()
         retry_result = db.execute(
             update(AgentTask)
@@ -342,9 +530,13 @@ class TaskQueueService:
                 AgentTask.id == task_id,
                 AgentTask.status == TaskStatus.RUNNING,
                 AgentTask.attempt < AgentTask.max_attempts,
+                *([AgentTask.execution_token == execution_token] if execution_token else []),
             )
             .values(
-                status=TaskStatus.QUEUED,
+                status=TaskStatus.PAUSED if control.paused else TaskStatus.QUEUED,
+                paused_at=now if control.paused else None,
+                resume_pending=False,
+                execution_token=None,
                 error_message=error_message,
                 worker_id=None,
                 started_at=None,
@@ -361,6 +553,7 @@ class TaskQueueService:
                     AgentTask.id == task_id,
                     AgentTask.status == TaskStatus.RUNNING,
                     AgentTask.attempt >= AgentTask.max_attempts,
+                    *([AgentTask.execution_token == execution_token] if execution_token else []),
                 )
                 .values(
                     status=TaskStatus.FAILED,
@@ -550,12 +743,34 @@ class TaskQueueService:
         return len(changed)
 
     def recover_orphan_running_on_startup(self, db: Session) -> int:
+        # A restart in maintenance mode must preserve pending pause requests.
+        # This recovery is for the existing single application/worker process.
+        control = self._lock_control(db)
+        paused = control.paused
+        db.execute(update(AgentTask).where(self._stopping_terminal_tasks()).values(execution_token=None))
+        recover_statuses = [TaskStatus.PAUSING]
+        if paused:
+            recover_statuses.append(TaskStatus.RUNNING)
+        interrupted_tasks = list(db.scalars(select(AgentTask).where(
+            AgentTask.status.in_(recover_statuses),
+        ).with_for_update()))
+        for task in interrupted_tasks:
+            task.status = TaskStatus.PAUSED
+            task.paused_at = task.paused_at or utc_now()
+            task.resume_pending = True
+            task.execution_token = None
+            task.worker_id = None
+            self.log_event(db, task.id, "INFO", "paused", "pause preserved after restart", None)
+        db.commit()
+        recovered_count = len(interrupted_tasks)
+        if paused:
+            return recovered_count
         now = utc_now()
         tasks_query = select(AgentTask).where(AgentTask.status == TaskStatus.RUNNING).order_by(AgentTask.id)
         tasks = list(db.scalars(tasks_query))
         if not tasks:
             db.rollback()
-            return 0
+            return recovered_count
         if db.get_bind().dialect.name == "sqlite":
             self._begin_sqlite_write_transaction(db)
             tasks = list(db.scalars(tasks_query))
@@ -582,7 +797,7 @@ class TaskQueueService:
                 "recovered orphan running tasks",
                 extra={"event_type": "startup_recovery_abandon", "reason": f"count={len(changed)}"},
             )
-        return len(changed)
+        return recovered_count + len(changed)
 
     def list_logs(self, db: Session, task_id: str, offset: int, limit: int) -> tuple[list[AgentTaskLog], int]:
         items = list(
@@ -616,7 +831,16 @@ class TaskQueueService:
             )
         )
 
-    def upsert_task_context(self, db: Session, task_id: str, messages: list[str]) -> None:
+    def upsert_task_context(
+        self, db: Session, task_id: str, messages: list[str], *, execution_token: str | None = None,
+    ) -> None:
+        if execution_token:
+            self._lock_control(db)
+            task = db.get(AgentTask, task_id, populate_existing=True)
+            if (task is None or task.execution_token != execution_token
+                    or task.status not in (TaskStatus.RUNNING, TaskStatus.PAUSING)):
+                db.rollback()
+                return
         context = db.get(AgentTaskContext, task_id)
         now = utc_now()
         if context is None:

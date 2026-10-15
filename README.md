@@ -147,6 +147,34 @@ GitHub Pull Request 事件会按“仓库全名 + PR 编号”写入同一关联
 
 ## 队列与模型默认值
 
+任务编排台提供「全部暂停 / 全部恢复」。暂停开关保存在数据库中，作用于所有队列，
+不受页面筛选条件影响。排队任务立即显示「暂停」，执行任务先显示「暂停中」，Agent
+中断并关闭本轮执行后才显示「暂停」。暂停期间收到的新任务也保持暂停。
+
+暂停任务保留原任务 ID、Workflow 关联、日志和会话 ID，不进入失败终态、不消耗失败
+重试次数；暂停期间不计算排队或执行超时。服务重启后仍保持暂停，点击「全部恢复」后，
+未开始的任务正常执行，已经开始的任务通过 SDK 的 `resume` 续接原会话。
+运行中的外部工具操作需要在续接后确认结果，恢复会话不保证外部操作恰好执行一次。
+
+对应接口沿用任务 API 的认证方式：
+
+```text
+GET  /v1/agent-tasks/control/status
+POST /v1/agent-tasks/control/pause
+POST /v1/agent-tasks/control/resume
+```
+
+状态返回 `state`（`active` / `pausing` / `paused`）、`paused` 全局开关及
+`pausing_count`、`paused_count`。暂停和恢复可重复调用；还有任务暂停中，或者已执行任务
+缺少会话 ID 时，恢复返回 409。会话文件缺失或 SDK 恢复失败的任务继续保持暂停，并在
+任务详情展示错误；不会静默重新执行原始指令。已完成、失败和已取消的任务不受恢复影响。
+
+Docker Compose 使用 `claude_sessions` 卷保存 `/home/ccagent/.claude` 下的 SDK 会话。
+首次部署此功能前，应备份旧容器中的该目录，并将需要保留的会话迁移到此卷；添加挂载不会
+自动迁移旧容器可写层中的文件。部署时保留 `app_data` 和 `claude_sessions`，不要使用
+`docker compose down -v`。自行设置 `CLAUDE_CONFIG_DIR` 的部署也必须持久化对应目录。
+本功能不备份或恢复业务工作目录，仍按当前的单应用实例部署方式运行。
+
 每个队列可以在 `config/queues.yaml` 中配置供该队列 Worker 使用的默认模型：
 
 ```yaml

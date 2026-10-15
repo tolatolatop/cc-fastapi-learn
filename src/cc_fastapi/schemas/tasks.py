@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -35,6 +35,7 @@ class TaskItemResponse(BaseModel):
     attempt: int
     max_attempts: int
     session_id: str | None
+    paused_at: datetime | None = None
     agent_mode: bool
     unattended: bool
     created_at: datetime
@@ -99,3 +100,10 @@ class QueueItemResponse(BaseModel):
 
 class QueueListResponse(BaseModel):
     items: list[QueueItemResponse]
+
+
+class TaskControlResponse(BaseModel):
+    state: Literal["active", "pausing", "paused"]
+    paused: bool
+    pausing_count: int
+    paused_count: int

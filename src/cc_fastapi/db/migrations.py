@@ -6,6 +6,7 @@ from cc_fastapi.db.models import (
     Repository,
     ReviewIssue,
     ReviewIssueStatusChange,
+    TaskQueueControl,
 )
 
 
@@ -57,6 +58,14 @@ def apply_schema_migrations(engine: Engine) -> None:
     """Apply additive schema changes needed by databases created by older releases."""
     inspector = inspect(engine)
     table_names = inspector.get_table_names()
+    TaskQueueControl.__table__.create(bind=engine, checkfirst=True)
+    if "agent_tasks" in table_names:
+        for name in ("execution_token", "paused_at", "running_remaining_seconds"):
+            _add_column(engine, table_name="agent_tasks", model_column=AgentTask.__table__.c[name])
+        _add_column(
+            engine, table_name="agent_tasks", model_column=AgentTask.__table__.c.resume_pending,
+            definition_suffix=" NOT NULL DEFAULT false",
+        )
 
     if "agent_tasks" in table_names and not _agent_tasks_has_session_id(engine):
         preparer = engine.dialect.identifier_preparer

@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from cc_fastapi.core.webhook_payloads import WebhookPayload
 from cc_fastapi.db.models import (
+    ACTIVE_TASK_STATUSES,
     AgentTask,
     TaskStatus,
     WebhookDeduplicationKey,
@@ -21,7 +22,6 @@ from cc_fastapi.db.models import (
 from cc_fastapi.workflows import WorkflowEngine, build_default_workflow_engine
 from cc_fastapi.workflows.base import WorkflowEvent, WorkflowTemplateError
 from cc_fastapi.workflows.correlations import change_request_correlation
-
 
 WebhookTemplateError = WorkflowTemplateError
 
@@ -43,7 +43,7 @@ class WebhookService:
         now = utc_now()
         if task is None:
             run_status = WorkflowRunStatus.SKIPPED
-        elif task.status in {TaskStatus.QUEUED, TaskStatus.RUNNING}:
+        elif task.status in ACTIVE_TASK_STATUSES:
             run_status = WorkflowRunStatus.RUNNING
         elif task.status == TaskStatus.SUCCEEDED:
             run_status = WorkflowRunStatus.SUCCEEDED
