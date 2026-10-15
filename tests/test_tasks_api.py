@@ -1,6 +1,6 @@
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -69,12 +69,58 @@ def test_create_get_and_logs():
     assert detail.json()["prompt"] == "hello"
     assert detail.json()["model"]
     assert detail.json()["metadata"] == {"source": "test"}
+    assert detail.json()["session_id"] is None
     assert detail.json()["agent_mode"] is True
     assert detail.json()["unattended"] is True
 
     logs = client.get(f"/v1/agent-tasks/{task_id}/logs")
     assert logs.status_code == 200
     assert logs.json()["total"] >= 1
+
+
+def test_list_tasks_supports_pagination_filters_and_global_summary():
+    client = build_client()
+    task_ids = []
+    for prompt, queue_name in [("alpha task", "default"), ("beta task", "slow"), ("gamma task", "default")]:
+        response = client.post("/v1/agent-tasks", json={"prompt": prompt, "queue_name": queue_name})
+        assert response.status_code == 200
+        task_ids.append(response.json()["task_id"])
+    assert client.post(f"/v1/agent-tasks/{task_ids[-1]}/cancel").status_code == 200
+
+    page = client.get("/v1/agent-tasks", params={"offset": 1, "limit": 1})
+
+    assert page.status_code == 200
+    assert page.json()["total"] == 3
+    assert len(page.json()["items"]) == 1
+    assert page.json()["summary"] == {
+        "total": 3,
+        "status_counts": {
+            "queued": 2,
+            "running": 0,
+            "pausing": 0,
+            "paused": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 1,
+            "abandoned": 0,
+        },
+        "queues": [
+            {"name": "default", "total": 2, "queued": 1, "running": 0},
+            {"name": "slow", "total": 1, "queued": 1, "running": 0},
+        ],
+    }
+
+    searched = client.get("/v1/agent-tasks", params={"q": "beta", "limit": 20})
+    assert searched.status_code == 200
+    assert searched.json()["total"] == 1
+    assert searched.json()["items"][0]["prompt"] == "beta task"
+
+    filtered = client.get(
+        "/v1/agent-tasks",
+        params=[("status", "queued"), ("status", "cancelled"), ("queue", "default")],
+    )
+    assert filtered.status_code == 200
+    assert filtered.json()["total"] == 2
 
 
 def test_get_task_context_returns_empty_when_not_written():
@@ -125,6 +171,10 @@ def test_retry_task_creates_new_queued_task():
     assert response.json()["queue_name"] == "slow"
     assert client.get(f"/v1/agent-tasks/{original_task_id}").json()["status"] == "cancelled"
 
+    duplicate = client.post(f"/v1/agent-tasks/{original_task_id}/retry")
+    assert duplicate.status_code == 409
+    assert duplicate.json()["detail"] == "task retry was already created"
+
 
 def test_retry_task_not_found_returns_404():
     client = build_client()
@@ -172,3 +222,30 @@ def test_create_task_with_absolute_cwd_returns_400():
     )
     assert response.status_code == 400
     assert "cwd must be a relative path" in response.json()["detail"]
+
+
+def test_pause_resume_endpoints_keep_task_ids_and_new_tasks_paused():
+    client = build_client()
+    task_id = client.post('/v1/agent-tasks', json={'prompt': 'first'}).json()['task_id']
+    assert client.get('/v1/agent-tasks/control/status').json()['state'] == 'active'
+    paused = client.post('/v1/agent-tasks/control/pause')
+    assert paused.status_code == 200
+    assert paused.json()['state'] == 'paused'
+    assert paused.json()['paused_count'] == 1
+    second = client.post('/v1/agent-tasks', json={'prompt': 'second'}).json()
+    assert second['status'] == 'paused'
+    filtered = client.get('/v1/agent-tasks', params={'status': 'paused'}).json()
+    assert filtered['total'] == 2
+    assert filtered['summary']['status_counts']['paused'] == 2
+    assert client.get(f'/v1/agent-tasks/{task_id}').json()['paused_at']
+    assert client.post('/v1/agent-tasks/control/resume').json()['state'] == 'active'
+    assert client.get(f'/v1/agent-tasks/{task_id}').json()['status'] == 'queued'
+    assert client.post('/v1/agent-tasks/control/resume').status_code == 200
+
+
+def test_pause_controls_require_api_token(monkeypatch):
+    monkeypatch.setenv('API_TOKEN', 'synthetic-test-token')
+    get_settings.cache_clear()
+    client = build_client()
+    for method, path in [('get', 'status'), ('post', 'pause'), ('post', 'resume')]:
+        assert getattr(client, method)(f'/v1/agent-tasks/control/{path}').status_code == 401

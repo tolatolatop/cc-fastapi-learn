@@ -7,11 +7,16 @@ from sqlalchemy.orm import Session
 
 from cc_fastapi.core.config import get_settings
 from cc_fastapi.core.queue_config import get_queue_config
-from cc_fastapi.db.session import SessionLocal
-from cc_fastapi.services.claude_client import ClaudeClient
-from cc_fastapi.services.queue import TaskQueueService
 from cc_fastapi.db.models import TaskStatus
-
+from cc_fastapi.db.session import SessionLocal
+from cc_fastapi.services.claude_client import (
+    AgentTaskCancelledError,
+    AgentTaskPausedError,
+    AgentTaskStopError,
+    ClaudeClient,
+)
+from cc_fastapi.services.queue import TaskQueueService
+from cc_fastapi.workflows import build_default_workflow_engine
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +26,7 @@ class WorkerManager:
         self.settings = get_settings()
         self.queue = TaskQueueService()
         self.client = ClaudeClient()
+        self.workflows = build_default_workflow_engine()
         self.stop_event = threading.Event()
         self.threads: list[threading.Thread] = []
         self._empty_log_last_ts: dict[str, float] = {}
@@ -59,14 +65,18 @@ class WorkerManager:
     def run_startup_recovery(self) -> int:
         db = SessionLocal()
         try:
-            return self.queue.recover_orphan_running_on_startup(db)
+            recovered = self.queue.recover_orphan_running_on_startup(db)
+            self.workflows.reconcile_terminal_tasks(db)
+            return recovered
         finally:
             db.close()
 
     def abandon_running_on_shutdown(self) -> int:
         db = SessionLocal()
         try:
-            return self.queue.abandon_running_on_shutdown(db)
+            abandoned = self.queue.abandon_running_on_shutdown(db)
+            self.workflows.reconcile_terminal_tasks(db)
+            return abandoned
         finally:
             db.close()
 
@@ -116,6 +126,7 @@ class WorkerManager:
     def _maintenance(self, db: Session) -> None:
         queued_count = self.queue.abandon_expired_queued(db)
         running_count = self.queue.abandon_expired_running(db)
+        self.workflows.reconcile_terminal_tasks(db)
         if queued_count or running_count:
             logger.warning(
                 "worker maintenance abandoned tasks",
@@ -129,8 +140,17 @@ class WorkerManager:
         task = self.queue.get_task(db, task_id)
         if not task:
             return
-        if task.status != TaskStatus.RUNNING:
+        execution_token = task.execution_token
+        if task.status == TaskStatus.PAUSING:
+            self.queue.mark_paused(db, task_id, execution_token, not_started=True)
             return
+        if task.status != TaskStatus.RUNNING:
+            self.queue.release_execution(db, task_id, execution_token)
+            return
+        resuming = task.resume_pending
+        previous_context = self.queue.get_task_context(db, task_id) if resuming else None
+        previous_messages = list(previous_context.messages_json) if previous_context else []
+        stopped = True
         try:
             started_at = time.monotonic()
             prompt = str(task.payload.get("prompt", ""))
@@ -140,6 +160,8 @@ class WorkerManager:
                 claude_agent_options = {}
             if not prompt.strip():
                 raise RuntimeError("task prompt is empty")
+            if resuming and not task.session_id:
+                raise RuntimeError("任务缺少可恢复的会话，保持暂停")
             result = self.client.run_agent_task(
                 prompt=prompt,
                 model=model,
@@ -147,9 +169,28 @@ class WorkerManager:
                 claude_agent_options=claude_agent_options,
                 agent_mode=task.agent_mode,
                 unattended=task.unattended,
-                on_message_update=lambda messages: self.queue.upsert_task_context(db, task.id, messages),
+                on_message_update=lambda messages: self.queue.upsert_task_context(
+                    db, task_id, previous_messages + messages, execution_token=execution_token,
+                ),
+                on_session_id=lambda session_id: self.queue.set_task_session_id(
+                    db, task_id, session_id, execution_token=execution_token,
+                ),
+                should_cancel=lambda: self.queue.is_task_cancelled(db, task_id),
+                should_pause=lambda: self.queue.is_task_pausing(db, task_id),
+                resume_session_id=task.session_id if resuming else None,
             )
-            self.queue.mark_success(db, task.id, result)
+            transitioned = self.queue.mark_success(db, task_id, result, execution_token=execution_token)
+            self.workflows.handle_task_terminal(db, task.id)
+            if not transitioned:
+                logger.info(
+                    "task result ignored after concurrent terminal transition",
+                    extra={
+                        "task_id": task.id,
+                        "event_type": "terminal_transition_lost",
+                        "queue_name": getattr(task, "queue_name", "default"),
+                    },
+                )
+                return
             logger.info(
                 "task succeeded",
                 extra={
@@ -160,8 +201,48 @@ class WorkerManager:
                     "duration_ms": int((time.monotonic() - started_at) * 1000),
                 },
             )
+        except AgentTaskStopError as exc:
+            stopped = False
+            db.rollback()
+            self.queue.mark_paused(db, task_id, execution_token, error=str(exc), stopped=False)
+        except AgentTaskPausedError:
+            db.rollback()
+            self.queue.mark_paused(db, task_id, execution_token)
+        except AgentTaskCancelledError:
+            db.rollback()
+            self.workflows.handle_task_terminal(db, task.id)
+            logger.info(
+                "task execution stopped after cancellation",
+                extra={
+                    "task_id": task.id,
+                    "event_type": "cancelled",
+                    "queue_name": getattr(task, "queue_name", "default"),
+                },
+            )
         except Exception as exc:
-            self.queue.mark_retry_or_failed(db, task.id, str(exc))
+            db.rollback()
+            current = self.queue.get_task(db, task_id)
+            if (current is not None and current.status == TaskStatus.PAUSING
+                    and current.execution_token == execution_token):
+                # A failed interrupt/cleanup is not a confirmed pause.
+                current.error_message = str(exc)
+                db.commit()
+                logger.exception("task pause did not complete", extra={"task_id": task_id})
+                return
+            if resuming:
+                self.queue.mark_paused(db, task_id, execution_token, error=str(exc))
+                return
+            error_metadata = {
+                "exception_type": getattr(exc, "error_type", type(exc).__name__),
+                "exit_code": getattr(exc, "exit_code", None),
+                "has_cli_stderr": bool(getattr(exc, "cli_stderr", "")),
+            }
+            self.queue.mark_retry_or_failed(
+                db, task_id, str(exc), error_metadata, execution_token=execution_token,
+            )
+            terminal_task = self.queue.get_task(db, task.id)
+            if terminal_task is not None and terminal_task.status == TaskStatus.FAILED:
+                self.workflows.handle_task_terminal(db, task.id)
             logger.exception(
                 "task failed",
                 extra={
@@ -170,4 +251,6 @@ class WorkerManager:
                     "queue_name": getattr(task, "queue_name", "default"),
                 },
             )
-
+        finally:
+            if stopped:
+                self.queue.release_execution(db, task_id, execution_token)

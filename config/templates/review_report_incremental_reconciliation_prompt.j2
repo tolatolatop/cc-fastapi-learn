@@ -1,0 +1,27 @@
+这是一个固定的“检视报告增量对账”任务。不要修改任何仓库文件，不要直接访问数据库或调用 HTTP API；必须把 cc-fastapi-admin CLI 作为唯一的检视管理入口。
+
+目标 PR：
+- provider: {{ provider }}
+- project_path: {{ project_path }}
+- pr_number: {{ pr_number }}
+
+本次唯一的新报告来源是检视报告任务：
+{{ source_task_id }}
+
+严格按以下步骤执行：
+1. 运行 cc-fastapi-admin status，只有 ok 为 true 才继续。
+2. 运行 cc-fastapi-admin task show {{ source_task_id }}，从 result.output_text 读取本次报告；确认任务和关联工作流均为 succeeded，报告恰好包含 {{ expected_source_issue_count }} 个 issues。
+3. 运行 cc-fastapi-admin pr show {{ provider }} {{ project_path }} {{ pr_number }}，读取更新前已录入的批次与 issues。以“根因、影响行为、文件位置”为主要依据进行语义匹配，不能只按标题文字是否相同判断。同一问题即使换了标题或描述，也视为已有问题，不得重复录入。
+4. 将本次报告与已有 issues 分成三类：
+   - 仍然存在：语义上在新旧两边都出现。保留已有 issue，不新增，也不改变其 verification_status。
+   - 新增：只在本次报告出现。仅将这些新增问题通过 cc-fastapi-admin pr collect {{ provider }} {{ project_path }} {{ pr_number }} --task-id {{ source_task_id }} --input - 录入。输入中保留报告的 severity、category、title、description、file_path、line_number，不改写。
+   - 已消失：只在更新前的旧看板出现、本次报告中不再出现。对这些 issue 所在的原批次分别使用 cc-fastapi-admin pr verify，将其状态设置为 accepted，note 明确写明“本次检视报告中已不再出现，按本次增量验证视为已接受”。必须使用 issue_no 和明确的 --batch-id；若没有 merged_sha，使用 --merged-sha {{ merged_sha_fallback }}。
+5. 如果 review_task_id={{ source_task_id }} 的批次已经存在，将其视为此前 collect 的幂等结果。不要把该批次再次当作旧批次参与“已消失”判断，也不得重复创建或重复录入问题。
+6. 所有 collect 和 verify 调用都必须通过 --input - 从标准输入提交 JSON。任何非零退出码都视为失败；完全相同数据的幂等成功可以接受。
+7. 更新完成后再次运行 cc-fastapi-admin pr show {{ provider }} {{ project_path }} {{ pr_number }}，并验证：
+   - 本次报告中语义重复的 {{ expected_repeated_issue_count }} 个问题没有被新增；
+   - 只新增了 {{ expected_new_issue_count }} 个问题，且本次报告对应的新批次只包含这些问题；
+   - 旧批次中已消失的 {{ expected_accepted_count }} 个问题均为 accepted；
+   - 仍然存在的旧问题以及本次新增问题保持 unverified；
+   - PR 看板总计 {{ expected_total_issue_count }} 个 issue，其中 accepted={{ expected_accepted_count }}、unverified={{ expected_unverified_count }}。
+8. 最终回复只总结执行结果，必须包含 source_task_id、new_batch_id、new_issue_count、accepted_issue_nos、accepted_count、unverified_count、total_issue_count，以及 collect/verify 是否幂等。若任一校验不满足，明确报告失败，不得声称成功。
