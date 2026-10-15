@@ -2,6 +2,7 @@ import { FormEvent, useCallback, useEffect, useState } from 'react'
 import { ArrowRight, ArrowUpDown, BarChart3, Check, Clock3, Code2, Copy, ExternalLink, FileText, History, Link2, LogIn, LogOut, Search, ShieldCheck, Users, X } from 'lucide-react'
 import { Button, Form, Modal, Table } from 'react-bootstrap'
 import { api } from './api'
+import IssueMarkdown from './IssueMarkdown'
 import type { AuthConfig, DecisionReason, HistoryItem, Issue, IssueStatus, Permission, PullRequest, PullRequestCompletionStatus, Repository, Statistics, User } from './types'
 
 const statusMeta: Record<IssueStatus, { label: string; className: string }> = {
@@ -168,8 +169,8 @@ function IssueDetail({ issue, permission, onClose, onOpenHistory, onSaved }: { i
   }
   const noteLabel = issue?.status === 'not_accepted' ? '拒绝理由' : issue?.status === 'needs_info' ? '待补充内容' : '裁定说明'
   return <Modal dialogClassName="issue-detail-modal" show={Boolean(issue)} onHide={onClose} centered scrollable size="lg">
-    {issue && <form onSubmit={submit}><Modal.Header closeButton><Modal.Title>意见详情</Modal.Title></Modal.Header><Modal.Body>
-      <div className="detail-heading"><span className={`severity ${issue.severity}`}>{issue.severity}</span><span className={`status ${statusMeta[issue.status].className}`}>{statusMeta[issue.status].label}</span><h2>{issue.title}</h2><p>{issue.description}</p></div>
+    {issue && <form className="issue-detail-form" onSubmit={submit}><Modal.Header closeButton><Modal.Title>意见详情</Modal.Title></Modal.Header><Modal.Body>
+      <div className="detail-heading"><span className={`severity ${issue.severity}`}>{issue.severity}</span><span className={`status ${statusMeta[issue.status].className}`}>{statusMeta[issue.status].label}</span><h2>{issue.title}</h2><IssueMarkdown>{issue.description}</IssueMarkdown></div>
       <dl className="detail-facts"><div><dt>位置</dt><dd>{issueLocation(issue)}</dd></div><div><dt>分类</dt><dd>{issue.category || '未分类'}</dd></div><div><dt>意见编号</dt><dd>#{issue.issue_no}</dd></div><div><dt>自动修复验证</dt><dd>{issue.verification_status === 'accepted' ? '通过' : issue.verification_status === 'not_accepted' ? '未通过' : '未验证'}</dd></div><div><dt>检视版本</dt><dd>{issue.review_head_sha?.slice(0, 12) || '未知'}</dd></div><div><dt>合并版本</dt><dd>{issue.merged_sha?.slice(0, 12) || '未合并'}</dd></div><div><dt>检视批次</dt><dd>{issue.batch_status} · {formatTime(issue.batch_created_at)}</dd></div><div><dt>裁定人</dt><dd>{issue.decided_by_name ? `${issue.decided_by_name} · ${issue.decided_at ? formatTime(issue.decided_at) : ''}` : '尚未裁定'}</dd></div></dl>
       {issue.status === 'not_accepted' && <Form.Group className="mb-3"><Form.Label>拒绝原因分类</Form.Label><Form.Select value={reasonCode} disabled={permission !== 'write'} onChange={(event) => setReasonCode(event.target.value as DecisionReason | '')} required><option value="">选择原因</option>{Object.entries(reasonMeta).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Form.Select></Form.Group>}
       <Form.Group><Form.Label>{noteLabel}</Form.Label><Form.Control as="textarea" rows={5} value={note} disabled={permission !== 'write'} onChange={(event) => setNote(event.target.value)} placeholder={issue.status === 'needs_info' ? '写明需要补充的事实或上下文…' : '补充判断依据…'} /></Form.Group>
@@ -310,7 +311,7 @@ function IssueWorkspace({ repositories, routeVersion }: { repositories: Reposito
       {error && <div className="form-error">{error}</div>}{loading ? <div className="empty-state">正在读取检视意见…</div> : !visibleIssues.length ? <div className="empty-state">{selectedPr.completion_status === 'no_issues' ? '该 PR/MR 已检视完毕，没有发现问题' : '当前筛选下没有检视意见'}</div> : <div className="compact-issue-list">{visibleIssues.map((issue) => <article className="compact-issue-card" key={issue.id}>
         <div className={`severity-cell ${issue.severity}`}><span>问题等级</span><strong>{issue.severity}</strong></div>
         <div className="issue-location"><span>文件 / 行号</span><Button variant="link" className="copy-location" disabled={!issue.file_path || issue.line_number === null} title={issue.file_path && issue.line_number !== null ? `复制 ${issue.file_path}:${issue.line_number}` : '缺少路径或行号，无法复制'} onClick={() => void copyIssueLocation(issue)}><strong>{issueLocation(issue)}</strong><small>{copiedLocationId === issue.id ? '已复制' : <Copy size={13} />}</small></Button></div>
-        <div className="issue-opinion"><span>检视意见</span><strong>{issue.title}</strong><p>{issue.description}</p></div>
+        <div className="issue-opinion"><span>检视意见</span><strong>{issue.title}</strong><IssueMarkdown>{issue.description}</IssueMarkdown></div>
         <div className="compact-issue-actions"><Button className="detail-button" variant="link" size="sm" onClick={() => setDetail(issue)}><FileText size={15} />详情</Button><div className="inline-decisions" aria-label="状态裁定">{(['unverified', 'accepted', 'not_accepted'] as IssueStatus[]).map((value) => <Button key={value} variant="outline-secondary" size="sm" className={`${statusMeta[value].className} ${issue.status === value ? 'active' : ''}`} disabled={selectedRepository.permission !== 'write' || busyDecision?.issueId === issue.id || issue.status === value} onClick={() => void setIssueStatus(issue, value)}>{value === 'accepted' ? <Check /> : value === 'not_accepted' ? <X /> : <Clock3 />}{busyDecision?.issueId === issue.id && busyDecision.status === value ? '保存中' : statusMeta[value].label}</Button>)}</div></div>
       </article>)}</div>}</> : <div className="empty-state">{pullRequestsLoading ? '正在汇总 PR/MR…' : error || '授权范围内暂无 PR/MR 检视记录'}</div>}
     </section>
