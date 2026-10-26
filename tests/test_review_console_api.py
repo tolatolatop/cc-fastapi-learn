@@ -351,3 +351,273 @@ def test_statistics_use_current_decisions_actor_and_repository_scope():
         "confirmed_total": 0,
         "false_positive_total": 0,
     }
+
+
+def test_queue_paginates_over_3000_records_and_searches_all_pages():
+    client, sessions = build_client()
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    with sessions() as db:
+        db.add_all(
+            [
+                AgentTask(
+                    id=f"queue-task-{index}",
+                    status=TaskStatus.SUCCEEDED,
+                    queue_name="default",
+                    payload={},
+                    queue_expire_at=now,
+                )
+                for index in range(3001)
+            ]
+        )
+        db.flush()
+        db.add_all(
+            [
+                ReviewIssueBatch(
+                    id=f"queue-batch-{index}",
+                    provider="gitlab",
+                    project_path="team/large",
+                    pr_number=str(index),
+                    pr_url=f"https://gitlab.example/team/large/-/merge_requests/{index}",
+                    review_task_id=f"queue-task-{index}",
+                    status=ReviewBatchStatus.COMPLETED,
+                    updated_at=now + timedelta(seconds=index),
+                )
+                for index in range(3001)
+            ]
+        )
+        db.commit()
+    params = {"repository": "gitlab/team/large", "limit": 25}
+    first = client.get("/v1/review-console/queue", params=params, headers=headers())
+    assert first.status_code == 200
+    assert first.json()["total"] == 3001
+    assert len(first.json()["items"]) == 25
+    assert first.json()["items"][0]["pr_number"] == "3000"
+    assert len(first.content) < 15000
+    second = client.get(
+        "/v1/review-console/queue", params={**params, "offset": 25}, headers=headers()
+    ).json()
+    assert not {item["pr_number"] for item in first.json()["items"]} & {
+        item["pr_number"] for item in second["items"]
+    }
+    last = client.get(
+        "/v1/review-console/queue", params={**params, "offset": 3000}, headers=headers()
+    ).json()
+    assert [item["pr_number"] for item in last["items"]] == ["0"]
+    found = client.get(
+        "/v1/review-console/queue",
+        params={**params, "q": "team/large #42"},
+        headers=headers(),
+    ).json()
+    assert found["total"] == 11
+    assert all(item["pr_number"].startswith("42") for item in found["items"])
+    url = client.get(
+        "/v1/review-console/queue",
+        params={
+            **params,
+            "q": "https://gitlab.example/team/large/-/merge_requests/3000",
+        },
+        headers=headers(),
+    ).json()
+    assert url["total"] == 1
+    for query in ["%", "mergeXrequests", "not-a-repo"]:
+        assert (
+            client.get(
+                "/v1/review-console/queue",
+                params={**params, "q": query},
+                headers=headers(),
+            ).json()["total"]
+            == 0
+        )
+    empty = client.get(
+        "/v1/review-console/queue",
+        params={"repository": "github/forbidden"},
+        headers=headers(),
+    ).json()
+    assert empty == {"items": [], "total": 0}
+    assert (
+        client.get("/v1/review-console/queue", headers=headers()).json()["total"]
+        == 3003
+    )
+
+
+def test_queue_aggregates_all_batches_and_preserves_completion_states():
+    client, sessions = build_client()
+    with sessions() as db:
+        original = db.get(ReviewIssueBatch, "batch-1")
+        original.pr_url = "https://github.example/team/service/pull/17"
+        db.add(
+            AgentTask(
+                id="new-task",
+                status=TaskStatus.SUCCEEDED,
+                queue_name="default",
+                payload={},
+                queue_expire_at=datetime.now(timezone.utc),
+            )
+        )
+        db.flush()
+        db.add(
+            ReviewIssueBatch(
+                id="new-batch",
+                provider="github",
+                project_path="team/service",
+                pr_number="17",
+                review_task_id="new-task",
+                status=ReviewBatchStatus.COLLECTING,
+                updated_at=datetime.now(timezone.utc) + timedelta(seconds=1),
+            )
+        )
+        db.commit()
+    params = {"repository": "github/team/service", "q": "github.example"}
+    item = client.get(
+        "/v1/review-console/queue", headers=headers(), params=params
+    ).json()["items"][0]
+    assert item["batch_total"] == 2
+    assert item["completion_status"] == "processing"
+    assert item["pending_total"] == item["issue_total"] == 1
+    assert item["pr_url"] == "https://github.example/team/service/pull/17"
+    for state in ReviewBatchStatus:
+        with sessions() as db:
+            for batch in db.query(ReviewIssueBatch).all():
+                batch.status = state
+            db.commit()
+        queue = client.get("/v1/review-console/queue", headers=headers()).json()[
+            "items"
+        ]
+        by_number = {item["pr_number"]: item for item in queue}
+        assert by_number["17"]["completion_status"] == (
+            "processing" if state == ReviewBatchStatus.COLLECTING else "pending"
+        )
+        assert by_number["18"]["completion_status"] == (
+            "processing"
+            if state
+            in {
+                ReviewBatchStatus.COLLECTING,
+                ReviewBatchStatus.WAITING_MERGE,
+                ReviewBatchStatus.VERIFYING,
+            }
+            else "failed"
+            if state == ReviewBatchStatus.FAILED
+            else "no_issues"
+        )
+        expected = client.get(
+            "/v1/review-console/pull-requests",
+            headers=headers(),
+            params={"provider": "github", "project_path": "team/service"},
+        ).json()["items"]
+        assert sorted(queue, key=lambda item: item["pr_number"]) == sorted(
+            expected, key=lambda item: item["pr_number"]
+        )
+
+
+def test_issue_sort_and_severity_filter_apply_before_pagination():
+    client, sessions = build_client()
+    with sessions() as db:
+        issue = db.get(ReviewIssue, "issue-1")
+        issue.file_path = "z.py"
+        issue.line_number = 1
+        db.add_all(
+            [
+                ReviewIssue(
+                    id=f"paged-{index}",
+                    batch_id="batch-1",
+                    issue_no=index + 2,
+                    severity=ReviewIssueSeverity.LOW
+                    if index == 0
+                    else ReviewIssueSeverity.HIGH,
+                    title=f"Issue {index}",
+                    description="Details",
+                    file_path="a.py",
+                    line_number=100 - index,
+                    decision_status=ReviewIssueDecisionStatus.ACCEPTED,
+                )
+                for index in range(30)
+            ]
+        )
+        db.commit()
+    params = {
+        "provider": "github",
+        "project_path": "team/service",
+        "pr_number": "17",
+        "severity": "high",
+        "limit": 2,
+        "sort": "location",
+    }
+    first = client.get(
+        "/v1/review-console/issues", headers=headers(), params=params
+    ).json()
+    assert first["total"] == 30
+    assert [item["line_number"] for item in first["items"]] == [71, 72]
+    next_page = client.get(
+        "/v1/review-console/issues", headers=headers(), params={**params, "offset": 2}
+    ).json()
+    assert [item["line_number"] for item in next_page["items"]] == [73, 74]
+    pending = client.get(
+        "/v1/review-console/issues",
+        headers=headers(),
+        params={**params, "sort": "pending_first"},
+    ).json()
+    assert pending["items"][0]["id"] == "issue-1"
+    assert pending["items"][1]["line_number"] == 71
+    assert (
+        client.get(
+            "/v1/review-console/issues",
+            headers=headers(),
+            params={**params, "sort": "invalid"},
+        ).status_code
+        == 422
+    )
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"limit": 101},
+        {"limit": 0},
+        {"offset": -1},
+        {"q": "x" * 201},
+        {"repository": "invalid"},
+    ],
+)
+def test_queue_rejects_invalid_paging_and_filters(params):
+    client, _ = build_client()
+    assert (
+        client.get(
+            "/v1/review-console/queue", headers=headers(), params=params
+        ).status_code
+        == 422
+    )
+
+
+def test_legacy_pull_request_status_filter_applies_before_pagination():
+    client, _ = build_client()
+    result = client.get(
+        "/v1/review-console/pull-requests",
+        headers=headers(),
+        params={
+            "provider": "github",
+            "project_path": "team/service",
+            "status": "pending",
+            "limit": 1,
+        },
+    ).json()
+    assert result["total"] == 1
+    assert result["items"][0]["pr_number"] == "17"
+    assert client.get("/v1/review-console/queue").status_code == 401
+
+
+def test_queue_repository_scopes_follow_case_insensitive_grant_matching():
+    client, sessions = build_client()
+    with sessions() as db:
+        batch = db.get(ReviewIssueBatch, "batch-1")
+        batch.project_path = "Team/Service"
+        db.commit()
+    result = client.get(
+        "/v1/review-console/queue",
+        headers=headers(),
+        params=[
+            ("repository", "github/team/service"),
+            ("repository", "gitlab/other/repo"),
+        ],
+    ).json()
+    assert result["total"] == 2
+    assert {item["pr_number"] for item in result["items"]} == {"17", "18"}

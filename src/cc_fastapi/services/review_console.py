@@ -81,6 +81,7 @@ class ReviewConsoleService:
         query: str | None,
         offset: int,
         limit: int,
+        sort: str = "updated",
     ) -> tuple[list[tuple[ReviewIssue, ReviewIssueBatch]], int]:
         filters = [
             ReviewIssueBatch.provider == provider,
@@ -108,17 +109,225 @@ class ReviewConsoleService:
             )
             or 0
         )
+        ordering = [ReviewIssue.updated_at.desc(), ReviewIssue.id.desc()]
+        if sort in {"location", "pending_first"}:
+            ordering = [
+                ReviewIssue.file_path.is_(None),
+                func.lower(ReviewIssue.file_path),
+                ReviewIssue.line_number.is_(None),
+                ReviewIssue.line_number,
+                ReviewIssue.issue_no,
+                ReviewIssue.id,
+            ]
+            if sort == "pending_first":
+                ordering.insert(
+                    0,
+                    case(
+                        (
+                            ReviewIssue.decision_status
+                            == ReviewIssueDecisionStatus.UNVERIFIED,
+                            0,
+                        ),
+                        else_=1,
+                    ),
+                )
         rows = list(
             db.execute(
                 select(ReviewIssue, ReviewIssueBatch)
                 .join(ReviewIssueBatch, ReviewIssueBatch.id == ReviewIssue.batch_id)
                 .where(*filters)
-                .order_by(ReviewIssue.updated_at.desc(), ReviewIssue.id.desc())
+                .order_by(*ordering)
                 .offset(offset)
                 .limit(limit)
             ).all()
         )
         return rows, total
+
+    @staticmethod
+    def list_queue(
+        db: Session,
+        *,
+        repositories: list[tuple[str, str]] | None,
+        query: str | None,
+        offset: int,
+        limit: int,
+        completion_statuses: list[str] | None = None,
+    ) -> tuple[list[dict], int]:
+        """Aggregate in SQL and materialize only the requested queue page."""
+        batch = ReviewIssueBatch
+        filters = []
+        if repositories is not None:
+            filters.append(
+                or_(
+                    *[
+                        and_(
+                            func.lower(batch.provider) == provider.lower(),
+                            func.lower(batch.project_path) == project_path.lower(),
+                        )
+                        for provider, project_path in repositories
+                    ]
+                )
+                if repositories
+                else false()
+            )
+        # Match every keyword, including links, before pagination.
+        for keyword in (query or "").lower().split():
+            keyword = (
+                keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            )
+            searchable = func.lower(
+                batch.provider
+                + " "
+                + batch.project_path
+                + " "
+                + batch.pr_number
+                + " #"
+                + batch.pr_number
+                + " "
+                + func.coalesce(batch.pr_url, "")
+            )
+            filters.append(searchable.like(f"%{keyword}%", escape="\\"))
+
+        # Search selects entire PRs, so all their batches still contribute counts.
+        matching = (
+            select(batch.provider, batch.project_path, batch.pr_number)
+            .where(*filters)
+            .distinct()
+            .subquery()
+        )
+        scope = and_(
+            batch.provider == matching.c.provider,
+            batch.project_path == matching.c.project_path,
+            batch.pr_number == matching.c.pr_number,
+        )
+        keys = [batch.provider, batch.project_path, batch.pr_number]
+        issue_counts = (
+            select(
+                ReviewIssue.batch_id,
+                func.count().label("issue_total"),
+                func.sum(
+                    case(
+                        (
+                            ReviewIssue.decision_status.in_(
+                                [
+                                    ReviewIssueDecisionStatus.UNVERIFIED,
+                                    ReviewIssueDecisionStatus.NEEDS_INFO,
+                                ]
+                            ),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ).label("pending_total"),
+            )
+            .group_by(ReviewIssue.batch_id)
+            .subquery()
+        )
+        totals = (
+            select(
+                *keys,
+                func.count().label("batch_total"),
+                func.sum(func.coalesce(issue_counts.c.issue_total, 0)).label(
+                    "issue_total"
+                ),
+                func.sum(func.coalesce(issue_counts.c.pending_total, 0)).label(
+                    "pending_total"
+                ),
+                func.min(
+                    case((batch.status == ReviewBatchStatus.FAILED, 1), else_=0)
+                ).label("all_failed"),
+            )
+            .join(matching, scope)
+            .outerjoin(issue_counts, issue_counts.c.batch_id == batch.id)
+            .group_by(*keys)
+            .subquery()
+        )
+        ranked = (
+            select(
+                *keys,
+                batch.status,
+                batch.updated_at,
+                batch.pr_url,
+                func.row_number()
+                .over(
+                    partition_by=keys,
+                    order_by=[batch.updated_at.desc(), batch.id.desc()],
+                )
+                .label("rank"),
+                func.first_value(batch.pr_url)
+                .over(
+                    partition_by=keys,
+                    order_by=[
+                        case((batch.pr_url.is_(None), 1), else_=0),
+                        batch.updated_at.desc(),
+                        batch.id.desc(),
+                    ],
+                )
+                .label("url"),
+            )
+            .join(matching, scope)
+            .subquery()
+        )
+        completion = case(
+            (ranked.c.status == ReviewBatchStatus.COLLECTING, "processing"),
+            (totals.c.pending_total > 0, "pending"),
+            (totals.c.issue_total > 0, "completed"),
+            (
+                ranked.c.status.in_(
+                    [ReviewBatchStatus.WAITING_MERGE, ReviewBatchStatus.VERIFYING]
+                ),
+                "processing",
+            ),
+            (totals.c.all_failed == 1, "failed"),
+            else_="no_issues",
+        )
+        records = (
+            select(
+                totals.c.provider,
+                totals.c.project_path,
+                totals.c.pr_number,
+                ranked.c.url.label("pr_url"),
+                completion.label("completion_status"),
+                totals.c.batch_total,
+                totals.c.issue_total,
+                totals.c.pending_total,
+                (totals.c.issue_total - totals.c.pending_total).label("reviewed_total"),
+                ranked.c.updated_at,
+            )
+            .join(
+                ranked,
+                and_(
+                    totals.c.provider == ranked.c.provider,
+                    totals.c.project_path == ranked.c.project_path,
+                    totals.c.pr_number == ranked.c.pr_number,
+                    ranked.c.rank == 1,
+                ),
+            )
+            .subquery()
+        )
+        statement = select(records)
+        if completion_statuses:
+            statement = statement.where(
+                records.c.completion_status.in_(completion_statuses)
+            )
+        total = db.scalar(select(func.count()).select_from(statement.subquery())) or 0
+        ordering = []
+        if query and query.strip():
+            ordering.append(case((records.c.pending_total > 0, 0), else_=1))
+        ordering.extend(
+            [
+                records.c.updated_at.desc(),
+                records.c.provider,
+                records.c.project_path,
+                records.c.pr_number.desc(),
+            ]
+        )
+        rows = (
+            db.execute(statement.order_by(*ordering).offset(offset).limit(limit))
+            .mappings()
+            .all()
+        )
+        return [dict(row) for row in rows], total
 
     @staticmethod
     def list_pull_requests(
@@ -130,67 +339,14 @@ class ReviewConsoleService:
         offset: int,
         limit: int,
     ) -> tuple[list[dict], int]:
-        batches = list(
-            db.scalars(
-                select(ReviewIssueBatch)
-                .where(
-                    ReviewIssueBatch.provider == provider,
-                    ReviewIssueBatch.project_path == project_path,
-                )
-                .order_by(
-                    ReviewIssueBatch.updated_at.desc(), ReviewIssueBatch.id.desc()
-                )
-            )
+        return ReviewConsoleService.list_queue(
+            db,
+            repositories=[(provider, project_path)],
+            query=None,
+            completion_statuses=completion_statuses,
+            offset=offset,
+            limit=limit,
         )
-        grouped: dict[str, list[ReviewIssueBatch]] = {}
-        for batch in batches:
-            grouped.setdefault(batch.pr_number, []).append(batch)
-        count_rows = db.execute(
-            select(
-                ReviewIssueBatch.pr_number,
-                func.count(ReviewIssue.id),
-                func.sum(
-                    case(
-                        (
-                            ReviewIssue.decision_status.in_(
-                                (
-                                    ReviewIssueDecisionStatus.UNVERIFIED,
-                                    ReviewIssueDecisionStatus.NEEDS_INFO,
-                                )
-                            ),
-                            1,
-                        ),
-                        else_=0,
-                    )
-                ),
-            )
-            .outerjoin(ReviewIssue, ReviewIssue.batch_id == ReviewIssueBatch.id)
-            .where(
-                ReviewIssueBatch.provider == provider,
-                ReviewIssueBatch.project_path == project_path,
-            )
-            .group_by(ReviewIssueBatch.pr_number)
-        ).all()
-        counts = {
-            pr_number: (int(issue_total), int(pending_total or 0))
-            for pr_number, issue_total, pending_total in count_rows
-        }
-        records = [
-            ReviewConsoleService._pull_request_record(
-                db,
-                pr_batches,
-                issue_total=counts[pr_number][0],
-                pending_total=counts[pr_number][1],
-            )
-            for pr_number, pr_batches in grouped.items()
-        ]
-        if completion_statuses:
-            allowed = set(completion_statuses)
-            records = [item for item in records if item["completion_status"] in allowed]
-        records.sort(
-            key=lambda item: (item["updated_at"], item["pr_number"]), reverse=True
-        )
-        return records[offset : offset + limit], len(records)
 
     @staticmethod
     def get_pull_request(
@@ -409,7 +565,11 @@ class ReviewConsoleService:
             select(
                 func.sum(
                     case(
-                        (ReviewIssue.decision_status == ReviewIssueDecisionStatus.ACCEPTED, 1),
+                        (
+                            ReviewIssue.decision_status
+                            == ReviewIssueDecisionStatus.ACCEPTED,
+                            1,
+                        ),
                         else_=0,
                     )
                 ),
@@ -455,7 +615,11 @@ class ReviewConsoleService:
                 func.count(ReviewIssue.id),
                 func.sum(
                     case(
-                        (ReviewIssue.decision_status == ReviewIssueDecisionStatus.ACCEPTED, 1),
+                        (
+                            ReviewIssue.decision_status
+                            == ReviewIssueDecisionStatus.ACCEPTED,
+                            1,
+                        ),
                         else_=0,
                     )
                 ),
