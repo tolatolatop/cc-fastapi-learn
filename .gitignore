@@ -36,3 +36,6 @@ deploy/docker-compose.local.yaml
 *.db
 logs/
 *.log
+
+# Local UI regression screenshots
+.artifacts/

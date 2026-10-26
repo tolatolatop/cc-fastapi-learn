@@ -24,16 +24,19 @@ __all__ = ["admin_user", "app", "current_user"]
 
 class StatusUpdateRequest(BaseModel):
     status: Literal["unverified", "accepted", "not_accepted", "needs_info"]
-    reason_code: Literal[
-        "false_positive",
-        "protected_by_control",
-        "not_reproducible",
-        "duplicate",
-        "out_of_scope",
-        "intentional_behavior",
-        "risk_accepted",
-        "other",
-    ] | None = None
+    reason_code: (
+        Literal[
+            "false_positive",
+            "protected_by_control",
+            "not_reproducible",
+            "duplicate",
+            "out_of_scope",
+            "intentional_behavior",
+            "risk_accepted",
+            "other",
+        ]
+        | None
+    ) = None
     note: str | None = Field(default=None, max_length=4000)
     expected_updated_at: datetime
 
@@ -103,6 +106,7 @@ def issues(
     query: str | None = Query(default=None, alias="q"),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
+    sort: Literal["updated", "location", "pending_first"] = "updated",
     user: ConsoleUser = Depends(current_user),
 ) -> dict:
     require_scope(user, provider, project_path)
@@ -111,6 +115,7 @@ def issues(
         ("project_path", project_path),
         ("offset", offset),
         ("limit", limit),
+        ("sort", sort),
     ]
     params.extend(("status", value) for value in statuses or [])
     params.extend(("severity", value) for value in severities or [])
@@ -119,6 +124,23 @@ def issues(
     if query:
         params.append(("q", query))
     return upstream_call(lambda: ReviewApiClient().issues(params))
+
+
+@app.get("/v1/queue")
+def queue(
+    query: str | None = Query(default=None, alias="q", max_length=200),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=25, ge=1, le=100),
+    user: ConsoleUser = Depends(current_user),
+) -> dict:
+    if not user.is_admin and not user.grants:
+        return {"items": [], "total": 0}
+    # Scopes come only from the session; a caller cannot request another repo.
+    params: list[tuple[str, str | int]] = [("offset", offset), ("limit", limit)]
+    params.extend(statistics_repository_params(user))
+    if query:
+        params.append(("q", query))
+    return upstream_call(lambda: ReviewApiClient().queue(params))
 
 
 @app.get("/v1/pull-requests")
@@ -163,7 +185,11 @@ def statistics(
     created_to: datetime | None = Query(default=None),
     user: ConsoleUser = Depends(current_user),
 ) -> dict:
-    if created_from is not None and created_to is not None and created_from > created_to:
+    if (
+        created_from is not None
+        and created_to is not None
+        and created_from > created_to
+    ):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="开始时间不能晚于结束时间",

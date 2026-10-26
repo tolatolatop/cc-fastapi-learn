@@ -44,11 +44,19 @@ UTC 时间；历史 API 只读，不提供更新或删除入口。
 `?view=issues&provider=<provider>&project_path=<project_path>&pr=<number>`；登录后刷新或打开该地址会恢复到对应
 PR/MR 的检视意见列表，无权限或目标不存在时明确提示，不回退到其他 PR/MR。
 
-审核队列在前端支持按仓库路径、PR/MR 编号和代码平台地址搜索；以空格分隔的关键字采用全部匹配，
+审核队列由服务端支持按仓库路径、PR/MR 编号和代码平台地址搜索；以空格分隔的关键字采用全部匹配，
 搜索结果将仍有待分析意见的 PR/MR 排在前面。意见列表默认按文件路径、行号排序；审核者可切换
 “待分析优先”，同组内仍按文件位置排序。文件位置完整显示，并以 `PATH:LINENO` 形式复制；详细信息
 和可编辑说明统一在中央弹窗中处理。变更历史不再作为顶层页面，从详情按钮打开独立只读弹窗，记录
 按 UTC 创建时间从新到旧排序，并在固定高度区域内滚动。
+
+队列和意见分别每页读取 25 条，使用 `offset/limit` 和服务端返回的 `total` 显示范围与页数；浏览器不会
+自动抓取剩余页面。队列跨授权仓库全局排序和搜索，意见的搜索、状态/等级筛选和排序都先于分页执行。
+输入搜索词后等待 250ms 再请求，切换筛选或 PR/MR 会回到意见第一页；旧请求取消，防止结果覆盖。
+裁定保存后刷新当前页与汇总；记录减少导致页码越界时回到最后一个有效页。
+
+桌面队列与意见区域在视口内独立滚动，手机队列高度最多 280px。意见正文仅展示两行预览，完整
+Markdown 和裁定说明保留在详情弹窗。直达地址通过单条查询定位，即使目标不在队列当前页也可打开。
 
 状态更新携带 `expected_updated_at`。若另一名审核者已修改同一意见，主应用返回 `409`，客户端必须
 刷新后再裁定，防止后写覆盖先写。重复提交完全相同的状态、原因和说明是幂等操作，不产生虚假历史。
@@ -63,18 +71,22 @@ PR/MR 完成状态由主应用聚合其全部检视批次和意见后返回：`p
 主应用集成接口使用 `X-Review-Console-Token`：
 
 - `GET /v1/review-console/repositories`
+- `GET /v1/review-console/queue`（跨仓库队列，`q` 多关键字搜索，`offset`，`limit` 默认 25、最多 100）
 - `GET /v1/review-console/pull-requests`
 - `GET /v1/review-console/pull-request`
-- `GET /v1/review-console/issues`
+- `GET /v1/review-console/issues`（`sort=updated|location|pending_first`，默认保留原有更新时间排序）
 - `GET /v1/review-console/issues/{id}`
 - `PUT /v1/review-console/issues/{id}/status`
 - `GET /v1/review-console/issues/{id}/history`
 - `GET /v1/review-console/statistics`
 
 写入接口另外要求 `X-Review-Actor-Id` 和 `X-Review-Actor-Name`。操作台对浏览器提供 `/v1/auth/*`、
-`/v1/repositories`、`/v1/issues/*`、`/v1/statistics` 与 `/v1/admin/users/*`，并在转发前校验仓库权限。
+`/v1/repositories`、`/v1/queue`、`/v1/issues/*`、`/v1/statistics` 与 `/v1/admin/users/*`，并在转发前校验仓库权限。
 非管理员统计请求会显式携带全部授权仓库范围；管理员可读取全局统计。时间过滤以当前最终裁定时间
 为准，贡献按意见的当前最终裁定人计数，因此反复修改不会放大贡献。
+
+队列的仓库范围完全由操作台后端从会话授权生成，浏览器不能指定其他仓库；无授权用户直接返回空队列，不访问上游。
+数据库聚合全部相关批次的状态和意见计数，只将当前页摘要实例化并返回，避免加载全部批次 ORM 对象。
 
 认证接口额外包含公开的 `GET /v1/auth/config`、发起登录的 `GET /v1/auth/sso/login` 和 OIDC 回调
 `GET /v1/auth/sso/callback`。前端只根据公开配置决定显示 SSO 或本地登录，不会读取客户端密钥。
@@ -83,6 +95,9 @@ PR/MR 完成状态由主应用聚合其全部检视批次和意见后返回：`p
 Token 的签名、issuer、audience 和有效期，再按 `iss + sub` 映射到同一套用户、角色及仓库权限。
 
 ## 部署
+
+队列分页需要主应用 API、操作台后端和前端一起升级；分批发布时先更新主应用 API，再发布操作台。
+本次不涉及数据库迁移或新增环境变量。
 
 在仓库根目录复制 `.env.example` 为 `.env`，生成至少 32 字节的随机会话密钥和独立服务令牌，不要
 与 `API_TOKEN` 共用。启用 SSO 时至少设置以下值：
@@ -120,3 +135,18 @@ TLS，并将两个后端部署在私有网络中。备份时必须同时备份�
 
 完整功能优先级和当前完成度见
 [`review-console-roadmap.md`](review-console-roadmap.md)。
+
+## 分页界面回归验证
+
+后端测试：`REVIEW_CONSOLE_API_TOKEN=local-test-token pytest -q`。使用合成令牌即可；SSO 配置校验测试
+要求服务令牌已配置。浏览器检查使用 3001 条合成队列记录，验证请求数、翻页、搜索、直达链接、
+裁定后页码修正、过期响应隔离，以及桌面和手机的溢出和高度。
+
+```bash
+cd review-console/frontend && npm ci && npm run build
+cd ../..
+uv run --no-project --with playwright playwright install chromium
+uv run --no-project --with playwright python tests/browser/review_console_queue.py
+```
+
+脚本自动启动并清理本地静态服务器，在 `.artifacts/` 保存截图；不需要真实账号或运行中的后端。

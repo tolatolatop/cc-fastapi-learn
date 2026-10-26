@@ -27,38 +27,20 @@ export const api = {
   logout: () => request<void>('/v1/auth/logout', { method: 'POST' }),
   me: () => request<User>('/v1/auth/me'),
   repositories: () => request<{ items: Repository[] }>('/v1/repositories'),
-  pullRequests: async (repo: Repository) => {
-    const params = new URLSearchParams({ provider: repo.provider, project_path: repo.project_path, limit: '200' })
-    const first = await request<{ items: PullRequest[]; total: number }>(`/v1/pull-requests?${params}`)
-    if (first.items.length >= first.total) return first
-    const pages: Array<Promise<{ items: PullRequest[]; total: number }>> = []
-    for (let offset = first.items.length; offset < first.total; offset += 200) {
-      const next = new URLSearchParams(params)
-      next.set('offset', String(offset))
-      pages.push(request<{ items: PullRequest[]; total: number }>(`/v1/pull-requests?${next}`))
-    }
-    const remaining = await Promise.all(pages)
-    return { items: [...first.items, ...remaining.flatMap((page) => page.items)], total: first.total }
+  queue: (query: string, offset: number, limit: number, signal?: AbortSignal) => {
+    const params = new URLSearchParams({ q: query, offset: String(offset), limit: String(limit) })
+    return request<{ items: PullRequest[]; total: number }>(`/v1/queue?${params}`, { signal })
   },
-  pullRequest: (repo: Repository, prNumber: string) => {
+  pullRequest: (repo: Repository, prNumber: string, signal?: AbortSignal) => {
     const params = new URLSearchParams({ provider: repo.provider, project_path: repo.project_path, pr_number: prNumber })
-    return request<PullRequest>(`/v1/pull-request?${params}`)
+    return request<PullRequest>(`/v1/pull-request?${params}`, { signal })
   },
-  issues: async (repo: Repository, prNumber: string, status: string, query: string) => {
-    const params = new URLSearchParams({ provider: repo.provider, project_path: repo.project_path, limit: '200' })
-    if (prNumber) params.append('pr_number', prNumber)
+  issues: (repo: Repository, prNumber: string, status: string, query: string, hideLow: boolean, pendingFirst: boolean, offset: number, limit: number, signal?: AbortSignal) => {
+    const params = new URLSearchParams({ provider: repo.provider, project_path: repo.project_path, pr_number: prNumber, offset: String(offset), limit: String(limit), sort: pendingFirst ? 'pending_first' : 'location' })
     if (status) params.append('status', status)
     if (query) params.append('q', query)
-    const first = await request<{ items: Issue[]; total: number }>(`/v1/issues?${params}`)
-    if (first.items.length >= first.total) return first
-    const pages: Array<Promise<{ items: Issue[]; total: number }>> = []
-    for (let offset = first.items.length; offset < first.total; offset += 200) {
-      const next = new URLSearchParams(params)
-      next.set('offset', String(offset))
-      pages.push(request<{ items: Issue[]; total: number }>(`/v1/issues?${next}`))
-    }
-    const remaining = await Promise.all(pages)
-    return { items: [...first.items, ...remaining.flatMap((page) => page.items)], total: first.total }
+    if (hideLow) ['critical', 'high', 'medium', 'info'].forEach((severity) => params.append('severity', severity))
+    return request<{ items: Issue[]; total: number }>(`/v1/issues?${params}`, { signal })
   },
   history: (id: string) => request<{ items: HistoryItem[] }>(`/v1/issues/${id}/history`),
   updateStatus: (issue: Issue, status: IssueStatus, reasonCode: DecisionReason | null, note: string | null) => request<Issue>(`/v1/issues/${issue.id}/status`, {

@@ -1,6 +1,6 @@
-import { FormEvent, useCallback, useEffect, useState } from 'react'
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowRight, ArrowUpDown, BarChart3, Check, Clock3, Code2, Copy, ExternalLink, Eye, EyeOff, FileText, History, Link2, LogIn, LogOut, Search, ShieldCheck, Users, X } from 'lucide-react'
-import { Button, Form, Modal, Table } from 'react-bootstrap'
+import { Button, Form, Modal, Pagination, Table } from 'react-bootstrap'
 import { api } from './api'
 import IssueMarkdown from './IssueMarkdown'
 import type { AuthConfig, DecisionReason, HistoryItem, Issue, IssueStatus, Permission, PullRequest, PullRequestCompletionStatus, Repository, Statistics, User } from './types'
@@ -56,25 +56,28 @@ function issueLocation(issue: Issue) {
   return issue.line_number === null ? `${issue.file_path}（未标注行号）` : `${issue.file_path}:${issue.line_number}`
 }
 
-function compareIssueLocation(left: Issue, right: Issue) {
-  const leftPath = left.file_path?.toLocaleLowerCase() || '\uffff'
-  const rightPath = right.file_path?.toLocaleLowerCase() || '\uffff'
-  const pathOrder = leftPath.localeCompare(rightPath, undefined, { numeric: true, sensitivity: 'base' })
-  if (pathOrder) return pathOrder
-  const lineOrder = (left.line_number ?? Number.MAX_SAFE_INTEGER) - (right.line_number ?? Number.MAX_SAFE_INTEGER)
-  return lineOrder || left.issue_no - right.issue_no
-}
-
-function requestedPullRequest(pullRequests: PullRequest[]) {
+function requestedPullRequest() {
   const params = new URLSearchParams(window.location.search)
   const provider = params.get('provider')
   const projectPath = params.get('project_path')
   const prNumber = params.get('pr') || params.get('pr_number')
-  if (!provider || !projectPath || !prNumber) return { requested: false, pullRequest: null }
-  return {
-    requested: true,
-    pullRequest: pullRequests.find((item) => item.provider === provider && item.project_path === projectPath && item.pr_number === prNumber) || null,
-  }
+  return provider && projectPath && prNumber ? { provider, project_path: projectPath, pr_number: prNumber } : null
+}
+
+const PAGE_SIZE = 25
+
+function PageControls({ page, total, loading, label, onChange }: { page: number; total: number; loading: boolean; label: string; onChange: (page: number) => void }) {
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  return <div className="page-controls">
+    <small role="status">{total ? `${page * PAGE_SIZE + 1}–${Math.min((page + 1) * PAGE_SIZE, total)}` : '0'} / {total} 条</small>
+    <nav aria-label={label}><Pagination size="sm">
+      <Pagination.First disabled={loading || page === 0} onClick={() => onChange(0)} aria-label="第一页" />
+      <Pagination.Prev disabled={loading || page === 0} onClick={() => onChange(page - 1)} aria-label="上一页" />
+      <Pagination.Item active aria-label={`第 ${page + 1} 页，共 ${pages} 页`}>{page + 1} / {pages}</Pagination.Item>
+      <Pagination.Next disabled={loading || page + 1 >= pages} onClick={() => onChange(page + 1)} aria-label="下一页" />
+      <Pagination.Last disabled={loading || page + 1 >= pages} onClick={() => onChange(pages - 1)} aria-label="最后一页" />
+    </Pagination></nav>
+  </div>
 }
 
 function writePullRequestUrl(pullRequest: PullRequest, replace = false) {
@@ -204,10 +207,19 @@ function IssueHistoryModal({ issue, onClose }: { issue: Issue | null; onClose: (
 function IssueWorkspace({ repositories, routeVersion }: { repositories: Repository[]; routeVersion: number }) {
   const [pullRequests, setPullRequests] = useState<PullRequest[]>([])
   const [selectedPr, setSelectedPr] = useState<PullRequest | null>(null)
+  const [selectedPrLoading, setSelectedPrLoading] = useState(false)
+  const directLinkRequest = useRef<AbortController | null>(null)
   const [issues, setIssues] = useState<Issue[]>([])
   const [status, setStatus] = useState('')
   const [query, setQuery] = useState('')
   const [queueQuery, setQueueQuery] = useState('')
+  const [queuePage, setQueuePage] = useState(0)
+  const [queueTotal, setQueueTotal] = useState(0)
+  const [issuePage, setIssuePage] = useState(0)
+  const [issueTotal, setIssueTotal] = useState(0)
+  const [queueError, setQueueError] = useState('')
+  const [queueRefresh, setQueueRefresh] = useState(0)
+  const [issueRefresh, setIssueRefresh] = useState(0)
   const [pendingFirst, setPendingFirst] = useState(false)
   const [hideLow, setHideLow] = useState(true)
   const [pullRequestsLoading, setPullRequestsLoading] = useState(false)
@@ -219,35 +231,62 @@ function IssueWorkspace({ repositories, routeVersion }: { repositories: Reposito
   const [busyDecision, setBusyDecision] = useState<{ issueId: string; status: IssueStatus } | null>(null)
   const [copied, setCopied] = useState(false)
   const [copiedLocationId, setCopiedLocationId] = useState<string | null>(null)
+  // Resolve deep links independently: the requested PR may be on any queue page.
   useEffect(() => {
-    let cancelled = false
-    setPullRequestsLoading(true); setError('')
-    Promise.all(repositories.map((repository) => api.pullRequests(repository)))
-      .then((results) => {
-        if (cancelled) return
-        const items = results.flatMap((result) => result.items).sort((left, right) => new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime())
-        const target = requestedPullRequest(items)
-        setPullRequests(items)
-        if (target.requested && !target.pullRequest) {
-          setSelectedPr(null)
-          setError('链接中的 PR/MR 不存在，或你没有访问权限。')
-        } else {
-          const next = target.pullRequest || items[0] || null
-          setSelectedPr(next)
-          if (next && !target.requested) writePullRequestUrl(next, true)
-        }
-      })
-      .catch((reason) => { if (!cancelled) setError((reason as Error).message) })
-      .finally(() => { if (!cancelled) setPullRequestsLoading(false) })
-    return () => { cancelled = true }
+    const controller = new AbortController()
+    directLinkRequest.current = controller
+    setSelectedPrLoading(false)
+    const target = requestedPullRequest()
+    setDetail(null); setHistoryIssue(null); setRejecting(null); setIssuePage(0)
+    if (!target) { setSelectedPr(null); setError(''); return }
+    const repository = repositories.find((item) => item.provider === target.provider && item.project_path === target.project_path)
+    if (!repository) { setSelectedPr(null); setError('链接中的 PR/MR 不存在，或你没有访问权限。'); return }
+    setSelectedPr(null); setSelectedPrLoading(true)
+    api.pullRequest(repository, target.pr_number, controller.signal)
+      .then((item) => { if (!controller.signal.aborted) { setSelectedPr(item); setError('') } })
+      .catch((reason) => { if (!controller.signal.aborted) setError((reason as Error).message) })
+      .finally(() => { if (!controller.signal.aborted) setSelectedPrLoading(false) })
+    return () => { controller.abort() }
   }, [repositories, routeVersion])
+  useEffect(() => {
+    const controller = new AbortController()
+    setPullRequestsLoading(true); setQueueError('')
+    const timer = window.setTimeout(() => {
+      api.queue(queueQuery.trim(), queuePage * PAGE_SIZE, PAGE_SIZE, controller.signal)
+        .then((result) => {
+          if (controller.signal.aborted) return
+          const lastPage = Math.max(0, Math.ceil(result.total / PAGE_SIZE) - 1)
+          if (queuePage > lastPage) { setQueuePage(lastPage); return }
+          setPullRequests(result.items); setQueueTotal(result.total)
+          if (!requestedPullRequest() && result.items[0]) {
+            setSelectedPr(result.items[0])
+            writePullRequestUrl(result.items[0], true)
+          }
+        })
+        .catch((reason) => { if (!controller.signal.aborted) { setQueueError((reason as Error).message); setPullRequests([]) } })
+        .finally(() => { if (!controller.signal.aborted) setPullRequestsLoading(false) })
+    }, 250)
+    return () => { window.clearTimeout(timer); controller.abort() }
+  }, [repositories, queueQuery, queuePage, queueRefresh, routeVersion])
   const selectedRepository = repositoryFor(selectedPr, repositories)
-  const load = useCallback(async () => {
-    if (!selectedRepository || !selectedPr) { setIssues([]); return }
-    setLoading(true); setError('')
-    try { setIssues((await api.issues(selectedRepository, selectedPr.pr_number, status, query)).items) } catch (reason) { setError((reason as Error).message) } finally { setLoading(false) }
-  }, [selectedRepository, selectedPr, status, query])
-  useEffect(() => { void load() }, [load])
+  const selectedPrNumber = selectedPr?.pr_number
+  useEffect(() => {
+    const controller = new AbortController()
+    if (!selectedRepository || !selectedPrNumber) { setIssues([]); setIssueTotal(0); setLoading(false); return }
+    setLoading(true); setError(''); setIssues([])
+    const timer = window.setTimeout(() => {
+      api.issues(selectedRepository, selectedPrNumber, status, query, hideLow, pendingFirst, issuePage * PAGE_SIZE, PAGE_SIZE, controller.signal)
+        .then((result) => {
+          if (controller.signal.aborted) return
+          const lastPage = Math.max(0, Math.ceil(result.total / PAGE_SIZE) - 1)
+          if (issuePage > lastPage) { setIssuePage(lastPage); return }
+          setIssues(result.items); setIssueTotal(result.total)
+        })
+        .catch((reason) => { if (!controller.signal.aborted) setError((reason as Error).message) })
+        .finally(() => { if (!controller.signal.aborted) setLoading(false) })
+    }, 250)
+    return () => { window.clearTimeout(timer); controller.abort() }
+  }, [selectedRepository, selectedPrNumber, status, query, hideLow, pendingFirst, issuePage, issueRefresh])
   async function refreshPullRequest(updated: Issue) {
     const repository = repositories.find((item) => item.provider === updated.provider && item.project_path === updated.project_path)
     if (!repository) return
@@ -258,6 +297,7 @@ function IssueWorkspace({ repositories, routeVersion }: { repositories: Reposito
   async function handleSaved(updated: Issue) {
     setIssues((items) => status && updated.status !== status ? items.filter((item) => item.id !== updated.id) : items.map((item) => item.id === updated.id ? updated : item))
     setDetail((current) => current?.id === updated.id ? updated : current)
+    setIssueRefresh((value) => value + 1); setQueueRefresh((value) => value + 1)
     try { await refreshPullRequest(updated) }
     catch { setError('裁定已保存，但 PR/MR 汇总刷新失败；重新打开页面即可恢复。') }
   }
@@ -270,7 +310,8 @@ function IssueWorkspace({ repositories, routeVersion }: { repositories: Reposito
     finally { setBusyDecision(null) }
   }
   function selectPullRequest(pullRequest: PullRequest) {
-    setSelectedPr(pullRequest); setDetail(null); setHistoryIssue(null); setRejecting(null); setCopied(false); setError(''); writePullRequestUrl(pullRequest)
+    directLinkRequest.current?.abort(); setSelectedPrLoading(false)
+    setIssuePage(0); setSelectedPr(pullRequest); setDetail(null); setHistoryIssue(null); setRejecting(null); setCopied(false); setError(''); writePullRequestUrl(pullRequest)
   }
   async function copyDirectLink() {
     if (!selectedPr) return
@@ -283,46 +324,35 @@ function IssueWorkspace({ repositories, routeVersion }: { repositories: Reposito
     try { await navigator.clipboard.writeText(`${issue.file_path}:${issue.line_number}`); setCopiedLocationId(issue.id); window.setTimeout(() => setCopiedLocationId(null), 1600) }
     catch { setError('无法复制文件位置，请手动选择路径和行号。') }
   }
-  const queueKeywords = queueQuery.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean)
-  const visiblePullRequests = pullRequests
-    .filter((pullRequest) => {
-      if (!queueKeywords.length) return true
-      const searchable = `${pullRequest.provider} ${pullRequest.project_path} ${pullRequest.pr_number} #${pullRequest.pr_number} ${pullRequest.pr_url || ''}`.toLocaleLowerCase()
-      return queueKeywords.every((keyword) => searchable.includes(keyword))
-    })
-    .sort((left, right) => {
-      if (queueKeywords.length) {
-        const pendingOrder = Number(right.pending_total > 0) - Number(left.pending_total > 0)
-        if (pendingOrder) return pendingOrder
-      }
-      return new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime()
-    })
-  const hiddenLowCount = hideLow ? issues.filter((issue) => issue.severity === 'low').length : 0
-  const visibleIssues = issues
-    .filter((issue) => !hideLow || issue.severity !== 'low')
-    .sort((left, right) => {
-      if (pendingFirst) {
-        const pendingOrder = Number(right.status === 'unverified') - Number(left.status === 'unverified')
-        if (pendingOrder) return pendingOrder
-      }
-      return compareIssueLocation(left, right)
-    })
   const emptyMessage = selectedPr?.completion_status === 'no_issues'
     ? '该 PR/MR 已检视完毕，没有发现问题'
-    : hiddenLowCount > 0
-      ? `当前筛选下的 ${hiddenLowCount} 条意见均为 LOW 等级，已按默认设置隐藏；关闭「隐藏 LOW」即可查看`
-      : '当前筛选下没有检视意见'
+    : hideLow ? '当前筛选下没有检视意见；可调整搜索、状态或关闭「隐藏 LOW」' : '当前筛选下没有检视意见'
   return <div className="workspace-grid review-pr-workspace">
-    <aside className="pr-rail"><div className="pr-rail-head"><p className="rail-label">PR / MR 审核队列</p><strong>{visiblePullRequests.length}/{pullRequests.length}</strong></div><label className="pr-rail-search"><Search size={15} /><Form.Control value={queueQuery} onChange={(event) => setQueueQuery(event.target.value)} placeholder="仓库、PR ID 或 PR 地址" aria-label="搜索审核队列" /><small>多个关键字用空格分隔</small></label><div className="pr-rail-list">{pullRequestsLoading ? <div className="rail-empty">正在汇总…</div> : visiblePullRequests.map((pullRequest) => <button key={pullRequestKey(pullRequest)} className={selectedPr && pullRequestKey(selectedPr) === pullRequestKey(pullRequest) ? 'active' : ''} onClick={() => selectPullRequest(pullRequest)}><span className="pr-rail-number">#{pullRequest.pr_number}<small>{pullRequest.provider}</small></span><strong>{pullRequest.project_path}</strong><span className="pr-rail-progress"><i style={{ width: `${pullRequest.issue_total ? pullRequest.reviewed_total / pullRequest.issue_total * 100 : 100}%` }} /><small>{pullRequest.pending_total} 条待分析</small></span><span className={`completion ${pullRequest.completion_status}`}>{completionMeta[pullRequest.completion_status]}</span></button>)}{!pullRequestsLoading && !visiblePullRequests.length && <div className="rail-empty">没有匹配的 PR/MR；请调整关键字</div>}</div></aside>
+    <aside className="pr-rail">
+      <div className="pr-rail-head"><p className="rail-label">PR / MR 审核队列</p><strong>{queueTotal.toLocaleString()} 条</strong></div>
+      <label className="pr-rail-search"><Search size={15} /><Form.Control value={queueQuery} maxLength={200} onChange={(event) => { setQueueQuery(event.target.value); setQueuePage(0) }} placeholder="仓库、PR ID 或 PR 地址" aria-label="搜索审核队列" /><small>搜索全部记录 · 每页 {PAGE_SIZE} 条</small></label>
+      {queueError && <div className="form-error" role="alert">{queueError}<Button variant="link" size="sm" onClick={() => setQueueRefresh((value) => value + 1)}>重试</Button></div>}
+      <div className="pr-rail-list" key={`${queuePage}/${queueQuery}`} aria-busy={pullRequestsLoading}>
+        {pullRequestsLoading ? <div className="rail-empty">正在读取队列…</div> : pullRequests.map((pullRequest) => <button key={pullRequestKey(pullRequest)} aria-pressed={Boolean(selectedPr && pullRequestKey(selectedPr) === pullRequestKey(pullRequest))} className={selectedPr && pullRequestKey(selectedPr) === pullRequestKey(pullRequest) ? 'active' : ''} onClick={() => selectPullRequest(pullRequest)}>
+          <span className="pr-rail-number">#{pullRequest.pr_number}<small>{pullRequest.provider}</small></span>
+          <strong title={pullRequest.project_path}>{pullRequest.project_path}</strong>
+          <span className="pr-rail-progress"><i style={{ width: `${pullRequest.issue_total ? pullRequest.reviewed_total / pullRequest.issue_total * 100 : 100}%` }} /><small>{pullRequest.pending_total} 条待分析</small></span>
+          <span className={`completion ${pullRequest.completion_status}`}>{completionMeta[pullRequest.completion_status]}</span>
+        </button>)}
+        {!pullRequestsLoading && !queueError && !pullRequests.length && <div className="rail-empty">没有匹配的 PR/MR；请调整关键字</div>}
+      </div>
+      <PageControls page={queuePage} total={queueTotal} loading={pullRequestsLoading || Boolean(queueError)} label="审核队列分页" onChange={setQueuePage} />
+    </aside>
     <section className="review-content">
       {selectedPr && selectedRepository ? <><header className="content-header pr-content-header"><div><p className="eyebrow">{selectedPr.provider} / {selectedPr.project_path}</p><h1>PR / MR #{selectedPr.pr_number}</h1><span className={`permission ${selectedRepository.permission}`}>{selectedRepository.permission === 'write' ? '可修改' : '只读'}</span><div className="pr-header-links"><Button variant="link" size="sm" onClick={() => void copyDirectLink()}><Link2 size={15} />{copied ? '已复制链接' : '复制直达链接'}</Button>{selectedPr.pr_url && <Button as="a" variant="link" size="sm" href={selectedPr.pr_url} target="_blank" rel="noreferrer"><ExternalLink size={15} />打开代码平台</Button>}</div></div><div className="status-tally"><span><b>{selectedPr.issue_total}</b>全部意见</span><span><b>{selectedPr.reviewed_total}</b>已裁定</span><span><b>{selectedPr.pending_total}</b>待分析</span><strong className={`completion ${selectedPr.completion_status}`}>{completionMeta[selectedPr.completion_status]}</strong></div></header>
-      <div className="filters"><label><Search size={17} /><Form.Control value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索标题、说明或文件" /></label><Form.Select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="unverified">待分析</option><option value="accepted">接受</option><option value="not_accepted">拒绝</option><option value="needs_info">待补充</option></Form.Select><Button className={`pending-first-sort ${pendingFirst ? 'active' : ''}`} variant="outline-secondary" aria-pressed={pendingFirst} onClick={() => setPendingFirst((active) => !active)}><ArrowUpDown size={15} />待分析优先</Button><Button className={`low-visibility-toggle ${hideLow ? 'active' : ''}`} variant="outline-secondary" aria-pressed={hideLow} title={hideLow ? '已隐藏 LOW 等级意见，点击显示' : '当前显示全部等级，点击隐藏 LOW 等级意见'} onClick={() => setHideLow((active) => !active)}>{hideLow ? <EyeOff size={15} /> : <Eye size={15} />}隐藏 LOW{hiddenLowCount > 0 && <span className="low-visibility-count">{hiddenLowCount}</span>}</Button></div>
-      {error && <div className="form-error">{error}</div>}{loading ? <div className="empty-state">正在读取检视意见…</div> : !visibleIssues.length ? <div className="empty-state">{emptyMessage}</div> : <div className="compact-issue-list">{visibleIssues.map((issue) => <article className="compact-issue-card" key={issue.id}>
+      <div className="filters"><label><Search size={17} /><Form.Control value={query} maxLength={200} aria-label="搜索检视意见" onChange={(e) => { setQuery(e.target.value); setIssuePage(0) }} placeholder="搜索标题、说明或文件" /></label><Form.Select aria-label="意见状态" value={status} onChange={(e) => { setStatus(e.target.value); setIssuePage(0) }}><option value="">全部状态</option><option value="unverified">待分析</option><option value="accepted">接受</option><option value="not_accepted">拒绝</option><option value="needs_info">待补充</option></Form.Select><Button className={`pending-first-sort ${pendingFirst ? 'active' : ''}`} variant="outline-secondary" aria-pressed={pendingFirst} onClick={() => { setPendingFirst((active) => !active); setIssuePage(0) }}><ArrowUpDown size={15} />待分析优先</Button><Button className={`low-visibility-toggle ${hideLow ? 'active' : ''}`} variant="outline-secondary" aria-pressed={hideLow} title={hideLow ? '已隐藏 LOW 等级意见，点击显示' : '当前显示全部等级，点击隐藏 LOW 等级意见'} onClick={() => { setHideLow((active) => !active); setIssuePage(0) }}>{hideLow ? <EyeOff size={15} /> : <Eye size={15} />}隐藏 LOW</Button></div>
+      <PageControls page={issuePage} total={issueTotal} loading={loading || Boolean(error)} label="检视意见分页" onChange={setIssuePage} />
+      {error && <div className="form-error" role="alert">{error}<Button variant="link" size="sm" onClick={() => setIssueRefresh((value) => value + 1)}>重试</Button></div>}{loading ? <div className="empty-state">正在读取检视意见…</div> : !issues.length ? <div className="empty-state">{emptyMessage}</div> : <div className="compact-issue-list">{issues.map((issue) => <article className="compact-issue-card" key={issue.id}>
         <div className={`severity-cell ${issue.severity}`}><span>问题等级</span><strong>{issue.severity}</strong></div>
         <div className="issue-location"><span>文件 / 行号</span><Button variant="link" className="copy-location" disabled={!issue.file_path || issue.line_number === null} title={issue.file_path && issue.line_number !== null ? `复制 ${issue.file_path}:${issue.line_number}` : '缺少路径或行号，无法复制'} onClick={() => void copyIssueLocation(issue)}><strong>{issueLocation(issue)}</strong><small>{copiedLocationId === issue.id ? '已复制' : <Copy size={13} />}</small></Button></div>
-        <div className="issue-opinion"><span>检视意见</span><strong>{issue.title}</strong><IssueMarkdown>{issue.description}</IssueMarkdown></div>
+        <div className="issue-opinion"><span>检视意见</span><strong>{issue.title}</strong><div className="issue-preview"><IssueMarkdown>{issue.description.length > 240 ? `${issue.description.slice(0, 240)}…` : issue.description}</IssueMarkdown></div></div>
         <div className="compact-issue-actions"><Button className="detail-button" variant="link" size="sm" onClick={() => setDetail(issue)}><FileText size={15} />详情</Button><div className="inline-decisions" aria-label="状态裁定">{(['unverified', 'accepted', 'not_accepted'] as IssueStatus[]).map((value) => <Button key={value} variant="outline-secondary" size="sm" className={`${statusMeta[value].className} ${issue.status === value ? 'active' : ''}`} disabled={selectedRepository.permission !== 'write' || busyDecision?.issueId === issue.id || issue.status === value} onClick={() => void setIssueStatus(issue, value)}>{value === 'accepted' ? <Check /> : value === 'not_accepted' ? <X /> : <Clock3 />}{busyDecision?.issueId === issue.id && busyDecision.status === value ? '保存中' : statusMeta[value].label}</Button>)}</div></div>
-      </article>)}</div>}</> : <div className="empty-state">{pullRequestsLoading ? '正在汇总 PR/MR…' : error || '授权范围内暂无 PR/MR 检视记录'}</div>}
+      </article>)}</div>}</> : <div className="empty-state">{pullRequestsLoading || selectedPrLoading ? '正在读取 PR/MR…' : error || '授权范围内暂无 PR/MR 检视记录'}</div>}
     </section>
     <RejectModal issue={rejecting} onClose={() => setRejecting(null)} onSaved={(updated) => { void handleSaved(updated) }} />
     <IssueDetail issue={detail} permission={selectedRepository?.permission || null} onClose={() => setDetail(null)} onOpenHistory={(issue) => { setDetail(null); setHistoryIssue(issue) }} onSaved={(updated) => { void handleSaved(updated) }} />

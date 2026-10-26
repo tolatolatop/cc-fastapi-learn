@@ -163,9 +163,7 @@ def test_statistics_with_no_grants_never_request_global_scope(monkeypatch):
     monkeypatch.setattr(ReviewApiClient, "statistics", statistics)
     response = TestClient(app).get("/v1/statistics")
     assert response.status_code == 200
-    assert captured["params"] == [
-        ("repository", "__no_access__/__no_access__")
-    ]
+    assert captured["params"] == [("repository", "__no_access__/__no_access__")]
     app.dependency_overrides.clear()
 
 
@@ -223,3 +221,80 @@ def test_admin_can_create_user_and_assign_repository_grant():
     assert grant.json()["provider"] == "github"
     assert grant.json()["project_path"] == "team/service"
     app.dependency_overrides.clear()
+
+
+def test_queue_forwards_only_session_scopes_and_requested_page(monkeypatch):
+    user = scoped_user(RepositoryPermission.READ)
+    app.dependency_overrides[current_user] = lambda: user
+    captured = {}
+
+    def queue(self, params):
+        captured["params"] = params
+        return {"items": [], "total": 0}
+
+    monkeypatch.setattr(ReviewApiClient, "queue", queue)
+    client = TestClient(app)
+    try:
+        response = client.get(
+            "/v1/queue",
+            params={
+                "q": "service #42",
+                "offset": 50,
+                "limit": 25,
+                "repository": "github/private",
+            },
+        )
+        assert response.status_code == 200
+        assert captured["params"] == [
+            ("offset", 50),
+            ("limit", 25),
+            ("repository", "github/team/service"),
+            ("q", "service #42"),
+        ]
+        user.grants = []
+        captured["params"] = None
+        assert client.get("/v1/queue").json() == {"items": [], "total": 0}
+        assert captured["params"] is None
+        user.is_admin = True
+        assert client.get("/v1/queue").status_code == 200
+        assert captured["params"] == [("offset", 0), ("limit", 25)]
+        assert client.get("/v1/queue?limit=101").status_code == 422
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_issue_paging_sort_and_filters_are_forwarded(monkeypatch):
+    app.dependency_overrides[current_user] = lambda: scoped_user(
+        RepositoryPermission.READ
+    )
+    captured = {}
+
+    def issues(self, params):
+        captured["params"] = params
+        return {"items": [], "total": 0}
+
+    monkeypatch.setattr(ReviewApiClient, "issues", issues)
+    try:
+        response = TestClient(app).get(
+            "/v1/issues",
+            params=[
+                ("provider", "github"),
+                ("project_path", "team/service"),
+                ("pr_number", "17"),
+                ("offset", "25"),
+                ("limit", "25"),
+                ("sort", "pending_first"),
+                ("severity", "high"),
+                ("severity", "medium"),
+                ("status", "unverified"),
+                ("q", "retry"),
+            ],
+        )
+        assert response.status_code == 200
+        assert ("sort", "pending_first") in captured["params"]
+        assert ("offset", 25) in captured["params"]
+        assert ("severity", "high") in captured["params"]
+        assert ("severity", "medium") in captured["params"]
+        assert ("status", "unverified") in captured["params"]
+    finally:
+        app.dependency_overrides.clear()

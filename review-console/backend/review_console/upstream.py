@@ -61,6 +61,9 @@ class ReviewApiClient:
     def pull_requests(self, params: list[tuple[str, str | int]]) -> dict[str, Any]:
         return self._request("GET", "/v1/review-console/pull-requests", params=params)
 
+    def queue(self, params: list[tuple[str, str | int]]) -> dict[str, Any]:
+        return self._request("GET", "/v1/review-console/queue", params=params)
+
     def pull_request(self, params: list[tuple[str, str | int]]) -> dict[str, Any]:
         return self._request("GET", "/v1/review-console/pull-request", params=params)
 

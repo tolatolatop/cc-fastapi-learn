@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from urllib.parse import unquote
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
@@ -86,6 +87,7 @@ def list_issues(
     query: str | None = Query(default=None, alias="q", max_length=200),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
+    sort: Literal["updated", "location", "pending_first"] = "updated",
     db: Session = Depends(get_db),
 ) -> ReviewConsoleIssueListResponse:
     rows, total = service.list_issues(
@@ -98,10 +100,36 @@ def list_issues(
         query=query,
         offset=offset,
         limit=limit,
+        sort=sort,
     )
     return ReviewConsoleIssueListResponse(
         items=[_issue_response(issue, batch) for issue, batch in rows], total=total
     )
+
+
+@router.get("/queue", response_model=ReviewConsolePullRequestListResponse)
+def list_queue(
+    repository: list[str] | None = Query(default=None),
+    query: str | None = Query(default=None, alias="q", max_length=200),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=25, ge=1, le=100),
+    db: Session = Depends(get_db),
+) -> ReviewConsolePullRequestListResponse:
+    scopes = None
+    if repository is not None:
+        scopes = []
+        for value in repository:
+            provider, separator, project_path = value.partition("/")
+            if not separator or not provider.strip() or not project_path.strip():
+                raise HTTPException(
+                    status_code=422,
+                    detail="repository must use provider/project_path format",
+                )
+            scopes.append((provider.strip().lower(), project_path.strip().strip("/")))
+    items, total = service.list_queue(
+        db, repositories=scopes, query=query, offset=offset, limit=limit
+    )
+    return ReviewConsolePullRequestListResponse(items=items, total=total)
 
 
 @router.get("/pull-requests", response_model=ReviewConsolePullRequestListResponse)
@@ -245,7 +273,11 @@ def statistics(
     repository: list[str] | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> ReviewConsoleStatisticsResponse:
-    if created_from is not None and created_to is not None and created_from > created_to:
+    if (
+        created_from is not None
+        and created_to is not None
+        and created_from > created_to
+    ):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="created_from must not be later than created_to",

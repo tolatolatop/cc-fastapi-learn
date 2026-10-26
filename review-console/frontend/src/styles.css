@@ -118,3 +118,122 @@ button, input, select, textarea { font: inherit; }
 .issue-markdown img { max-width: 100%; height: auto; }
 .issue-markdown .task-list-item { list-style: none; }
 .issue-markdown .task-list-item input { margin-right: .4em; }
+
+/* Keep both review panes within the viewport, regardless of queue size. */
+.review-pr-workspace {
+  height: calc(100dvh - var(--topbar-height));
+  min-height: 0;
+  overflow: hidden;
+}
+.review-pr-workspace .pr-rail {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  padding: 18px 12px 10px;
+}
+.review-pr-workspace .pr-rail-list {
+  display: block;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+}
+.review-pr-workspace .pr-rail-list > button {
+  min-width: 0;
+  margin-bottom: 4px;
+  padding: 9px 10px;
+  gap: 3px 8px;
+}
+.pr-rail-list > button:focus-visible { outline: 2px solid #167d8d; outline-offset: -2px; }
+.review-pr-workspace .pr-rail-progress { height: 17px; margin-top: 1px; }
+.review-pr-workspace .pr-rail-progress small { padding: 1px 6px; }
+.review-pr-workspace .review-content {
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  padding: 22px clamp(16px, 2vw, 32px);
+}
+.review-pr-workspace .content-header { margin-bottom: 18px; gap: 16px; flex-wrap: wrap; }
+.review-pr-workspace .content-header h1 { font-size: 1.75em; }
+.review-pr-workspace .status-tally { gap: 16px; }
+.review-pr-workspace .status-tally b { font-size: 1.7em; }
+.review-pr-workspace .filters { flex-wrap: wrap; }
+.review-pr-workspace .filters > label { min-width: 180px; }
+.review-pr-workspace .compact-issue-card { padding: 12px 14px; gap: 8px 14px; }
+.review-pr-workspace .issue-opinion { padding-top: 8px; }
+.review-pr-workspace .issue-opinion > strong {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+.issue-preview {
+  max-height: 3em;
+  overflow: hidden;
+  margin: 0;
+  color: #586975;
+  font-size: .75em;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.page-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 0 2px;
+}
+.page-controls > small { color: #62737d; font-size: .75em; font-variant-numeric: tabular-nums; }
+.page-controls .pagination { margin: 0; }
+.page-controls .page-link { font-size: .75rem; }
+.pr-rail .page-controls { flex: none; border-top: 1px solid #cbd7dc; }
+.pr-rail .page-controls > small { width: 100%; }
+.pr-rail .page-controls .pagination { width: 100%; justify-content: center; }
+@media (max-width: 900px) {
+  .review-pr-workspace {
+    height: auto;
+    min-height: calc(100dvh - var(--topbar-height));
+    overflow: visible;
+  }
+  .review-pr-workspace .pr-rail { max-height: 280px; border-bottom: 1px solid #d4dee3; }
+  .review-pr-workspace .pr-rail-head { display: flex; padding-bottom: 8px; }
+  .review-pr-workspace .pr-rail-head .rail-label { display: block; }
+  .review-pr-workspace .pr-rail-search { margin-bottom: 8px; }
+  .review-pr-workspace .pr-rail-list { flex: 1 1 auto; }
+  .pr-rail .page-controls > small { width: auto; }
+  .pr-rail .page-controls .pagination { width: auto; }
+  .review-pr-workspace .review-content { overflow: visible; padding: 20px 15px 80px; }
+}
+@media (max-width: 560px) {
+  .review-pr-workspace .compact-issue-card { grid-template-columns: 65px minmax(0, 1fr); grid-template-areas: 'severity location' 'opinion opinion' 'actions actions'; }
+  .review-pr-workspace .severity-cell { min-height: 0; padding-left: 7px; }
+  .review-pr-workspace .severity-cell > span { font-size: .5em; }
+  .review-pr-workspace .compact-issue-actions { grid-template-columns: auto minmax(0, 1fr); gap: 8px; }
+  .review-pr-workspace .compact-issue-actions .inline-decisions { grid-column: 2; }
+  .review-pr-workspace .compact-issue-actions .detail-button { font-size: .75em; }
+  .review-pr-workspace .inline-decisions .btn { font-size: .6875em; }
+}
+
+.pr-rail .page-controls nav { width: 100%; }
+.review-content > .page-controls { padding: 0 0 12px; }
+@media (max-width: 900px) { .pr-rail .page-controls nav { width: auto; } }
+
+.issue-preview .issue-markdown { line-height: 1.5; }
+.issue-preview .issue-markdown :is(h1, h2, h3, h4, h5, h6, p, ul, ol, blockquote, pre) {
+  margin: 0;
+  font-size: inherit;
+  line-height: inherit;
+}
+@media (max-width: 560px) {
+  .review-pr-workspace .filters .pending-first-sort,
+  .review-pr-workspace .filters .low-visibility-toggle { width: calc(50% - 5px); min-width: 0; }
+}
+@media (max-width: 560px) {
+  .review-pr-workspace .filters { flex-direction: row; }
+  .review-pr-workspace .filters > label,
+  .review-pr-workspace .filters > .form-select { flex: 0 0 100%; }
+}
