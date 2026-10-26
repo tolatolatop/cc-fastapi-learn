@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react'
-import { ArrowRight, ArrowUpDown, BarChart3, Check, Clock3, Code2, Copy, ExternalLink, FileText, History, Link2, LogIn, LogOut, Search, ShieldCheck, Users, X } from 'lucide-react'
+import { ArrowRight, ArrowUpDown, BarChart3, Check, Clock3, Code2, Copy, ExternalLink, Eye, EyeOff, FileText, History, Link2, LogIn, LogOut, Search, ShieldCheck, Users, X } from 'lucide-react'
 import { Button, Form, Modal, Table } from 'react-bootstrap'
 import { api } from './api'
 import IssueMarkdown from './IssueMarkdown'
@@ -209,6 +209,7 @@ function IssueWorkspace({ repositories, routeVersion }: { repositories: Reposito
   const [query, setQuery] = useState('')
   const [queueQuery, setQueueQuery] = useState('')
   const [pendingFirst, setPendingFirst] = useState(false)
+  const [hideLow, setHideLow] = useState(true)
   const [pullRequestsLoading, setPullRequestsLoading] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -296,19 +297,27 @@ function IssueWorkspace({ repositories, routeVersion }: { repositories: Reposito
       }
       return new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime()
     })
-  const visibleIssues = [...issues].sort((left, right) => {
-    if (pendingFirst) {
-      const pendingOrder = Number(right.status === 'unverified') - Number(left.status === 'unverified')
-      if (pendingOrder) return pendingOrder
-    }
-    return compareIssueLocation(left, right)
-  })
+  const hiddenLowCount = hideLow ? issues.filter((issue) => issue.severity === 'low').length : 0
+  const visibleIssues = issues
+    .filter((issue) => !hideLow || issue.severity !== 'low')
+    .sort((left, right) => {
+      if (pendingFirst) {
+        const pendingOrder = Number(right.status === 'unverified') - Number(left.status === 'unverified')
+        if (pendingOrder) return pendingOrder
+      }
+      return compareIssueLocation(left, right)
+    })
+  const emptyMessage = selectedPr?.completion_status === 'no_issues'
+    ? '该 PR/MR 已检视完毕，没有发现问题'
+    : hiddenLowCount > 0
+      ? `当前筛选下的 ${hiddenLowCount} 条意见均为 LOW 等级，已按默认设置隐藏；关闭「隐藏 LOW」即可查看`
+      : '当前筛选下没有检视意见'
   return <div className="workspace-grid review-pr-workspace">
     <aside className="pr-rail"><div className="pr-rail-head"><p className="rail-label">PR / MR 审核队列</p><strong>{visiblePullRequests.length}/{pullRequests.length}</strong></div><label className="pr-rail-search"><Search size={15} /><Form.Control value={queueQuery} onChange={(event) => setQueueQuery(event.target.value)} placeholder="仓库、PR ID 或 PR 地址" aria-label="搜索审核队列" /><small>多个关键字用空格分隔</small></label><div className="pr-rail-list">{pullRequestsLoading ? <div className="rail-empty">正在汇总…</div> : visiblePullRequests.map((pullRequest) => <button key={pullRequestKey(pullRequest)} className={selectedPr && pullRequestKey(selectedPr) === pullRequestKey(pullRequest) ? 'active' : ''} onClick={() => selectPullRequest(pullRequest)}><span className="pr-rail-number">#{pullRequest.pr_number}<small>{pullRequest.provider}</small></span><strong>{pullRequest.project_path}</strong><span className="pr-rail-progress"><i style={{ width: `${pullRequest.issue_total ? pullRequest.reviewed_total / pullRequest.issue_total * 100 : 100}%` }} /><small>{pullRequest.pending_total} 条待分析</small></span><span className={`completion ${pullRequest.completion_status}`}>{completionMeta[pullRequest.completion_status]}</span></button>)}{!pullRequestsLoading && !visiblePullRequests.length && <div className="rail-empty">没有匹配的 PR/MR；请调整关键字</div>}</div></aside>
     <section className="review-content">
       {selectedPr && selectedRepository ? <><header className="content-header pr-content-header"><div><p className="eyebrow">{selectedPr.provider} / {selectedPr.project_path}</p><h1>PR / MR #{selectedPr.pr_number}</h1><span className={`permission ${selectedRepository.permission}`}>{selectedRepository.permission === 'write' ? '可修改' : '只读'}</span><div className="pr-header-links"><Button variant="link" size="sm" onClick={() => void copyDirectLink()}><Link2 size={15} />{copied ? '已复制链接' : '复制直达链接'}</Button>{selectedPr.pr_url && <Button as="a" variant="link" size="sm" href={selectedPr.pr_url} target="_blank" rel="noreferrer"><ExternalLink size={15} />打开代码平台</Button>}</div></div><div className="status-tally"><span><b>{selectedPr.issue_total}</b>全部意见</span><span><b>{selectedPr.reviewed_total}</b>已裁定</span><span><b>{selectedPr.pending_total}</b>待分析</span><strong className={`completion ${selectedPr.completion_status}`}>{completionMeta[selectedPr.completion_status]}</strong></div></header>
-      <div className="filters"><label><Search size={17} /><Form.Control value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索标题、说明或文件" /></label><Form.Select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="unverified">待分析</option><option value="accepted">接受</option><option value="not_accepted">拒绝</option><option value="needs_info">待补充</option></Form.Select><Button className={`pending-first-sort ${pendingFirst ? 'active' : ''}`} variant="outline-secondary" aria-pressed={pendingFirst} onClick={() => setPendingFirst((active) => !active)}><ArrowUpDown size={15} />待分析优先</Button></div>
-      {error && <div className="form-error">{error}</div>}{loading ? <div className="empty-state">正在读取检视意见…</div> : !visibleIssues.length ? <div className="empty-state">{selectedPr.completion_status === 'no_issues' ? '该 PR/MR 已检视完毕，没有发现问题' : '当前筛选下没有检视意见'}</div> : <div className="compact-issue-list">{visibleIssues.map((issue) => <article className="compact-issue-card" key={issue.id}>
+      <div className="filters"><label><Search size={17} /><Form.Control value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索标题、说明或文件" /></label><Form.Select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="unverified">待分析</option><option value="accepted">接受</option><option value="not_accepted">拒绝</option><option value="needs_info">待补充</option></Form.Select><Button className={`pending-first-sort ${pendingFirst ? 'active' : ''}`} variant="outline-secondary" aria-pressed={pendingFirst} onClick={() => setPendingFirst((active) => !active)}><ArrowUpDown size={15} />待分析优先</Button><Button className={`low-visibility-toggle ${hideLow ? 'active' : ''}`} variant="outline-secondary" aria-pressed={hideLow} title={hideLow ? '已隐藏 LOW 等级意见，点击显示' : '当前显示全部等级，点击隐藏 LOW 等级意见'} onClick={() => setHideLow((active) => !active)}>{hideLow ? <EyeOff size={15} /> : <Eye size={15} />}隐藏 LOW{hiddenLowCount > 0 && <span className="low-visibility-count">{hiddenLowCount}</span>}</Button></div>
+      {error && <div className="form-error">{error}</div>}{loading ? <div className="empty-state">正在读取检视意见…</div> : !visibleIssues.length ? <div className="empty-state">{emptyMessage}</div> : <div className="compact-issue-list">{visibleIssues.map((issue) => <article className="compact-issue-card" key={issue.id}>
         <div className={`severity-cell ${issue.severity}`}><span>问题等级</span><strong>{issue.severity}</strong></div>
         <div className="issue-location"><span>文件 / 行号</span><Button variant="link" className="copy-location" disabled={!issue.file_path || issue.line_number === null} title={issue.file_path && issue.line_number !== null ? `复制 ${issue.file_path}:${issue.line_number}` : '缺少路径或行号，无法复制'} onClick={() => void copyIssueLocation(issue)}><strong>{issueLocation(issue)}</strong><small>{copiedLocationId === issue.id ? '已复制' : <Copy size={13} />}</small></Button></div>
         <div className="issue-opinion"><span>检视意见</span><strong>{issue.title}</strong><IssueMarkdown>{issue.description}</IssueMarkdown></div>
