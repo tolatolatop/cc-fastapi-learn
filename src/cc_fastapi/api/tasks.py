@@ -1,4 +1,5 @@
 import logging
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
@@ -8,24 +9,34 @@ from cc_fastapi.core.queue_config import get_queue_config
 from cc_fastapi.db.models import TaskStatus
 from cc_fastapi.db.session import get_db
 from cc_fastapi.schemas.tasks import (
+    QueueItemResponse,
+    QueueListResponse,
     TaskCancelResponse,
     TaskContextResponse,
+    TaskControlResponse,
     TaskCreateRequest,
     TaskCreateResponse,
     TaskItemResponse,
     TaskListResponse,
+    TaskListSummaryResponse,
     TaskLogItemResponse,
     TaskLogListResponse,
-    QueueItemResponse,
-    QueueListResponse,
+    TaskQueueSummaryResponse,
 )
 from cc_fastapi.services.claude_client import validate_claude_agent_options
-from cc_fastapi.services.queue import QueueNotFoundError, TaskQueueService
-
+from cc_fastapi.services.queue import (
+    QueueNotFoundError,
+    TaskControlConflict,
+    TaskQueueService,
+)
+from cc_fastapi.workflows import build_default_workflow_engine
+from cc_fastapi.workflows.base import WorkflowRetryConflictError
 
 router = APIRouter(prefix="/v1/agent-tasks", tags=["agent-tasks"])
 queue = TaskQueueService()
+workflow_engine = build_default_workflow_engine()
 logger = logging.getLogger(__name__)
+TaskDb = Annotated[Session, Depends(get_db)]
 
 
 def _to_task_item(task) -> TaskItemResponse:
@@ -39,6 +50,8 @@ def _to_task_item(task) -> TaskItemResponse:
         priority=task.priority,
         attempt=task.attempt,
         max_attempts=task.max_attempts,
+        session_id=task.session_id,
+        paused_at=task.paused_at,
         agent_mode=task.agent_mode,
         unattended=task.unattended,
         created_at=task.created_at,
@@ -60,6 +73,24 @@ def list_queues() -> QueueListResponse:
             for name, definition in config.queues.items()
         ]
     )
+
+
+@router.get("/control/status", response_model=TaskControlResponse, dependencies=[Depends(require_token)])
+def task_control_status(db: TaskDb) -> dict[str, Any]:
+    return queue.control_status(db)
+
+
+@router.post("/control/pause", response_model=TaskControlResponse, dependencies=[Depends(require_token)])
+def pause_all_tasks(db: TaskDb) -> dict[str, Any]:
+    return queue.pause_all(db)
+
+
+@router.post("/control/resume", response_model=TaskControlResponse, dependencies=[Depends(require_token)])
+def resume_all_tasks(db: TaskDb) -> dict[str, Any]:
+    try:
+        return queue.resume_all(db)
+    except TaskControlConflict as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
 @router.post("", response_model=TaskCreateResponse, dependencies=[Depends(require_token)])
@@ -133,17 +164,34 @@ def get_task_context(task_id: str, db: Session = Depends(get_db)) -> TaskContext
 
 @router.get("", response_model=TaskListResponse, dependencies=[Depends(require_token)])
 def list_tasks(
-    status_filter: TaskStatus | None = Query(default=None, alias="status"),
+    status_filter: list[TaskStatus] | None = Query(default=None, alias="status"),
+    queue_name: str | None = Query(default=None, alias="queue", max_length=64),
+    search: str | None = Query(default=None, alias="q", max_length=200),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=200),
     db: Session = Depends(get_db),
 ) -> TaskListResponse:
     logger.debug(
         "list_tasks request",
-        extra={"event_type": "api_list_tasks", "reason": f"offset={offset},limit={limit},status={status_filter}"},
+        extra={
+            "event_type": "api_list_tasks",
+            "reason": f"offset={offset},limit={limit},status={status_filter},queue={queue_name},q={bool(search)}",
+        },
     )
-    items, total = queue.list_tasks(db, status_filter, offset, limit)
-    return TaskListResponse(items=[_to_task_item(item) for item in items], total=total)
+    items, total = queue.list_tasks(db, status_filter, queue_name, search, offset, limit)
+    summary_total, status_counts, queue_counts = queue.summarize_tasks(db)
+    return TaskListResponse(
+        items=[_to_task_item(item) for item in items],
+        total=total,
+        summary=TaskListSummaryResponse(
+            total=summary_total,
+            status_counts=status_counts,
+            queues=[
+                TaskQueueSummaryResponse(name=name, **counts)
+                for name, counts in sorted(queue_counts.items())
+            ],
+        ),
+    )
 
 
 @router.post("/{task_id}/cancel", response_model=TaskCancelResponse, dependencies=[Depends(require_token)])
@@ -152,6 +200,7 @@ def cancel_task(task_id: str, db: Session = Depends(get_db)) -> TaskCancelRespon
     if not task:
         logger.warning("cancel_task not found", extra={"event_type": "api_cancel_task_not_found", "task_id": task_id})
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
+    workflow_engine.handle_task_terminal(db, task.id)
     logger.info("task cancelled via api", extra={"event_type": "api_cancel_task", "task_id": task.id})
     return TaskCancelResponse(task_id=task.id, status=task.status)
 
@@ -159,13 +208,19 @@ def cancel_task(task_id: str, db: Session = Depends(get_db)) -> TaskCancelRespon
 @router.post("/{task_id}/retry", response_model=TaskCreateResponse, dependencies=[Depends(require_token)])
 def retry_task(task_id: str, db: Session = Depends(get_db)) -> TaskCreateResponse:
     try:
-        task = queue.retry_task(db, task_id)
+        task = workflow_engine.retry_task(db, task_id)
     except QueueNotFoundError as exc:
         logger.warning(
             "retry_task queue resolve failed",
             extra={"event_type": "api_retry_task_queue_not_found", "task_id": task_id, "queue_name": exc.queue_name},
         )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except WorkflowRetryConflictError as exc:
+        logger.warning(
+            "retry_task conflict",
+            extra={"event_type": "api_retry_task_conflict", "task_id": task_id},
+        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
     if task is None:
         logger.warning(
