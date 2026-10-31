@@ -122,7 +122,8 @@ def test_pause_schema_migration_preserves_legacy_tasks_and_is_repeatable():
     assert 'task_queue_control' in inspect(engine).get_table_names()
     with engine.connect() as connection:
         row = connection.exec_driver_sql(
-            'SELECT status, resume_pending, paused_at, execution_token, running_remaining_seconds '
+            'SELECT status, resume_pending, paused_at, execution_token, running_remaining_seconds, '
+            'resume_mode, continuation_count '
             "FROM agent_tasks WHERE id = 'legacy'"
         ).one()
-    assert row == ('QUEUED', 0, None, None, None)
+    assert row == ('QUEUED', 0, None, None, None, None, 0)

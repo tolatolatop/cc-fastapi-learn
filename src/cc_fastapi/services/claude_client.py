@@ -4,7 +4,7 @@ import logging
 import os
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 import anyio
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, query
@@ -23,6 +23,23 @@ MAX_PARTIAL_OUTPUT_CHARS = 4_000
 MAX_EXECUTION_ERROR_CHARS = 12_000
 CONTROL_POLL_SECONDS = 0.25
 INTERRUPT_GRACE_SECONDS = 5
+
+PAUSE_RESUME_PROMPT = (
+    "Continue the original unfinished task after a service pause. "
+    "Use the existing conversation and preserve the original requirements. "
+    "Check the outcome of any interrupted tool operation before repeating it. "
+    "Finish the remaining work and return the required final result."
+)
+
+CONTINUE_RESUME_PROMPT = (
+    "The previous run was marked finished, but it may have stopped before the work "
+    "was actually complete. Treat the existing conversation as the source of truth. "
+    "First verify what has already been done (files, commands, tool results, external "
+    "side effects) and do not repeat completed side-effecting operations. Then finish "
+    "the remaining work and return the final required result."
+)
+
+ResumeReason = Literal["pause", "continue"]
 
 
 class ClaudeExecutionError(RuntimeError):
@@ -138,6 +155,7 @@ class ClaudeClient:
         should_cancel: Callable[[], bool] | None = None,
         should_pause: Callable[[], bool] | None = None,
         resume_session_id: str | None = None,
+        resume_reason: ResumeReason | None = None,
     ) -> dict[str, Any]:
         if not self.settings.anthropic_api_key:
             raise RuntimeError("ANTHROPIC_API_KEY is missing")
@@ -155,6 +173,7 @@ class ClaudeClient:
                 should_cancel=should_cancel,
                 should_pause=should_pause,
                 resume_session_id=resume_session_id,
+                resume_reason=resume_reason,
             )
         )
 
@@ -172,6 +191,7 @@ class ClaudeClient:
         should_cancel: Callable[[], bool] | None,
         should_pause: Callable[[], bool] | None,
         resume_session_id: str | None,
+        resume_reason: ResumeReason | None,
     ) -> dict[str, Any]:
         system_note = (
             "You are running in Claude Agent task mode. "
@@ -249,10 +269,9 @@ class ClaudeClient:
             options_kwargs["fork_session"] = False
             options_kwargs.pop("session_id", None)
             prompt = (
-                "Continue the original unfinished task after a service pause. "
-                "Use the existing conversation and preserve the original requirements. "
-                "Check the outcome of any interrupted tool operation before repeating it. "
-                "Finish the remaining work and return the required final result."
+                CONTINUE_RESUME_PROMPT
+                if resume_reason == "continue"
+                else PAUSE_RESUME_PROMPT
             )
         options = ClaudeAgentOptions(**options_kwargs)
 

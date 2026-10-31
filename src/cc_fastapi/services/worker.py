@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from cc_fastapi.core.config import get_settings
 from cc_fastapi.core.queue_config import get_queue_config
-from cc_fastapi.db.models import TaskStatus
+from cc_fastapi.db.models import TaskResumeMode, TaskStatus
 from cc_fastapi.db.session import SessionLocal
 from cc_fastapi.services.claude_client import (
     AgentTaskCancelledError,
@@ -148,6 +148,7 @@ class WorkerManager:
             self.queue.release_execution(db, task_id, execution_token)
             return
         resuming = task.resume_pending
+        continuing = resuming and task.resume_mode == TaskResumeMode.CONTINUE
         previous_context = self.queue.get_task_context(db, task_id) if resuming else None
         previous_messages = list(previous_context.messages_json) if previous_context else []
         stopped = True
@@ -178,6 +179,7 @@ class WorkerManager:
                 should_cancel=lambda: self.queue.is_task_cancelled(db, task_id),
                 should_pause=lambda: self.queue.is_task_pausing(db, task_id),
                 resume_session_id=task.session_id if resuming else None,
+                resume_reason="continue" if continuing else ("pause" if resuming else None),
             )
             transitioned = self.queue.mark_success(db, task_id, result, execution_token=execution_token)
             self.workflows.handle_task_terminal(db, task.id)
@@ -228,6 +230,20 @@ class WorkerManager:
                 current.error_message = str(exc)
                 db.commit()
                 logger.exception("task pause did not complete", extra={"task_id": task_id})
+                return
+            if continuing:
+                self.queue.mark_continuation_failed(
+                    db, task_id, str(exc), execution_token=execution_token,
+                )
+                self.workflows.handle_task_terminal(db, task_id)
+                logger.exception(
+                    "task continuation failed",
+                    extra={
+                        "task_id": task_id,
+                        "event_type": "continuation_failed",
+                        "queue_name": getattr(task, "queue_name", "default"),
+                    },
+                )
                 return
             if resuming:
                 self.queue.mark_paused(db, task_id, execution_token, error=str(exc))

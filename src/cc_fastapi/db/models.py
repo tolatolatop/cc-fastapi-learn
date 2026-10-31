@@ -40,6 +40,17 @@ class TaskStatus(StrEnum):
 
 ACTIVE_TASK_STATUSES = (TaskStatus.QUEUED, TaskStatus.RUNNING, TaskStatus.PAUSING, TaskStatus.PAUSED)
 
+# Only a task that reached a clean terminal state can be continued in place.
+# A failed/cancelled/abandoned task may still have a live SDK process.
+CONTINUABLE_TASK_STATUSES = (TaskStatus.SUCCEEDED,)
+
+
+class TaskResumeMode(StrEnum):
+    """How the next worker claim should resume: after a pause, or after a false completion."""
+
+    PAUSE = "pause"
+    CONTINUE = "continue"
+
 
 class TaskQueueControl(Base):
     __tablename__ = "task_queue_control"
@@ -132,6 +143,10 @@ class AgentTask(Base):
     execution_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
     paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resume_pending: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    resume_mode: Mapped[TaskResumeMode | None] = mapped_column(
+        Enum(TaskResumeMode, native_enum=False, length=16), nullable=True
+    )
+    continuation_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     running_remaining_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     abandoned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

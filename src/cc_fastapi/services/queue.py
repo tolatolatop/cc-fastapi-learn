@@ -13,10 +13,12 @@ from cc_fastapi.core.internal_tasks import REVIEW_ISSUE_IMPORT_QUEUE_NAME
 from cc_fastapi.core.queue_config import get_queue_config
 from cc_fastapi.db.models import (
     ACTIVE_TASK_STATUSES,
+    CONTINUABLE_TASK_STATUSES,
     AgentTask,
     AgentTaskContext,
     AgentTaskLog,
     TaskQueueControl,
+    TaskResumeMode,
     TaskStatus,
     utc_now,
 )
@@ -299,6 +301,85 @@ class TaskQueueService:
     def get_task_context(self, db: Session, task_id: str) -> AgentTaskContext | None:
         return db.get(AgentTaskContext, task_id)
 
+    def continue_task(self, db: Session, task_id: str) -> AgentTask | None:
+        """Re-queue a finished task and resume it in the same agent session.
+
+        The task row, its session id and its payload are preserved; only the
+        execution bookkeeping is reset. A conditional update makes concurrent
+        clicks single-flight.
+        """
+        self._begin_sqlite_write_transaction(db)
+        control = self._lock_control(db)
+        task = db.scalars(
+            select(AgentTask)
+            .where(AgentTask.id == task_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).first()
+        if task is None:
+            db.rollback()
+            return None
+        if task.status not in CONTINUABLE_TASK_STATUSES:
+            db.rollback()
+            raise TaskControlConflict("只有已完成的任务可以继续执行")
+        if not task.session_id:
+            db.rollback()
+            raise TaskControlConflict("该任务没有可续跑的会话，请使用重新执行")
+
+        now = utc_now()
+        paused = control.paused
+        previous_status = task.status
+        next_count = task.continuation_count + 1
+        result = db.execute(
+            update(AgentTask)
+            .where(AgentTask.id == task_id, AgentTask.status == previous_status)
+            .values(
+                status=TaskStatus.PAUSED if paused else TaskStatus.QUEUED,
+                paused_at=now if paused else None,
+                resume_pending=True,
+                resume_mode=TaskResumeMode.CONTINUE,
+                continuation_count=AgentTask.continuation_count + 1,
+                execution_token=None,
+                worker_id=None,
+                error_message=None,
+                finished_at=None,
+                started_at=None,
+                running_expire_at=None,
+                running_remaining_seconds=None,
+                queue_expire_at=now + timedelta(hours=self.settings.queue_ttl_hours),
+                scheduled_at=now,
+            )
+        )
+        if result.rowcount == 0:
+            db.rollback()
+            raise TaskControlConflict("任务状态已变化，请刷新后重试")
+        self.log_event(
+            db,
+            task_id,
+            "INFO",
+            "continued",
+            "task continued in the same session",
+            {
+                "previous_status": previous_status.value,
+                "continuation_count": next_count,
+                "session_id": task.session_id,
+                "queue_name": task.queue_name,
+            },
+        )
+        db.commit()
+        db.refresh(task)
+        logger.info(
+            "task status transitioned",
+            extra={
+                "event_type": "status_transition",
+                "task_id": task_id,
+                "status_from": previous_status.value,
+                "status_to": task.status.value,
+                "reason": "continue",
+            },
+        )
+        return task
+
     def set_task_session_id(
         self, db: Session, task_id: str, session_id: str, *, execution_token: str | None = None,
     ) -> None:
@@ -445,7 +526,9 @@ class TaskQueueService:
             .values(
                 status=TaskStatus.RUNNING,
                 worker_id=worker_id,
-                started_at=candidate_task.started_at if resuming else now,
+                # A continued task starts with a cleared started_at and gets a
+                # fresh timestamp; a pause resume keeps the original one.
+                started_at=candidate_task.started_at if resuming and candidate_task.started_at else now,
                 running_expire_at=now + timedelta(seconds=running_seconds),
                 attempt=AgentTask.attempt if resuming else AgentTask.attempt + 1,
                 execution_token=str(uuid4()),
@@ -485,6 +568,7 @@ class TaskQueueService:
             "result": result_payload,
             "finished_at": utc_now(),
             "resume_pending": False,
+            "resume_mode": None,
         }
         result_session_id = result_payload.get("session_id")
         if isinstance(result_session_id, str) and result_session_id.strip():
@@ -536,6 +620,7 @@ class TaskQueueService:
                 status=TaskStatus.PAUSED if control.paused else TaskStatus.QUEUED,
                 paused_at=now if control.paused else None,
                 resume_pending=False,
+                resume_mode=None,
                 execution_token=None,
                 error_message=error_message,
                 worker_id=None,
@@ -620,6 +705,62 @@ class TaskQueueService:
                 },
             )
         db.commit()
+        return True
+
+    def mark_continuation_failed(
+        self,
+        db: Session,
+        task_id: str,
+        error_message: str,
+        *,
+        execution_token: str | None = None,
+    ) -> bool:
+        """Fail one manual continuation without falling back to the pause state.
+
+        A continuation is a manual action: it must not be parked as paused, and
+        it must not silently start a brand new session. The session id stays on
+        the row for audit; running this task again requires an explicit retry.
+        """
+        result = db.execute(
+            update(AgentTask)
+            .where(
+                AgentTask.id == task_id,
+                AgentTask.status == TaskStatus.RUNNING,
+                *([AgentTask.execution_token == execution_token] if execution_token else []),
+            )
+            .values(
+                status=TaskStatus.FAILED,
+                error_message=error_message,
+                finished_at=utc_now(),
+                resume_pending=False,
+                resume_mode=None,
+                execution_token=None,
+                worker_id=None,
+                running_expire_at=None,
+            )
+        )
+        if result.rowcount == 0:
+            db.rollback()
+            return False
+        self.log_event(
+            db,
+            task_id,
+            "ERROR",
+            "failed",
+            "continuation failed",
+            {"continuation": True},
+        )
+        db.commit()
+        logger.info(
+            "task status transitioned",
+            extra={
+                "event_type": "status_transition",
+                "task_id": task_id,
+                "status_from": TaskStatus.RUNNING,
+                "status_to": TaskStatus.FAILED,
+                "reason": "continuation_failed",
+            },
+        )
         return True
 
     def abandon_expired_queued(self, db: Session) -> int:

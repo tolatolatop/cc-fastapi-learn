@@ -13,6 +13,7 @@ from cc_fastapi.schemas.tasks import (
     QueueListResponse,
     TaskCancelResponse,
     TaskContextResponse,
+    TaskContinueResponse,
     TaskControlResponse,
     TaskCreateRequest,
     TaskCreateResponse,
@@ -52,6 +53,7 @@ def _to_task_item(task) -> TaskItemResponse:
         max_attempts=task.max_attempts,
         session_id=task.session_id,
         paused_at=task.paused_at,
+        continuation_count=task.continuation_count,
         agent_mode=task.agent_mode,
         unattended=task.unattended,
         created_at=task.created_at,
@@ -203,6 +205,37 @@ def cancel_task(task_id: str, db: Session = Depends(get_db)) -> TaskCancelRespon
     workflow_engine.handle_task_terminal(db, task.id)
     logger.info("task cancelled via api", extra={"event_type": "api_cancel_task", "task_id": task.id})
     return TaskCancelResponse(task_id=task.id, status=task.status)
+
+
+@router.post("/{task_id}/continue", response_model=TaskContinueResponse, dependencies=[Depends(require_token)])
+def continue_task(task_id: str, db: TaskDb) -> TaskContinueResponse:
+    try:
+        task = queue.continue_task(db, task_id)
+    except TaskControlConflict as exc:
+        logger.warning(
+            "continue_task conflict",
+            extra={"event_type": "api_continue_task_conflict", "task_id": task_id},
+        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    if task is None:
+        logger.warning(
+            "continue_task not found",
+            extra={"event_type": "api_continue_task_not_found", "task_id": task_id},
+        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
+
+    logger.info(
+        "task continued via api",
+        extra={"event_type": "api_continue_task", "task_id": task.id, "queue_name": task.queue_name},
+    )
+    return TaskContinueResponse(
+        task_id=task.id,
+        status=task.status,
+        queue_name=task.queue_name,
+        session_id=task.session_id,
+        continuation_count=task.continuation_count,
+    )
 
 
 @router.post("/{task_id}/retry", response_model=TaskCreateResponse, dependencies=[Depends(require_token)])

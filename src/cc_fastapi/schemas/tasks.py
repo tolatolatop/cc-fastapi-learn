@@ -36,6 +36,7 @@ class TaskItemResponse(BaseModel):
     max_attempts: int
     session_id: str | None
     paused_at: datetime | None = None
+    continuation_count: int = 0
     agent_mode: bool
     unattended: bool
     created_at: datetime
@@ -69,6 +70,14 @@ class TaskListResponse(BaseModel):
 class TaskCancelResponse(BaseModel):
     task_id: str
     status: TaskStatus
+
+
+class TaskContinueResponse(BaseModel):
+    task_id: str
+    status: TaskStatus
+    queue_name: str
+    session_id: str | None
+    continuation_count: int
 
 
 class TaskLogItemResponse(BaseModel):

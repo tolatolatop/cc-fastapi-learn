@@ -175,6 +175,17 @@ Docker Compose 使用 `claude_sessions` 卷保存 `/home/ccagent/.claude` 下的
 `docker compose down -v`。自行设置 `CLAUDE_CONFIG_DIR` 的部署也必须持久化对应目录。
 本功能不备份或恢复业务工作目录，仍按当前的单应用实例部署方式运行。
 
+已完成（`succeeded`）任务如果因为模型中途停止而没有真正完成，可在任务详情点击
+「继续执行」。该操作不新建任务，复用原任务 ID、日志、Workflow 关联和会话 ID，通过 SDK
+的 `resume` 在同一个会话里续跑，任务重新进入队列并把 `continuation_count` 加一。
+只有带会话 ID 的 `succeeded` 任务可以继续，其余状态返回 409；没有会话时使用
+「重新执行」新建任务和全新会话。续跑失败会落到 `failed` 并保留错误信息，不会静默重放
+原始指令，也不会自动换新会话重试。
+
+```text
+POST /v1/agent-tasks/{task_id}/continue
+```
+
 每个队列可以在 `config/queues.yaml` 中配置供该队列 Worker 使用的默认模型：
 
 ```yaml

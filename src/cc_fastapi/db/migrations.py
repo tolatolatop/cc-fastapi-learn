@@ -66,6 +66,11 @@ def apply_schema_migrations(engine: Engine) -> None:
             engine, table_name="agent_tasks", model_column=AgentTask.__table__.c.resume_pending,
             definition_suffix=" NOT NULL DEFAULT false",
         )
+        _add_column(engine, table_name="agent_tasks", model_column=AgentTask.__table__.c.resume_mode)
+        _add_column(
+            engine, table_name="agent_tasks", model_column=AgentTask.__table__.c.continuation_count,
+            definition_suffix=" NOT NULL DEFAULT 0",
+        )
 
     if "agent_tasks" in table_names and not _agent_tasks_has_session_id(engine):
         preparer = engine.dialect.identifier_preparer

@@ -8,8 +8,9 @@ from sqlalchemy.pool import StaticPool
 from cc_fastapi.api.tasks import router
 from cc_fastapi.core.config import get_settings
 from cc_fastapi.core.queue_config import get_queue_config
-from cc_fastapi.db.models import Base
+from cc_fastapi.db.models import AgentTask, Base
 from cc_fastapi.db.session import get_db
+from cc_fastapi.services.queue import TaskQueueService
 
 
 @pytest.fixture(autouse=True)
@@ -48,7 +49,9 @@ def build_client():
             db.close()
 
     app.dependency_overrides[get_db] = override_db
-    return TestClient(app)
+    client = TestClient(app)
+    client.session_factory = TestingSessionLocal
+    return client
 
 
 def test_create_get_and_logs():
@@ -185,6 +188,68 @@ def test_retry_task_not_found_returns_404():
     assert response.json()["detail"] == "task not found"
 
 
+def finish_succeeded_task(client, session_id="saved-session"):
+    task_id = client.post("/v1/agent-tasks", json={"prompt": "continue-me"}).json()["task_id"]
+    with client.session_factory() as db:
+        queue = TaskQueueService()
+        queue.claim_next_task(db, "worker", "default")
+        queue.set_task_session_id(db, task_id, session_id)
+        task = db.get(AgentTask, task_id)
+        assert queue.mark_success(
+            db, task_id, {"session_id": session_id}, execution_token=task.execution_token,
+        )
+    return task_id
+
+
+def test_continue_task_requeues_same_session_and_task_id():
+    client = build_client()
+    task_id = finish_succeeded_task(client)
+
+    response = client.post(f"/v1/agent-tasks/{task_id}/continue")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["task_id"] == task_id
+    assert payload["status"] == "queued"
+    assert payload["session_id"] == "saved-session"
+    assert payload["continuation_count"] == 1
+
+    task = client.get(f"/v1/agent-tasks/{task_id}").json()
+    assert task["status"] == "queued"
+    assert task["session_id"] == "saved-session"
+    assert task["continuation_count"] == 1
+
+    duplicate = client.post(f"/v1/agent-tasks/{task_id}/continue")
+    assert duplicate.status_code == 409
+    assert duplicate.json()["detail"] == "只有已完成的任务可以继续执行"
+
+
+def test_continue_task_without_session_returns_conflict():
+    client = build_client()
+    task_id = client.post("/v1/agent-tasks", json={"prompt": "no-session"}).json()["task_id"]
+    with client.session_factory() as db:
+        queue = TaskQueueService()
+        queue.claim_next_task(db, "worker", "default")
+        task = db.get(AgentTask, task_id)
+        assert queue.mark_success(
+            db, task_id, {"output_text": "partial"}, execution_token=task.execution_token,
+        )
+
+    response = client.post(f"/v1/agent-tasks/{task_id}/continue")
+
+    assert response.status_code == 409
+    assert "会话" in response.json()["detail"]
+
+
+def test_continue_task_not_found_returns_404():
+    client = build_client()
+
+    response = client.post("/v1/agent-tasks/not-exists/continue")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "task not found"
+
+
 def test_create_task_with_explicit_queue():
     client = build_client()
     response = client.post("/v1/agent-tasks", json={"prompt": "queue", "queue_name": "slow"})
@@ -249,3 +314,4 @@ def test_pause_controls_require_api_token(monkeypatch):
     client = build_client()
     for method, path in [('get', 'status'), ('post', 'pause'), ('post', 'resume')]:
         assert getattr(client, method)(f'/v1/agent-tasks/control/{path}').status_code == 401
+    assert client.post('/v1/agent-tasks/not-exists/continue').status_code == 401

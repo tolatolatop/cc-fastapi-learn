@@ -372,7 +372,46 @@ def test_resume_passes_exact_session_without_replaying_original_prompt(monkeypat
     assert captured['options'].resume == 'saved-session'
     assert not captured['options'].fork_session
     assert not captured['options'].continue_conversation
+    assert captured['prompt'] == claude_client_module.PAUSE_RESUME_PROMPT
     assert captured['prompt'] != 'original instructions'
+    assert captured['closed']
+    assert result['session_id'] == 'saved-session'
+
+
+def test_continue_resume_uses_continuation_instruction(monkeypatch):
+    monkeypatch.setenv('ANTHROPIC_API_KEY', 'test-key')
+    get_settings.cache_clear()
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, *, options):
+            captured['options'] = options
+
+        async def connect(self):
+            pass
+
+        async def disconnect(self):
+            captured['closed'] = True
+
+        async def query(self, prompt):
+            captured['prompt'] = prompt
+
+        async def receive_response(self):
+            yield ResultMessage(
+                subtype='success', duration_ms=1, duration_api_ms=1, is_error=False,
+                num_turns=1, session_id='saved-session', usage={}, result='done',
+            )
+
+    monkeypatch.setattr(claude_client_module, 'ClaudeSDKClient', FakeClient)
+    result = ClaudeClient().run_agent_task(
+        prompt='original instructions', model='test', metadata=None,
+        should_pause=lambda: False, resume_session_id='saved-session',
+        resume_reason='continue',
+    )
+    assert captured['options'].resume == 'saved-session'
+    assert captured['options'].continue_conversation is False
+    assert captured['prompt'] == claude_client_module.CONTINUE_RESUME_PROMPT
+    assert 'marked finished' in captured['prompt']
     assert captured['closed']
     assert result['session_id'] == 'saved-session'
 

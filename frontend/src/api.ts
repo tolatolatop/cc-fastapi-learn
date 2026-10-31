@@ -21,6 +21,7 @@ import type {
   ReviewIssueStatistics,
   ReviewIssueVerificationStatus,
   TaskContext,
+  TaskContinueResponse,
   TaskControl,
   TaskItem,
   TaskListResponse,
@@ -190,6 +191,8 @@ export const api = {
     request<{ task_id: string; status: string }>(`/v1/agent-tasks/${id}/cancel`, { method: 'POST' }),
   retryTask: (id: string) =>
     request<{ task_id: string; status: string; queue_name: string }>(`/v1/agent-tasks/${id}/retry`, { method: 'POST' }),
+  continueTask: (id: string) =>
+    request<TaskContinueResponse>(`/v1/agent-tasks/${id}/continue`, { method: 'POST' }),
   listReviewBatches: ({
     offset = 0,
     limit = 20,

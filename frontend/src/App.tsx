@@ -360,16 +360,19 @@ interface DetailDrawerProps {
   onClose: () => void
   onCancel: (id: string) => void
   onRetry: (id: string) => void
+  onContinue: (id: string) => void
   onRefresh: () => void
   onNotify: (message: string) => void
   retrying: boolean
+  continuing: boolean
 }
 
-function DetailDrawer({ task, logs, context, loading, now, onClose, onCancel, onRetry, onRefresh, onNotify, retrying }: DetailDrawerProps) {
+function DetailDrawer({ task, logs, context, loading, now, onClose, onCancel, onRetry, onContinue, onRefresh, onNotify, retrying, continuing }: DetailDrawerProps) {
   const [tab, setTab] = useState<'overview' | 'context' | 'logs'>('overview')
   const [promptExpanded, setPromptExpanded] = useState(false)
   const canCancel = ['running', 'queued', 'pausing', 'paused'].includes(task.status)
   const canRetry = ['succeeded', 'failed', 'cancelled', 'abandoned'].includes(task.status)
+  const canContinue = task.status === 'succeeded'
   const promptText = task.prompt || '未提供 Prompt'
   const promptIsLong = task.prompt.length > 180 || task.prompt.split('\n').length > 5
   const resultText = task.result ? JSON.stringify(task.result, null, 2) : ''
@@ -470,6 +473,7 @@ function DetailDrawer({ task, logs, context, loading, now, onClose, onCancel, on
                   <div><dt>创建时间</dt><dd>{formatDate(task.created_at)}</dd></div>
                   <div><dt>运行时长</dt><dd>{formatDuration(task.started_at, task.finished_at, now)}</dd></div>
                   <div><dt>执行进度</dt><dd>{task.attempt} / {task.max_attempts} 次</dd></div>
+                  <div><dt>继续执行</dt><dd>{task.continuation_count > 0 ? `${task.continuation_count} 次` : '未继续'}</dd></div>
                   <div><dt>优先级</dt><dd>{task.priority > 0 ? `高 · ${task.priority}` : task.priority < 0 ? `低 · ${task.priority}` : '标准 · 0'}</dd></div>
                   <div className="wide"><dt>模型</dt><dd className="mono-wrap">{task.model || '服务默认模型'}</dd></div>
                   <div className="wide"><dt>Session ID</dt><dd className="mono-wrap">{task.session_id || '等待 Agent 会话启动'}</dd></div>
@@ -539,16 +543,33 @@ function DetailDrawer({ task, logs, context, loading, now, onClose, onCancel, on
           )}
         </div>
 
-        {(canCancel || canRetry) && (
+        {(canCancel || canRetry || canContinue) && (
           <div className="drawer-footer">
             {canCancel && <Button variant="outline-danger" onClick={() => onCancel(task.id)}><Ban size={16} />取消任务</Button>}
+            {canContinue && (
+              <Button
+                variant="primary"
+                onClick={() => onContinue(task.id)}
+                disabled={continuing || !task.session_id}
+                title={task.session_id ? '复用同一个会话继续执行' : '该任务没有可续跑的会话'}
+              >
+                <Play size={16} />
+                {continuing ? '正在加入队列' : '继续执行'}
+              </Button>
+            )}
             {canRetry && (
-              <Button variant="primary" onClick={() => onRetry(task.id)} disabled={retrying}>
+              <Button variant={canContinue ? 'outline-secondary' : 'primary'} onClick={() => onRetry(task.id)} disabled={retrying}>
                 <RefreshCw size={16} className={retrying ? 'spin' : ''} />
                 {retrying ? '正在创建' : '重新执行'}
               </Button>
             )}
-            <p>{canRetry ? '将复制当前配置，并创建一个新的排队任务。' : '已开始的 Agent 操作可能需要短暂时间才能停止。'}</p>
+            <p>{canContinue
+              ? task.session_id
+                ? '继续执行复用当前会话，不创建新任务；重新执行会复制配置并新建任务。'
+                : '该任务没有可续跑的会话，只能重新执行。'
+              : canRetry
+                ? '将复制当前配置，并创建一个新的排队任务。'
+                : '已开始的 Agent 操作可能需要短暂时间才能停止。'}</p>
           </div>
         )}
     </Offcanvas>
@@ -585,6 +606,7 @@ function App() {
   const [context, setContext] = useState<TaskContext | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [retryingTask, setRetryingTask] = useState(false)
+  const [continuingTask, setContinuingTask] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [connectionRevision, setConnectionRevision] = useState(0)
@@ -755,6 +777,22 @@ function App() {
       setToast(messageFrom(requestError))
     } finally {
       setRetryingTask(false)
+    }
+  }
+
+  async function continueTask(id: string) {
+    setContinuingTask(true)
+    try {
+      const result = await api.continueTask(id)
+      setToast(result.status === 'paused'
+        ? '调度已暂停，恢复后将在同一个会话继续执行'
+        : `已加入队列，第 ${result.continuation_count} 次继续执行`)
+      await loadDashboard(true)
+      await loadDetail(id)
+    } catch (requestError) {
+      setToast(messageFrom(requestError))
+    } finally {
+      setContinuingTask(false)
     }
   }
 
@@ -1009,9 +1047,11 @@ function App() {
           onClose={() => setSelectedTask(null)}
           onCancel={cancelTask}
           onRetry={retryTask}
+          onContinue={continueTask}
           onRefresh={() => loadDetail(selectedTask.id)}
           onNotify={setToast}
           retrying={retryingTask}
+          continuing={continuingTask}
         />
       )}
       {toast && <div className="toast"><Check size={16} />{toast}</div>}

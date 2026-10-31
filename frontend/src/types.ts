@@ -7,6 +7,14 @@ export interface TaskControl {
   paused_count: number
 }
 
+export interface TaskContinueResponse {
+  task_id: string
+  status: TaskStatus
+  queue_name: string
+  session_id: string | null
+  continuation_count: number
+}
+
 export interface TaskItem {
   id: string
   status: TaskStatus
@@ -19,6 +27,7 @@ export interface TaskItem {
   max_attempts: number
   session_id: string | null
   paused_at: string | null
+  continuation_count: number
   agent_mode: boolean
   unattended: boolean
   created_at: string
