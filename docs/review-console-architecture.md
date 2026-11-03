@@ -70,9 +70,11 @@ PR/MR 完成状态由主应用聚合其全部检视批次和意见后返回：`p
 - `PUT /v1/review-console/issues/{id}/status`
 - `GET /v1/review-console/issues/{id}/history`
 - `GET /v1/review-console/statistics`
+- `GET /v1/review-console/review-records`
 
 写入接口另外要求 `X-Review-Actor-Id` 和 `X-Review-Actor-Name`。操作台对浏览器提供 `/v1/auth/*`、
-`/v1/repositories`、`/v1/issues/*`、`/v1/statistics` 与 `/v1/admin/users/*`，并在转发前校验仓库权限。
+`/v1/repositories`、`/v1/issues/*`、`/v1/statistics`、`/v1/review-records` 与 `/v1/admin/users/*`，
+并在转发前校验仓库权限。
 非管理员统计请求会显式携带全部授权仓库范围；管理员可读取全局统计。时间过滤以当前最终裁定时间
 为准，贡献按意见的当前最终裁定人计数，因此反复修改不会放大贡献。
 

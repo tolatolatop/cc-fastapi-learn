@@ -1,4 +1,4 @@
-import type { AuthConfig, DecisionReason, Grant, HistoryItem, Issue, IssueStatus, PullRequest, Repository, Statistics, User } from './types'
+import type { AuthConfig, DecisionReason, Grant, HistoryItem, Issue, IssueStatus, PullRequest, Repository, ReviewRecord, Statistics, User } from './types'
 
 const root = '/api'
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -69,6 +69,12 @@ export const api = {
     if (createdFrom) params.set('created_from', new Date(createdFrom).toISOString())
     if (createdTo) params.set('created_to', new Date(createdTo).toISOString())
     return request<Statistics>(`/v1/statistics${params.size ? `?${params}` : ''}`)
+  },
+  reviewRecords: (createdFrom: string, createdTo: string) => {
+    const params = new URLSearchParams()
+    if (createdFrom) params.set('created_from', new Date(createdFrom).toISOString())
+    if (createdTo) params.set('created_to', new Date(createdTo).toISOString())
+    return request<{ items: ReviewRecord[]; total: number }>(`/v1/review-records${params.size ? `?${params}` : ''}`)
   },
   users: () => request<{ items: User[] }>('/v1/admin/users'),
   createUser: (payload: { username: string; display_name: string; password: string; is_admin: boolean }) => request<User>('/v1/admin/users', { method: 'POST', body: JSON.stringify(payload) }),

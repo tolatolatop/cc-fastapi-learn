@@ -13,6 +13,8 @@ from cc_fastapi.schemas.review_console import (
     ReviewConsolePullRequestListResponse,
     ReviewConsolePullRequestResponse,
     ReviewConsoleRepositoryListResponse,
+    ReviewConsoleReviewRecordListResponse,
+    ReviewConsoleReviewRecordResponse,
     ReviewConsoleStatisticsResponse,
     ReviewConsoleStatusChangeListResponse,
     ReviewConsoleStatusChangeResponse,
@@ -238,6 +240,74 @@ def list_history(
     )
 
 
+def _parse_repository_scopes(
+    repository: list[str] | None,
+) -> list[tuple[str, str]] | None:
+    if repository is None:
+        return None
+    scopes: list[tuple[str, str]] = []
+    for value in repository:
+        provider, separator, project_path = value.partition("/")
+        if not separator or not provider.strip() or not project_path.strip():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="repository must use provider/project_path format",
+            )
+        scopes.append((provider.strip().lower(), project_path.strip().strip("/")))
+    return scopes
+
+
+@router.get(
+    "/review-records",
+    response_model=ReviewConsoleReviewRecordListResponse,
+)
+def list_review_records(
+    created_from: datetime | None = Query(default=None),
+    created_to: datetime | None = Query(default=None),
+    repository: list[str] | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> ReviewConsoleReviewRecordListResponse:
+    if (
+        created_from is not None
+        and created_to is not None
+        and created_from > created_to
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="created_from must not be later than created_to",
+        )
+    rows = service.review_records(
+        db,
+        created_from=created_from,
+        created_to=created_to,
+        repositories=_parse_repository_scopes(repository),
+    )
+    return ReviewConsoleReviewRecordListResponse(
+        items=[
+            ReviewConsoleReviewRecordResponse(
+                issue_id=issue.id,
+                provider=batch.provider,
+                project_path=batch.project_path,
+                pr_number=batch.pr_number,
+                pr_url=batch.pr_url,
+                issue_no=issue.issue_no,
+                severity=issue.severity,
+                file_path=issue.file_path,
+                line_number=issue.line_number,
+                title=issue.title,
+                status=issue.decision_status,
+                reason_code=issue.decision_reason_code,
+                note=issue.decision_note,
+                decided_by_id=issue.decided_by_id,
+                decided_by_name=issue.decided_by_name or issue.decided_by_id,
+                decided_at=issue.decided_at,
+            )
+            for issue, batch in rows
+        ],
+        total=len(rows),
+    )
+
+
 @router.get("/statistics", response_model=ReviewConsoleStatisticsResponse)
 def statistics(
     created_from: datetime | None = Query(default=None),
@@ -250,22 +320,11 @@ def statistics(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="created_from must not be later than created_to",
         )
-    scopes: list[tuple[str, str]] | None = None
-    if repository is not None:
-        scopes = []
-        for value in repository:
-            provider, separator, project_path = value.partition("/")
-            if not separator or not provider.strip() or not project_path.strip():
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    detail="repository must use provider/project_path format",
-                )
-            scopes.append((provider.strip().lower(), project_path.strip().strip("/")))
     return ReviewConsoleStatisticsResponse(
         **service.statistics(
             db,
             created_from=created_from,
             created_to=created_to,
-            repositories=scopes,
+            repositories=_parse_repository_scopes(repository),
         )
     )

@@ -92,3 +92,6 @@ class ReviewApiClient:
 
     def statistics(self, params: list[tuple[str, str | int]]) -> dict[str, Any]:
         return self._request("GET", "/v1/review-console/statistics", params=params)
+
+    def review_records(self, params: list[tuple[str, str | int]]) -> dict[str, Any]:
+        return self._request("GET", "/v1/review-console/review-records", params=params)

@@ -124,6 +124,30 @@ class ReviewConsoleStatusChangeListResponse(BaseModel):
     items: list[ReviewConsoleStatusChangeResponse]
 
 
+class ReviewConsoleReviewRecordResponse(BaseModel):
+    issue_id: str
+    provider: str
+    project_path: str
+    pr_number: str
+    pr_url: str | None
+    issue_no: int
+    severity: ReviewIssueSeverity
+    file_path: str | None
+    line_number: int | None
+    title: str
+    status: ReviewIssueDecisionStatus
+    reason_code: ReviewIssueDecisionReason | None
+    note: str | None
+    decided_by_id: str
+    decided_by_name: str
+    decided_at: datetime
+
+
+class ReviewConsoleReviewRecordListResponse(BaseModel):
+    items: list[ReviewConsoleReviewRecordResponse]
+    total: int
+
+
 class ReviewConsoleStatisticsSummary(BaseModel):
     valid_opinion_total: int
     confirmed_total: int

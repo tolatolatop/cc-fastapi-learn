@@ -373,13 +373,12 @@ class ReviewConsoleService:
         )
 
     @staticmethod
-    def statistics(
-        db: Session,
+    def _decision_filters(
         *,
         created_from: datetime | None,
         created_to: datetime | None,
         repositories: list[tuple[str, str]] | None,
-    ) -> dict:
+    ) -> list:
         filters = []
         if repositories is not None:
             if not repositories:
@@ -400,6 +399,53 @@ class ReviewConsoleService:
             filters.append(ReviewIssue.decided_at >= created_from)
         if created_to is not None:
             filters.append(ReviewIssue.decided_at <= created_to)
+        return filters
+
+    @staticmethod
+    def review_records(
+        db: Session,
+        *,
+        created_from: datetime | None,
+        created_to: datetime | None,
+        repositories: list[tuple[str, str]] | None,
+        limit: int = 5000,
+    ) -> list[tuple[ReviewIssue, ReviewIssueBatch]]:
+        rows = db.execute(
+            select(ReviewIssue, ReviewIssueBatch)
+            .join(ReviewIssueBatch, ReviewIssueBatch.id == ReviewIssue.batch_id)
+            .where(
+                *ReviewConsoleService._decision_filters(
+                    created_from=created_from,
+                    created_to=created_to,
+                    repositories=repositories,
+                ),
+                ReviewIssue.decided_at.is_not(None),
+                ReviewIssue.decided_by_id.is_not(None),
+                ReviewIssue.decision_status.in_(
+                    (
+                        ReviewIssueDecisionStatus.ACCEPTED,
+                        ReviewIssueDecisionStatus.NOT_ACCEPTED,
+                    )
+                ),
+            )
+            .order_by(ReviewIssue.decided_at.desc(), ReviewIssue.id)
+            .limit(limit)
+        ).all()
+        return list(rows)
+
+    @staticmethod
+    def statistics(
+        db: Session,
+        *,
+        created_from: datetime | None,
+        created_to: datetime | None,
+        repositories: list[tuple[str, str]] | None,
+    ) -> dict:
+        filters = ReviewConsoleService._decision_filters(
+            created_from=created_from,
+            created_to=created_to,
+            repositories=repositories,
+        )
 
         terminal_statuses = (
             ReviewIssueDecisionStatus.ACCEPTED,

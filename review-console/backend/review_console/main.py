@@ -177,6 +177,30 @@ def statistics(
     return upstream_call(lambda: ReviewApiClient().statistics(params))
 
 
+@app.get("/v1/review-records")
+def review_records(
+    created_from: datetime | None = Query(default=None),
+    created_to: datetime | None = Query(default=None),
+    user: ConsoleUser = Depends(current_user),
+) -> dict:
+    if (
+        created_from is not None
+        and created_to is not None
+        and created_from > created_to
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="开始时间不能晚于结束时间",
+        )
+    params: list[tuple[str, str | int]] = []
+    if created_from is not None:
+        params.append(("created_from", created_from.isoformat()))
+    if created_to is not None:
+        params.append(("created_to", created_to.isoformat()))
+    params.extend(statistics_repository_params(user))
+    return upstream_call(lambda: ReviewApiClient().review_records(params))
+
+
 @app.get("/v1/issues/{issue_id}/history")
 def issue_history(issue_id: str, user: ConsoleUser = Depends(current_user)) -> dict:
     client = ReviewApiClient()

@@ -83,6 +83,24 @@ export interface HistoryItem {
   dimension: 'decision' | 'verification'
   created_at: string
 }
+export interface ReviewRecord {
+  issue_id: string
+  provider: string
+  project_path: string
+  pr_number: string
+  pr_url: string | null
+  issue_no: number
+  severity: Severity
+  file_path: string | null
+  line_number: number | null
+  title: string
+  status: 'accepted' | 'not_accepted'
+  reason_code: DecisionReason | null
+  note: string | null
+  decided_by_id: string
+  decided_by_name: string
+  decided_at: string
+}
 export interface Statistics {
   created_from: string | null
   created_to: string | null

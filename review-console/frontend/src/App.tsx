@@ -3,7 +3,7 @@ import { ArrowRight, ArrowUpDown, BarChart3, Check, Clock3, Code2, Copy, Externa
 import { Button, Form, Modal, Table } from 'react-bootstrap'
 import { api } from './api'
 import IssueMarkdown from './IssueMarkdown'
-import type { AuthConfig, DecisionReason, HistoryItem, Issue, IssueStatus, Permission, PullRequest, PullRequestCompletionStatus, Repository, Statistics, User } from './types'
+import type { AuthConfig, DecisionReason, HistoryItem, Issue, IssueStatus, Permission, PullRequest, PullRequestCompletionStatus, Repository, ReviewRecord, Statistics, User } from './types'
 
 const statusMeta: Record<IssueStatus, { label: string; className: string }> = {
   unverified: { label: '待分析', className: 'pending' },
@@ -40,6 +40,34 @@ function pageFromUrl(): Page {
 
 function formatTime(value: string) {
   return new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(value))
+}
+
+const recordTimeFormatter = new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
+
+function formatRecordTime(value: string) {
+  const parts = Object.fromEntries(recordTimeFormatter.formatToParts(new Date(value)).map((part) => [part.type, part.value]))
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`
+}
+
+function csvCell(value: string | number | null) {
+  const text = value === null ? '' : String(value)
+  return `"${text.replace(/"/g, '""')}"`
+}
+
+function reviewRecordRows(items: ReviewRecord[]) {
+  return items.map((item) => [
+    formatRecordTime(item.decided_at),
+    item.decided_by_name,
+    `${item.provider}/${item.project_path}`,
+    `#${item.pr_number}`,
+    String(item.issue_no),
+    item.severity.toUpperCase(),
+    item.file_path ? (item.line_number === null ? item.file_path : `${item.file_path}:${item.line_number}`) : '未标注文件',
+    item.title,
+    item.status === 'accepted' ? '接受' : '拒绝',
+    item.reason_code ? reasonMeta[item.reason_code] : '',
+    item.note || '',
+  ])
 }
 
 function pullRequestKey(pullRequest: Pick<PullRequest, 'provider' | 'project_path' | 'pr_number'>) {
@@ -335,6 +363,7 @@ function StatisticsWorkspace() {
   const [createdTo, setCreatedTo] = useState('')
   const [statistics, setStatistics] = useState<Statistics | null>(null)
   const [loading, setLoading] = useState(true)
+  const [exporting, setExporting] = useState(false)
   const [error, setError] = useState('')
   const load = useCallback(async (from = createdFrom, to = createdTo) => {
     setLoading(true); setError('')
@@ -344,11 +373,29 @@ function StatisticsWorkspace() {
   }, [createdFrom, createdTo])
   useEffect(() => { void load('', '') }, []) // eslint-disable-line react-hooks/exhaustive-deps
   function submit(event: FormEvent) { event.preventDefault(); void load() }
+  async function exportRecords() {
+    setExporting(true); setError('')
+    try {
+      const { items } = await api.reviewRecords(createdFrom, createdTo)
+      if (!items.length) { setError('所选时间范围内没有用户评审记录'); return }
+      const header = ['裁定时间', '评审人', '仓库', 'PR', '意见编号', '问题等级', '文件位置', '标题', '结论', '拒绝原因', '裁定说明']
+      const csv = [header, ...reviewRecordRows(items)].map((row) => row.map(csvCell).join(',')).join('\r\n')
+      const blob = new Blob([`\ufeff${csv}`], { type: 'text/csv;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `review-records-${new Date().toISOString().slice(0, 10)}.csv`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+    } catch (reason) { setError((reason as Error).message) } finally { setExporting(false) }
+  }
   const contributorMax = Math.max(...(statistics?.contributors.map((item) => item.confirmed_total) || [1]))
   const falsePositiveMax = Math.max(...(statistics?.top_false_positive_repositories.map((item) => item.false_positive_total) || [1]))
   return <main className="statistics-page">
     <header className="content-header"><div><p className="eyebrow">DECISION INTELLIGENCE</p><h1>裁定数据统计</h1><p className="statistics-intro">数据按每条意见的当前最终裁定统计，时间范围以最终裁定时间为准。</p></div></header>
-    <form className="time-filter" onSubmit={submit}><Form.Group><Form.Label>开始日期和时间</Form.Label><Form.Control type="datetime-local" value={createdFrom} max={createdTo || undefined} onChange={(event) => setCreatedFrom(event.target.value)} /></Form.Group><span>至</span><Form.Group><Form.Label>结束日期和时间</Form.Label><Form.Control type="datetime-local" value={createdTo} min={createdFrom || undefined} onChange={(event) => setCreatedTo(event.target.value)} /></Form.Group><Button type="submit" disabled={loading}>应用时间范围</Button><Button variant="outline-secondary" type="button" onClick={() => { setCreatedFrom(''); setCreatedTo(''); void load('', '') }}>重置</Button></form>
+    <div className="statistics-toolbar"><form className="time-filter" onSubmit={submit}><Form.Group><Form.Label>开始日期和时间</Form.Label><Form.Control type="datetime-local" value={createdFrom} max={createdTo || undefined} onChange={(event) => setCreatedFrom(event.target.value)} /></Form.Group><span>至</span><Form.Group><Form.Label>结束日期和时间</Form.Label><Form.Control type="datetime-local" value={createdTo} min={createdFrom || undefined} onChange={(event) => setCreatedTo(event.target.value)} /></Form.Group><Button type="submit" disabled={loading}>应用时间范围</Button><Button variant="outline-secondary" type="button" onClick={() => { setCreatedFrom(''); setCreatedTo(''); void load('', '') }}>重置</Button></form><Button className="export-records" type="button" disabled={exporting} onClick={() => void exportRecords()}>{exporting ? '正在导出…' : '导出用户评审记录'}</Button></div>
     {error && <div className="form-error">{error}</div>}
     {loading && !statistics ? <div className="empty-state">正在汇总裁定数据…</div> : statistics && <>
       <section className="statistics-hero"><div><span>有效意见</span><strong>{statistics.summary.valid_opinion_total}</strong><p>当前被人工确认接受的检视意见</p></div><dl><div><dt>确认贡献</dt><dd>{statistics.summary.confirmed_total}</dd><small>接受与拒绝的最终裁定总数</small></div><div><dt>确认误报</dt><dd>{statistics.summary.false_positive_total}</dd><small>拒绝原因为“误报”的意见</small></div></dl></section>

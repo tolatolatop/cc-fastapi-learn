@@ -118,3 +118,26 @@ button, input, select, textarea { font: inherit; }
 .issue-markdown img { max-width: 100%; height: auto; }
 .issue-markdown .task-list-item { list-style: none; }
 .issue-markdown .task-list-item input { margin-right: .4em; }
+
+.statistics-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 22px;
+}
+
+.statistics-toolbar .time-filter {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.export-records {
+  flex: none;
+  white-space: nowrap;
+}
+
+@media (max-width: 560px) {
+  .statistics-toolbar { align-items: stretch; flex-direction: column; }
+  .export-records { width: 100%; }
+}

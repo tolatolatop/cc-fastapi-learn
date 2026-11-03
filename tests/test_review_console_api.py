@@ -351,3 +351,110 @@ def test_statistics_use_current_decisions_actor_and_repository_scope():
         "confirmed_total": 0,
         "false_positive_total": 0,
     }
+
+
+def test_review_records_export_current_decisions_with_scope_and_time_filter():
+    client, sessions = build_client()
+    issue = client.get("/v1/review-console/issues/issue-1", headers=headers()).json()
+    accepted = client.put(
+        "/v1/review-console/issues/issue-1/status",
+        headers=headers(),
+        json={
+            "status": "accepted",
+            "note": "Confirmed",
+            "expected_updated_at": issue["updated_at"],
+        },
+    )
+    assert accepted.status_code == 200
+
+    decided_at = datetime.now(timezone.utc) + timedelta(seconds=5)
+    with sessions() as db:
+        task = AgentTask(
+            id="task-4",
+            status=TaskStatus.SUCCEEDED,
+            queue_name="default",
+            payload={},
+            queue_expire_at=datetime.now(timezone.utc),
+        )
+        batch = ReviewIssueBatch(
+            id="batch-4",
+            provider="gitlab",
+            project_path="team/other",
+            pr_number="9",
+            pr_url="https://gitlab.example.com/team/other/-/merge_requests/9",
+            review_task_id=task.id,
+            status=ReviewBatchStatus.COMPLETED,
+            issue_count=1,
+        )
+        rejected = ReviewIssue(
+            id="issue-4",
+            batch_id=batch.id,
+            issue_no=2,
+            severity=ReviewIssueSeverity.LOW,
+            title="False alarm",
+            description="The control already exists.",
+            file_path="app/service.py",
+            line_number=42,
+            decision_status=ReviewIssueDecisionStatus.NOT_ACCEPTED,
+            decision_reason_code="false_positive",
+            decision_note="Confirmed false positive",
+            decided_by_id="reviewer-2",
+            decided_by_name="Wang Reviewer",
+            decided_at=decided_at,
+        )
+        db.add_all([task, batch, rejected])
+        db.commit()
+
+    listing = client.get("/v1/review-console/review-records", headers=headers())
+    assert listing.status_code == 200
+    payload = listing.json()
+    assert payload["total"] == 2
+    first, second = payload["items"]
+    exported_at_value = first.pop("decided_at")
+    assert first == {
+        "issue_id": "issue-4",
+        "provider": "gitlab",
+        "project_path": "team/other",
+        "pr_number": "9",
+        "pr_url": "https://gitlab.example.com/team/other/-/merge_requests/9",
+        "issue_no": 2,
+        "severity": "low",
+        "file_path": "app/service.py",
+        "line_number": 42,
+        "title": "False alarm",
+        "status": "not_accepted",
+        "reason_code": "false_positive",
+        "note": "Confirmed false positive",
+        "decided_by_id": "reviewer-2",
+        "decided_by_name": "Wang Reviewer",
+    }
+    exported_at = datetime.fromisoformat(exported_at_value.replace("Z", "+00:00"))
+    if exported_at.tzinfo is None:
+        exported_at = exported_at.replace(tzinfo=timezone.utc)
+    assert exported_at == decided_at
+    assert second["issue_id"] == "issue-1"
+    assert second["status"] == "accepted"
+    assert second["decided_by_name"] == "Lin Reviewer"
+    assert second["reason_code"] is None
+
+    scoped = client.get(
+        "/v1/review-console/review-records",
+        headers=headers(),
+        params={"repository": "github/team/service"},
+    ).json()
+    assert [item["issue_id"] for item in scoped["items"]] == ["issue-1"]
+
+    future = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    filtered = client.get(
+        "/v1/review-console/review-records",
+        headers=headers(),
+        params={"created_from": future},
+    ).json()
+    assert filtered == {"items": [], "total": 0}
+
+    invalid_scope = client.get(
+        "/v1/review-console/review-records",
+        headers=headers(),
+        params={"repository": "github"},
+    )
+    assert invalid_scope.status_code == 422

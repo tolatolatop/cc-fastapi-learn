@@ -169,6 +169,55 @@ def test_statistics_with_no_grants_never_request_global_scope(monkeypatch):
     app.dependency_overrides.clear()
 
 
+def test_review_records_are_limited_to_user_repository_grants(monkeypatch):
+    user = scoped_user(RepositoryPermission.READ)
+    app.dependency_overrides[current_user] = lambda: user
+    captured = {}
+
+    def review_records(self, params):
+        captured["params"] = params
+        return {"items": [], "total": 0}
+
+    monkeypatch.setattr(ReviewApiClient, "review_records", review_records)
+    response = TestClient(app).get(
+        "/v1/review-records",
+        params={
+            "created_from": "2026-01-01T00:00:00+00:00",
+            "created_to": "2026-01-31T00:00:00+00:00",
+        },
+    )
+    assert response.status_code == 200
+    assert captured["params"] == [
+        ("created_from", "2026-01-01T00:00:00+00:00"),
+        ("created_to", "2026-01-31T00:00:00+00:00"),
+        ("repository", "github/team/service"),
+    ]
+    app.dependency_overrides.clear()
+
+
+def test_review_records_reject_reversed_time_range(monkeypatch):
+    user = scoped_user(RepositoryPermission.READ)
+    app.dependency_overrides[current_user] = lambda: user
+    called = False
+
+    def review_records(self, params):
+        nonlocal called
+        called = True
+        return {"items": [], "total": 0}
+
+    monkeypatch.setattr(ReviewApiClient, "review_records", review_records)
+    response = TestClient(app).get(
+        "/v1/review-records",
+        params={
+            "created_from": "2026-02-01T00:00:00+00:00",
+            "created_to": "2026-01-01T00:00:00+00:00",
+        },
+    )
+    assert response.status_code == 422
+    assert called is False
+    app.dependency_overrides.clear()
+
+
 def test_admin_can_create_user_and_assign_repository_grant():
     engine = create_engine(
         "sqlite+pysqlite:///:memory:",
