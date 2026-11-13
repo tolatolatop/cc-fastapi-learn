@@ -13,6 +13,7 @@ import {
   KeyRound,
   Layers3,
   LibraryBig,
+  Link2,
   Menu,
   Pause,
   Play,
@@ -32,6 +33,7 @@ import type { AuthConfig, AuthUser } from './api'
 import Pagination from './Pagination'
 import RepositoryPage from './RepositoryPage'
 import ReviewWorkspace from './ReviewWorkspace'
+import { normalizeTaskId, readTaskId, syncTaskUrl, taskUrlFor } from './taskUrl'
 import type { CreateTaskPayload, QueueItem, TaskContext, TaskControl, TaskItem, TaskLog, TaskStatus } from './types'
 import WebhookPage from './WebhookPage'
 
@@ -403,11 +405,18 @@ function DetailDrawer({ task, logs, context, loading, now, onClose, onCancel, on
     setPromptExpanded(false)
   }, [task.id])
 
+  function taskLink() {
+    return `${window.location.origin}${taskUrlFor(task.id, window.location.href)}`
+  }
+
   return (
     <Offcanvas show onHide={onClose} placement="end" className="detail-drawer" aria-labelledby="detail-title">
         <div className="drawer-head">
           <button className="icon-button" onClick={onClose} aria-label="关闭详情"><X size={19} /></button>
           <div className="drawer-head-actions">
+            <button className="icon-button" onClick={() => copyText(taskLink(), '任务链接已复制')} aria-label="复制任务链接" title="复制可直接打开该任务的链接">
+              <Link2 size={17} />
+            </button>
             <button className="icon-button" onClick={onRefresh} aria-label="刷新任务详情">
               <RefreshCw size={17} className={loading ? 'spin' : ''} />
             </button>
@@ -666,19 +675,60 @@ function App() {
     }
   }
 
-  const loadDetail = useCallback(async (id: string, showLoader = true) => {
+  const loadDetail = useCallback(async (id: string, showLoader = true, notifyError = true) => {
     if (showLoader) setDetailLoading(true)
     try {
       const [task, logResponse, contextResponse] = await Promise.all([api.getTask(id), api.getLogs(id), api.getContext(id)])
       setSelectedTask(task)
       setLogs(logResponse.items)
       setContext(contextResponse)
+      return true
     } catch (requestError) {
-      setToast(messageFrom(requestError))
+      if (notifyError) setToast(messageFrom(requestError))
+      return false
     } finally {
       setDetailLoading(false)
     }
   }, [])
+
+  // The table prints `TASK-XXXXXXXX`, so a shared short id has to be resolved back to the
+  // full task id before the drawer can load it.
+  const resolveShortTaskId = useCallback(async (candidate: string) => {
+    const needle = candidate.toLowerCase()
+    try {
+      const response = await api.listTasks({ query: needle, limit: 20 })
+      const matches = response.items.filter((item) => item.id.toLowerCase().startsWith(needle))
+      return matches.length === 1 ? matches[0].id : null
+    } catch {
+      return null
+    }
+  }, [])
+
+  const openTaskById = useCallback(async (rawId: string, options: { history?: 'push' | 'replace' | 'none' } = {}) => {
+    const taskId = normalizeTaskId(rawId)
+    if (!taskId) return
+    const historyMode = options.history ?? 'push'
+    setLogs([])
+    setContext(null)
+
+    let loadedId = taskId
+    let loaded = await loadDetail(taskId, true, false)
+    if (!loaded) {
+      const resolved = await resolveShortTaskId(taskId)
+      if (resolved && resolved !== taskId) {
+        loadedId = resolved
+        loaded = await loadDetail(resolved, true, false)
+      }
+    }
+
+    if (!loaded) {
+      setSelectedTask(null)
+      setToast('未找到该任务')
+      syncTaskUrl(null, 'replace')
+      return
+    }
+    if (historyMode !== 'none') syncTaskUrl(loadedId, historyMode)
+  }, [loadDetail, resolveShortTaskId])
 
   const checkHealth = useCallback(async () => {
     try {
@@ -734,6 +784,30 @@ function App() {
     return () => window.removeEventListener('hashchange', onHashChange)
   }, [])
 
+  // Deep link: `/?task=<task id>` opens the drawer straight away, even when the task is
+  // filtered off the current page.
+  useEffect(() => {
+    const linkedTaskId = readTaskId(window.location)
+    if (linkedTaskId) void openTaskById(linkedTaskId, { history: 'replace' })
+  }, [openTaskById])
+
+  // Back/forward between `?task=` entries keeps the drawer in sync with the address bar.
+  useEffect(() => {
+    const onPopState = () => {
+      const linkedTaskId = readTaskId(window.location)
+      if (!linkedTaskId) {
+        setSelectedTask(null)
+        setLogs([])
+        setContext(null)
+        return
+      }
+      if (linkedTaskId === selectedTask?.id) return
+      void openTaskById(linkedTaskId, { history: 'replace' })
+    }
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [openTaskById, selectedTask?.id])
+
   const displayQueues = useMemo(() => {
     if (queues.length) return queues
     const names = [...new Set(tasks.map((task) => task.queue_name))]
@@ -744,14 +818,22 @@ function App() {
     setSelectedTask(task)
     setLogs([])
     setContext(null)
+    syncTaskUrl(task.id)
     await loadDetail(task.id)
+  }
+
+  function closeTask() {
+    setSelectedTask(null)
+    setLogs([])
+    setContext(null)
+    syncTaskUrl(null)
   }
 
   async function created(id: string) {
     setCreateOpen(false)
     setToast('任务已进入队列')
     await loadDashboard(true)
-    await loadDetail(id)
+    await openTaskById(id)
   }
 
   async function cancelTask(id: string) {
@@ -772,7 +854,7 @@ function App() {
       const result = await api.retryTask(id)
       setToast('已创建新的重试任务')
       await loadDashboard(true)
-      await loadDetail(result.task_id)
+      await openTaskById(result.task_id)
     } catch (requestError) {
       setToast(messageFrom(requestError))
     } finally {
@@ -788,7 +870,7 @@ function App() {
         ? '调度已暂停，恢复后将在同一个会话继续执行'
         : `已加入队列，第 ${result.continuation_count} 次继续执行`)
       await loadDashboard(true)
-      await loadDetail(id)
+      await openTaskById(id)
     } catch (requestError) {
       setToast(messageFrom(requestError))
     } finally {
@@ -1026,11 +1108,11 @@ function App() {
           </section>
           </>
           ) : activeView === 'webhooks' ? (
-            <WebhookPage key={connectionRevision} onOpenTask={(taskId) => loadDetail(taskId)} onOpenSettings={() => setSettingsOpen(true)} />
+            <WebhookPage key={connectionRevision} onOpenTask={(taskId) => openTaskById(taskId)} onOpenSettings={() => setSettingsOpen(true)} />
           ) : activeView === 'repositories' ? (
             <RepositoryPage key={connectionRevision} onOpenSettings={() => setSettingsOpen(true)} />
           ) : (
-            <ReviewWorkspace key={connectionRevision} onOpenTask={(taskId) => loadDetail(taskId)} onOpenSettings={() => setSettingsOpen(true)} />
+            <ReviewWorkspace key={connectionRevision} onOpenTask={(taskId) => openTaskById(taskId)} onOpenSettings={() => setSettingsOpen(true)} />
           )}
         </div>
       </main>
@@ -1044,7 +1126,7 @@ function App() {
           context={context}
           loading={detailLoading}
           now={now}
-          onClose={() => setSelectedTask(null)}
+          onClose={closeTask}
           onCancel={cancelTask}
           onRetry={retryTask}
           onContinue={continueTask}
@@ -1054,7 +1136,7 @@ function App() {
           continuing={continuingTask}
         />
       )}
-      {toast && <div className="toast"><Check size={16} />{toast}</div>}
+      {toast && <div className="toast show"><Check size={16} />{toast}</div>}
     </div>
   )
 }

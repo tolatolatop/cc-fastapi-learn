@@ -809,7 +809,7 @@ export default function ReviewIssuesPage({ onOpenSettings, onOpenTask }: ReviewI
       {entryOpen && <ReviewEntryModal onClose={() => setEntryOpen(false)} onSaved={(batch) => { setEntryOpen(false); setSelected(batch); setNotice('检视结果已录入'); loadData(true) }} />}
       {collectingBatch && <ReviewEntryModal existingBatch={collectingBatch} onClose={() => setCollectingBatch(null)} onSaved={(batch) => { setCollectingBatch(null); setSelected(batch); setNotice('问题列表已录入'); loadData(true) }} />}
       {selected && <ReviewBatchDrawer batch={selected} onClose={() => setSelected(null)} onChanged={handleChanged} onOpenTask={onOpenTask} onContinueCollection={(batch) => { setSelected(null); setCollectingBatch(batch) }} />}
-      {notice && <div className="toast"><Check size={17} />{notice}</div>}
+      {notice && <div className="toast show"><Check size={17} />{notice}</div>}
     </>
   )
 }
