@@ -32,6 +32,10 @@ htmlcov/
 # Local deployment overrides
 deploy/cloudflare/config.yml
 deploy/docker-compose.local.yaml
+.cloudflared-webhook.yml
+
+# Local tooling artifacts
+uv.lock
 
 *.db
 logs/
