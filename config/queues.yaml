@@ -3,7 +3,13 @@ queues:
   default:
     workers: 1
     # default_model: claude-sonnet-4-5
+    api_key_env: ANTHROPIC_API_KEY
+    # base_url: https://gateway.example.com   # 缺省时回退到全局 ANTHROPIC_BASE_URL
   slow:
     workers: 1
+    # 该队列启用独立密钥时取消下面两行注释，并注入对应环境变量
+    # api_key_env: ANTHROPIC_API_KEY_SLOW
+    # base_url: https://gateway.example.com
   high_priority:
     workers: 1
+    # api_key_env: ANTHROPIC_API_KEY_HIGH_PRIORITY

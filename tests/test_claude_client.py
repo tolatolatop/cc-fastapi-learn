@@ -495,3 +495,113 @@ def test_real_sdk_control_protocol_resume_and_interrupt(monkeypatch, pause):
         assert ClaudeClient().run_agent_task(**params)['output_text'] == 'done'
     assert 'initialize' in events
     assert events[-1] == 'closed'
+
+
+def _stub_success_query(captured: dict[str, object]):
+    async def fake_query(*, prompt, options, transport=None):
+        captured["options"] = options
+        yield AssistantMessage(content=[TextBlock(text="ok")], model="claude-test")
+        yield ResultMessage(
+            subtype="end_turn",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=1,
+            session_id="session-key",
+            usage={},
+            result="ok",
+        )
+
+    return fake_query
+
+
+def test_claude_client_uses_per_call_api_key_and_base_url(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "global-key")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://global.example.com")
+    get_settings.cache_clear()
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(claude_client_module, "query", _stub_success_query(captured))
+
+    ClaudeClient().run_agent_task(
+        prompt="queue work",
+        model="claude-test",
+        metadata=None,
+        api_key="slow-queue-key",
+        base_url="https://queue.example.com/",
+    )
+
+    env = getattr(captured["options"], "env")
+    assert env["ANTHROPIC_API_KEY"] == "slow-queue-key"
+    assert env["ANTHROPIC_BASE_URL"] == "https://queue.example.com"
+
+
+def test_task_options_cannot_override_api_key_or_base_url(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "global-key")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://global.example.com")
+    get_settings.cache_clear()
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(claude_client_module, "query", _stub_success_query(captured))
+
+    ClaudeClient().run_agent_task(
+        prompt="queue work",
+        model="claude-test",
+        metadata=None,
+        claude_agent_options={
+            "env": {
+                "ANTHROPIC_API_KEY": "attacker-key",
+                "ANTHROPIC_BASE_URL": "https://attacker.example.com",
+                "EXTRA_FLAG": "1",
+            }
+        },
+    )
+
+    env = getattr(captured["options"], "env")
+    assert env["ANTHROPIC_API_KEY"] == "global-key"
+    assert env["ANTHROPIC_BASE_URL"] == "https://global.example.com"
+    assert env["EXTRA_FLAG"] == "1"
+
+
+def test_task_options_cannot_add_base_url_when_none_configured(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "global-key")
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    get_settings.cache_clear()
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(claude_client_module, "query", _stub_success_query(captured))
+
+    ClaudeClient().run_agent_task(
+        prompt="queue work",
+        model="claude-test",
+        metadata=None,
+        claude_agent_options={"env": {"ANTHROPIC_BASE_URL": "https://attacker.example.com"}},
+    )
+
+    env = getattr(captured["options"], "env")
+    assert "ANTHROPIC_BASE_URL" not in env
+
+
+def test_claude_client_redacts_per_call_api_key(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "global-key")
+    get_settings.cache_clear()
+
+    async def fake_query(*, prompt, options, transport=None):
+        options.stderr("upstream rejected queue-secret-key")
+        raise ProcessError(
+            "Command failed with exit code 1",
+            exit_code=1,
+            stderr="Check stderr output for details",
+        )
+        yield
+
+    monkeypatch.setattr(claude_client_module, "query", fake_query)
+
+    with pytest.raises(ClaudeExecutionError) as captured:
+        ClaudeClient().run_agent_task(
+            prompt="fail",
+            model="claude-test",
+            metadata=None,
+            api_key="queue-secret-key",
+        )
+
+    assert "queue-secret-key" not in str(captured.value)
+    assert "[REDACTED_API_KEY]" in captured.value.cli_stderr

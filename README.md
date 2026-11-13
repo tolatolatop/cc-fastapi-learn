@@ -207,6 +207,37 @@ queues:
 模型按“任务显式 `model` → `GITLAB_WEBHOOK_MODEL` / `GITHUB_WEBHOOK_MODEL` → Queue 的
 `default_model` → `ANTHROPIC_MODEL`”依次解析。空字符串视为未配置。
 
+### 队列级 API Key
+
+队列可以绑定独立的 API Key 和上游地址，避免所有队列争用同一份额度：
+
+```yaml
+default_queue: default
+queues:
+  default:
+    workers: 1
+    api_key_env: ANTHROPIC_API_KEY
+  slow:
+    workers: 1
+    api_key_env: ANTHROPIC_API_KEY_SLOW
+    base_url: https://gateway-b.example.com
+  high_priority:
+    workers: 2
+    api_key_env: ANTHROPIC_API_KEY_HIGH_PRIORITY
+```
+
+`api_key_env` 只保存环境变量名，明文密钥不写入 `queues.yaml`。解析顺序为“队列配置的
+`api_key_env` → 全局 `ANTHROPIC_API_KEY`”，`base_url` 同样回退到全局
+`ANTHROPIC_BASE_URL`。变量取值与 `Settings` 一致：进程环境优先，其次读取工作目录的
+`.env`。队列声明了 `api_key_env` 但两边都为空时，Worker 启动即失败，不会带着空密钥进入轮询。
+
+安全边界：任务创建请求中的 `claude_agent_options.env` 可以补充其它环境变量，但
+`ANTHROPIC_API_KEY` 和 `ANTHROPIC_BASE_URL` 始终由服务端按队列配置强制覆盖，调用方无法
+用自己的密钥或代理地址。
+
+Compose 部署需要把对应变量透传进容器（`docker-compose.yaml` 已预留
+`ANTHROPIC_API_KEY_SLOW` 与 `ANTHROPIC_API_KEY_HIGH_PRIORITY`，新增队列时按同样方式添加）。
+
 内部服务可按 PR/MR 列出最近变更请求，并精确读取任务结果和完整工作流历史：
 
 ```text

@@ -123,10 +123,11 @@ def _resolve_and_ensure_cwd(value: Any, fallback_cwd: str) -> str:
     return str(cwd_path)
 
 
-def _redact_diagnostic_text(value: str, api_key: str) -> str:
+def _redact_diagnostic_text(value: str, *api_keys: str) -> str:
     sanitized = value.strip()
-    if api_key:
-        sanitized = sanitized.replace(api_key, "[REDACTED_API_KEY]")
+    for api_key in api_keys:
+        if api_key:
+            sanitized = sanitized.replace(api_key, "[REDACTED_API_KEY]")
     return sanitized
 
 
@@ -148,6 +149,8 @@ class ClaudeClient:
         model: str,
         metadata: dict[str, Any] | None,
         claude_agent_options: dict[str, Any] | None = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
         agent_mode: bool = True,
         unattended: bool = True,
         on_message_update: Callable[[list[str]], None] | None = None,
@@ -157,8 +160,10 @@ class ClaudeClient:
         resume_session_id: str | None = None,
         resume_reason: ResumeReason | None = None,
     ) -> dict[str, Any]:
-        if not self.settings.anthropic_api_key:
+        resolved_api_key = (api_key or "").strip() or self.settings.anthropic_api_key.strip()
+        if not resolved_api_key:
             raise RuntimeError("ANTHROPIC_API_KEY is missing")
+        resolved_base_url = (base_url or "").strip() or self.settings.anthropic_base_url.strip()
         logger.debug("run_agent_task called", extra={"event_type": "claude_run_task_called"})
         return asyncio.run(
             self._run_agent_task_async(
@@ -166,6 +171,8 @@ class ClaudeClient:
                 model=model,
                 metadata=metadata,
                 claude_agent_options=claude_agent_options,
+                api_key=resolved_api_key,
+                base_url=resolved_base_url,
                 agent_mode=agent_mode,
                 unattended=unattended,
                 on_message_update=on_message_update,
@@ -184,6 +191,8 @@ class ClaudeClient:
         model: str,
         metadata: dict[str, Any] | None,
         claude_agent_options: dict[str, Any] | None,
+        api_key: str,
+        base_url: str,
         agent_mode: bool,
         unattended: bool,
         on_message_update: Callable[[list[str]], None] | None,
@@ -200,10 +209,10 @@ class ClaudeClient:
         )
 
         env = {
-            "ANTHROPIC_API_KEY": self.settings.anthropic_api_key,
+            "ANTHROPIC_API_KEY": api_key,
             "API_TIMEOUT_MS": str(self.settings.api_timeout_ms),
         }
-        anthropic_base_url = self.settings.anthropic_base_url.strip().rstrip("/")
+        anthropic_base_url = base_url.rstrip("/")
         if anthropic_base_url:
             env["ANTHROPIC_BASE_URL"] = anthropic_base_url
         if self.settings.anthropic_default_opus_model:
@@ -233,7 +242,13 @@ class ClaudeClient:
         )
         if "env" in user_options and isinstance(user_options["env"], dict):
             merged_env = {**env, **user_options["env"]}
-            merged_env["ANTHROPIC_API_KEY"] = self.settings.anthropic_api_key
+            # Credentials stay server-side: a task payload can extend the
+            # environment but never choose the key or the upstream endpoint.
+            merged_env["ANTHROPIC_API_KEY"] = api_key
+            if anthropic_base_url:
+                merged_env["ANTHROPIC_BASE_URL"] = anthropic_base_url
+            else:
+                merged_env.pop("ANTHROPIC_BASE_URL", None)
             user_options = {**user_options, "env": merged_env}
         options_kwargs.update(user_options)
         options_kwargs["allowed_tools"] = _normalize_tools(options_kwargs.get("allowed_tools"))
@@ -252,9 +267,14 @@ class ClaudeClient:
         )
 
         stderr_lines: list[str] = []
+        redact_keys = tuple(
+            dict.fromkeys(
+                key for key in (api_key, self.settings.anthropic_api_key.strip()) if key
+            )
+        )
 
         def capture_stderr(raw_line: str) -> None:
-            line = _redact_diagnostic_text(raw_line, self.settings.anthropic_api_key)
+            line = _redact_diagnostic_text(raw_line, *redact_keys)
             if line:
                 stderr_lines.append(line)
                 while len("\n".join(stderr_lines)) > MAX_CLI_STDERR_CHARS * 2:
@@ -371,13 +391,13 @@ class ClaudeClient:
             reported_stderr = getattr(exc, "stderr", None)
             is_placeholder = reported_stderr == "Check stderr output for details"
             if not cli_stderr and isinstance(reported_stderr, str) and not is_placeholder:
-                cli_stderr = _redact_diagnostic_text(reported_stderr, self.settings.anthropic_api_key)
+                cli_stderr = _redact_diagnostic_text(reported_stderr, *redact_keys)
             error_type = type(exc).__name__
             base_message = str(exc).replace("\nError output: Check stderr output for details", "")
             message = f"{error_type}: {base_message}"
             if cli_stderr:
                 message = f"{message}\nClaude CLI stderr:\n{cli_stderr}"
-            partial_output = _redact_diagnostic_text("\n".join(output_chunks), self.settings.anthropic_api_key)
+            partial_output = _redact_diagnostic_text("\n".join(output_chunks), *redact_keys)
             if len(partial_output) > MAX_PARTIAL_OUTPUT_CHARS:
                 partial_output = f"[earlier output truncated]\n{partial_output[-MAX_PARTIAL_OUTPUT_CHARS:]}"
             if partial_output and partial_output not in base_message:

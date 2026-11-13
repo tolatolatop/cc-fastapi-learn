@@ -10,6 +10,11 @@ from cc_fastapi.core.config import get_settings
 class QueueDefinition(BaseModel):
     workers: int = Field(default=1, ge=1)
     default_model: str | None = None
+    # Name of the environment variable holding this queue's API key.
+    # Keep secrets in the environment; never commit plaintext keys here.
+    api_key_env: str | None = None
+    # Optional per-queue upstream endpoint (for example a different gateway).
+    base_url: str | None = None
 
 
 class QueueConfig(BaseModel):

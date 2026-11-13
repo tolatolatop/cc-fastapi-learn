@@ -1,12 +1,16 @@
 import logging
+import os
 import threading
 import time
 from contextlib import suppress
+from dataclasses import dataclass
 
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.orm import Session
 
 from cc_fastapi.core.config import get_settings
-from cc_fastapi.core.queue_config import get_queue_config
+from cc_fastapi.core.queue_config import QueueDefinition, get_queue_config
 from cc_fastapi.db.models import TaskResumeMode, TaskStatus
 from cc_fastapi.db.session import SessionLocal
 from cc_fastapi.services.claude_client import (
@@ -19,6 +23,49 @@ from cc_fastapi.services.queue import TaskQueueService
 from cc_fastapi.workflows import build_default_workflow_engine
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class QueueRuntime:
+    """Per-queue execution credentials, resolved once at worker startup."""
+
+    name: str
+    api_key: str | None = None
+    base_url: str | None = None
+
+
+def _read_env_setting(name: str) -> str:
+    """Read a queue-specific variable with the same precedence as Settings.
+
+    Process environment wins; otherwise `.env` in the working directory is
+    consulted, matching how ANTHROPIC_API_KEY itself is resolved locally.
+    """
+    value = os.environ.get(name, "").strip()
+    if value:
+        return value
+    settings_cls = type(
+        "_QueueKeySettings",
+        (BaseSettings,),
+        {
+            "__annotations__": {"value": str},
+            "model_config": SettingsConfigDict(env_file=".env", extra="ignore"),
+            "value": Field(default="", alias=name),
+        },
+    )
+    return str(settings_cls().value).strip()
+
+
+def build_queue_runtime(queue_name: str, definition: QueueDefinition) -> QueueRuntime:
+    env_name = (definition.api_key_env or "").strip()
+    api_key: str | None = None
+    if env_name:
+        api_key = _read_env_setting(env_name)
+        if not api_key:
+            raise RuntimeError(
+                f"queue '{queue_name}' requires environment variable {env_name} but it is empty"
+            )
+    base_url = (definition.base_url or "").strip() or None
+    return QueueRuntime(name=queue_name, api_key=api_key, base_url=base_url)
 
 
 class WorkerManager:
@@ -44,10 +91,22 @@ class WorkerManager:
             },
         )
         for queue_name, qdef in queue_cfg.queues.items():
+            runtime = build_queue_runtime(queue_name, qdef)
+            logger.info(
+                "queue runtime resolved",
+                extra={
+                    "event_type": "queue_runtime_resolved",
+                    "queue_name": queue_name,
+                    "reason": (
+                        f"api_key={'queue' if runtime.api_key else 'global'},"
+                        f"base_url={'queue' if runtime.base_url else 'global'}"
+                    ),
+                },
+            )
             workers = max(1, int(qdef.workers))
             for idx in range(workers):
                 worker_id = f"{queue_name}-worker-{idx+1}"
-                thread = threading.Thread(target=self._loop, args=(worker_id, queue_name), daemon=True)
+                thread = threading.Thread(target=self._loop, args=(worker_id, runtime), daemon=True)
                 thread.start()
                 self.threads.append(thread)
                 started += 1
@@ -80,7 +139,15 @@ class WorkerManager:
         finally:
             db.close()
 
-    def _loop(self, worker_id: str, queue_name: str) -> None:
+    def _runtime_for_queue(self, queue_name: str | None) -> QueueRuntime:
+        """Resolve credentials for code paths that bypass the worker loop."""
+        queue_cfg = get_queue_config()
+        name = queue_name if queue_name in queue_cfg.queues else queue_cfg.default_queue
+        definition = queue_cfg.queues.get(name) or QueueDefinition(workers=1)
+        return build_queue_runtime(name, definition)
+
+    def _loop(self, worker_id: str, runtime: QueueRuntime) -> None:
+        queue_name = runtime.name
         sleep_seconds = max(0.2, self.settings.poll_interval_ms / 1000)
         logger.debug(
             "worker loop started",
@@ -103,7 +170,7 @@ class WorkerManager:
                     "task running",
                     extra={"task_id": task.id, "event_type": "running", "worker_id": worker_id, "trace_id": queue_name},
                 )
-                self._run_task(db, task.id)
+                self._run_task(db, task.id, runtime)
             except Exception:
                 logger.exception(
                     "worker loop error",
@@ -136,10 +203,12 @@ class WorkerManager:
                 },
             )
 
-    def _run_task(self, db: Session, task_id: str) -> None:
+    def _run_task(self, db: Session, task_id: str, runtime: QueueRuntime | None = None) -> None:
         task = self.queue.get_task(db, task_id)
         if not task:
             return
+        if runtime is None:
+            runtime = self._runtime_for_queue(getattr(task, "queue_name", None))
         execution_token = task.execution_token
         if task.status == TaskStatus.PAUSING:
             self.queue.mark_paused(db, task_id, execution_token, not_started=True)
@@ -168,6 +237,8 @@ class WorkerManager:
                 model=model,
                 metadata=task.metadata_json,
                 claude_agent_options=claude_agent_options,
+                api_key=runtime.api_key,
+                base_url=runtime.base_url,
                 agent_mode=task.agent_mode,
                 unattended=task.unattended,
                 on_message_update=lambda messages: self.queue.upsert_task_context(
