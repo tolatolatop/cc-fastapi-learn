@@ -150,6 +150,25 @@ GitLab Merge Request 事件会按“项目路径 + MR IID”写入 `workflow_cor
 GitHub Pull Request 事件会按“仓库全名 + PR 编号”写入同一关联表；收到 `action=synchronize`
 时采用相同的替换规则。
 
+## 任务停止钩子
+
+任务可以按元数据开启停止钩子。以 `review_report` 为例：Agent 正常停止后不会立刻成功，钩子先检查
+指定路径的检视报告文件；文件缺失、为空或不是本次运行写入时，任务在同一会话中自动续跑，最多三次；
+检查通过后把报告发布到 PR/MR 评论区，任务才进入 `succeeded`。配置方式、字段、续跑与失败语义见
+[任务停止钩子](docs/task-stop-hooks.md)。
+
+```json
+{
+  "hooks": {
+    "review_report": true
+  }
+}
+```
+
+PR/MR Webhook 任务的项目路径、PR 编号和实例地址会自动从平台元数据组装；报告路径默认
+`reports/review-report-{task_id}.md`，最多续跑 3 次。普通 API 任务没有 Webhook 上下文时默认只检查
+报告文件，可设置 `require_comment_target=true` 强制要求评论目标。
+
 ## 队列与模型默认值
 
 任务编排台提供「全部暂停 / 全部恢复」。暂停开关保存在数据库中，作用于所有队列，

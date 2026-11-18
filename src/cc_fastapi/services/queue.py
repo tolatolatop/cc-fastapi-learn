@@ -330,11 +330,16 @@ class TaskQueueService:
         paused = control.paused
         previous_status = task.status
         next_count = task.continuation_count + 1
+        # A manual continuation must not inherit feedback from an earlier stop-hook run.
+        continuation_payload = deepcopy(task.payload) if isinstance(task.payload, dict) else {}
+        continuation_payload.pop("hook_feedback", None)
+        continuation_payload.pop("hook_continuation_pending", None)
         result = db.execute(
             update(AgentTask)
             .where(AgentTask.id == task_id, AgentTask.status == previous_status)
             .values(
                 status=TaskStatus.PAUSED if paused else TaskStatus.QUEUED,
+                payload=continuation_payload,
                 paused_at=now if paused else None,
                 resume_pending=True,
                 resume_mode=TaskResumeMode.CONTINUE,
@@ -759,6 +764,164 @@ class TaskQueueService:
                 "status_from": TaskStatus.RUNNING,
                 "status_to": TaskStatus.FAILED,
                 "reason": "continuation_failed",
+            },
+        )
+        return True
+
+    def schedule_hook_continuation(
+        self,
+        db: Session,
+        task_id: str,
+        *,
+        hook_name: str,
+        feedback: str,
+        execution_token: str | None = None,
+        commit: bool = True,
+    ) -> AgentTask | None:
+        """Re-queue a still-running task in the same session after a stop hook blocks it."""
+        self._begin_sqlite_write_transaction(db)
+        control = self._lock_control(db)
+        task = db.scalars(
+            select(AgentTask)
+            .where(AgentTask.id == task_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).first()
+        if task is None or task.status != TaskStatus.RUNNING:
+            db.rollback()
+            return None
+        if execution_token and task.execution_token != execution_token:
+            db.rollback()
+            return None
+
+        payload = deepcopy(task.payload) if isinstance(task.payload, dict) else {}
+        hook_state = payload.get("hook_state")
+        hook_state = dict(hook_state) if isinstance(hook_state, dict) else {}
+        state = hook_state.get(hook_name)
+        state = dict(state) if isinstance(state, dict) else {}
+        try:
+            continue_count = max(0, int(state.get("continue_count", 0)))
+        except (TypeError, ValueError):
+            continue_count = 0
+        continue_count += 1
+        state.update(
+            {
+                "continue_count": continue_count,
+                "last_feedback": feedback.strip(),
+                "last_blocked_at": utc_now().isoformat(),
+            }
+        )
+        hook_state[hook_name] = state
+        payload["hook_state"] = hook_state
+        payload["hook_feedback"] = feedback.strip()
+        payload["hook_continuation_pending"] = True
+
+        now = utc_now()
+        paused = control.paused
+        result = db.execute(
+            update(AgentTask)
+            .where(
+                AgentTask.id == task_id,
+                AgentTask.status == TaskStatus.RUNNING,
+                *([AgentTask.execution_token == execution_token] if execution_token else []),
+            )
+            .values(
+                status=TaskStatus.PAUSED if paused else TaskStatus.QUEUED,
+                paused_at=now if paused else None,
+                resume_pending=True,
+                resume_mode=TaskResumeMode.CONTINUE,
+                continuation_count=AgentTask.continuation_count + 1,
+                execution_token=None,
+                worker_id=None,
+                error_message=None,
+                finished_at=None,
+                started_at=None,
+                running_expire_at=None,
+                running_remaining_seconds=None,
+                queue_expire_at=now + timedelta(hours=self.settings.queue_ttl_hours),
+                scheduled_at=now,
+                payload=payload,
+            )
+        )
+        if result.rowcount == 0:
+            db.rollback()
+            return None
+        self.log_event(
+            db,
+            task_id,
+            "WARNING",
+            "hook_continue",
+            "task stop hook blocked the stop; continuing the same session",
+            {
+                "hook": hook_name,
+                "continue_count": continue_count,
+                "feedback": feedback.strip(),
+            },
+        )
+        if commit:
+            db.commit()
+            logger.info(
+                "task stop hook requested continuation",
+                extra={
+                    "event_type": "task_stop_hook_continue",
+                    "task_id": task_id,
+                    "reason": f"hook={hook_name},continue_count={continue_count}",
+                },
+            )
+            db.refresh(task)
+            return task
+        return task
+
+    def mark_hook_failed(
+        self,
+        db: Session,
+        task_id: str,
+        error_message: str,
+        *,
+        hook_name: str,
+        execution_token: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """Fail a task that cannot satisfy its stop hook after all continuations."""
+        self._begin_sqlite_write_transaction(db)
+        self._lock_control(db)
+        now = utc_now()
+        result = db.execute(
+            update(AgentTask)
+            .where(
+                AgentTask.id == task_id,
+                AgentTask.status == TaskStatus.RUNNING,
+                *([AgentTask.execution_token == execution_token] if execution_token else []),
+            )
+            .values(
+                status=TaskStatus.FAILED,
+                error_message=error_message,
+                finished_at=now,
+                resume_pending=False,
+                resume_mode=None,
+                execution_token=None,
+                worker_id=None,
+                running_expire_at=None,
+            )
+        )
+        if result.rowcount == 0:
+            db.rollback()
+            return False
+        self.log_event(
+            db,
+            task_id,
+            "ERROR",
+            "hook_failed",
+            error_message,
+            {"hook": hook_name, **(metadata or {})},
+        )
+        db.commit()
+        logger.info(
+            "task failed after stop hook rejection",
+            extra={
+                "event_type": "task_stop_hook_failed",
+                "task_id": task_id,
+                "reason": f"hook={hook_name}",
             },
         )
         return True

@@ -13,6 +13,11 @@ from cc_fastapi.core.config import get_settings
 from cc_fastapi.core.queue_config import QueueDefinition, get_queue_config
 from cc_fastapi.db.models import TaskResumeMode, TaskStatus
 from cc_fastapi.db.session import SessionLocal
+from cc_fastapi.hooks import (
+    TaskStopHookEngine,
+    build_hook_continuation_prompt,
+    hook_evaluation_payload,
+)
 from cc_fastapi.services.claude_client import (
     AgentTaskCancelledError,
     AgentTaskPausedError,
@@ -74,6 +79,7 @@ class WorkerManager:
         self.queue = TaskQueueService()
         self.client = ClaudeClient()
         self.workflows = build_default_workflow_engine()
+        self.hooks = TaskStopHookEngine()
         self.stop_event = threading.Event()
         self.threads: list[threading.Thread] = []
         self._empty_log_last_ts: dict[str, float] = {}
@@ -232,6 +238,9 @@ class WorkerManager:
                 raise RuntimeError("task prompt is empty")
             if resuming and not task.session_id:
                 raise RuntimeError("任务缺少可恢复的会话，保持暂停")
+            hook_feedback = ""
+            if resuming and isinstance(task.payload, dict):
+                hook_feedback = str(task.payload.get("hook_feedback") or "").strip()
             result = self.client.run_agent_task(
                 prompt=prompt,
                 model=model,
@@ -251,7 +260,87 @@ class WorkerManager:
                 should_pause=lambda: self.queue.is_task_pausing(db, task_id),
                 resume_session_id=task.session_id if resuming else None,
                 resume_reason="continue" if continuing else ("pause" if resuming else None),
+                resume_prompt=(
+                    build_hook_continuation_prompt(hook_feedback)
+                    if hook_feedback
+                    else None
+                ),
+                task_id=task.id,
             )
+            evaluation = self.hooks.evaluate(
+                task_id=task.id,
+                session_id=result.get("session_id") or task.session_id,
+                started_at=task.started_at,
+                metadata=task.metadata_json,
+                payload=task.payload,
+                output_text=str(result.get("output_text", "")),
+            )
+            if not evaluation.passed:
+                if evaluation.retry_allowed:
+                    continued = self.queue.schedule_hook_continuation(
+                        db,
+                        task.id,
+                        hook_name=evaluation.hook_name or "stop_hook",
+                        feedback=evaluation.feedback,
+                        execution_token=execution_token,
+                    )
+                    if continued is not None:
+                        logger.warning(
+                            "task stop hook scheduled continuation",
+                            extra={
+                                "task_id": task.id,
+                                "event_type": "stop_hook_continue",
+                                "queue_name": getattr(task, "queue_name", "default"),
+                                "reason": (
+                                    f"hook={evaluation.hook_name},"
+                                    f"continue_count={evaluation.continue_count + 1},"
+                                    f"max={evaluation.max_continues}"
+                                ),
+                            },
+                        )
+                        return
+                    logger.info(
+                        "task stop hook continuation lost a state race",
+                        extra={
+                            "task_id": task.id,
+                            "event_type": "stop_hook_continue_race",
+                            "queue_name": getattr(task, "queue_name", "default"),
+                        },
+                    )
+                    return
+                error_message = evaluation.feedback or "task stop hook rejected the stop"
+                failed = self.queue.mark_hook_failed(
+                    db,
+                    task.id,
+                    error_message,
+                    hook_name=evaluation.hook_name or "stop_hook",
+                    execution_token=execution_token,
+                    metadata={
+                        "continue_count": evaluation.continue_count,
+                        "max_continues": evaluation.max_continues,
+                        "retryable": evaluation.retryable,
+                    },
+                )
+                if not failed:
+                    # A concurrent pause/cancel owns the next transition.
+                    self.queue.mark_paused(db, task.id, execution_token, error=error_message)
+                self.workflows.handle_task_terminal(db, task.id)
+                logger.error(
+                    "task failed because a stop hook rejected the stop",
+                    extra={
+                        "task_id": task.id,
+                        "event_type": "stop_hook_failed",
+                        "queue_name": getattr(task, "queue_name", "default"),
+                        "reason": (
+                            f"hook={evaluation.hook_name},"
+                            f"continue_count={evaluation.continue_count},"
+                            f"max={evaluation.max_continues},"
+                            f"retryable={evaluation.retryable}"
+                        ),
+                    },
+                )
+                return
+            result["hook_results"] = hook_evaluation_payload(evaluation)
             transitioned = self.queue.mark_success(db, task_id, result, execution_token=execution_token)
             self.workflows.handle_task_terminal(db, task.id)
             if not transitioned:

@@ -16,6 +16,7 @@ from claude_agent_sdk.types import (
 )
 
 from cc_fastapi.core.config import get_settings
+from cc_fastapi.hooks.config import describe_review_report_hook
 
 logger = logging.getLogger(__name__)
 MAX_CLI_STDERR_CHARS = 8_000
@@ -159,6 +160,8 @@ class ClaudeClient:
         should_pause: Callable[[], bool] | None = None,
         resume_session_id: str | None = None,
         resume_reason: ResumeReason | None = None,
+        resume_prompt: str | None = None,
+        task_id: str | None = None,
     ) -> dict[str, Any]:
         resolved_api_key = (api_key or "").strip() or self.settings.anthropic_api_key.strip()
         if not resolved_api_key:
@@ -181,6 +184,8 @@ class ClaudeClient:
                 should_pause=should_pause,
                 resume_session_id=resume_session_id,
                 resume_reason=resume_reason,
+                resume_prompt=resume_prompt,
+                task_id=task_id,
             )
         )
 
@@ -201,12 +206,30 @@ class ClaudeClient:
         should_pause: Callable[[], bool] | None,
         resume_session_id: str | None,
         resume_reason: ResumeReason | None,
+        resume_prompt: str | None,
+        task_id: str | None,
     ) -> dict[str, Any]:
+        report_base_cwd: str | None = None
+        if isinstance(claude_agent_options, dict):
+            raw_cwd = claude_agent_options.get("cwd")
+            if isinstance(raw_cwd, (str, os.PathLike)) and os.fspath(raw_cwd).strip():
+                report_base_cwd = os.fspath(raw_cwd).strip()
+        hook_contract = (
+            describe_review_report_hook(
+                metadata,
+                task_id=task_id,
+                base_cwd=report_base_cwd or self.settings.claude_cwd,
+            )
+            if task_id
+            else ""
+        )
         system_note = (
             "You are running in Claude Agent task mode. "
             f"agent_mode={str(agent_mode).lower()}, unattended={str(unattended).lower()}. "
             f"metadata={metadata or {}}."
         )
+        if hook_contract:
+            system_note = f"{system_note}\n\n{hook_contract}"
 
         env = {
             "ANTHROPIC_API_KEY": api_key,
@@ -288,7 +311,8 @@ class ClaudeClient:
             options_kwargs["continue_conversation"] = False
             options_kwargs["fork_session"] = False
             options_kwargs.pop("session_id", None)
-            prompt = (
+            explicit_prompt = (resume_prompt or "").strip()
+            prompt = explicit_prompt or (
                 CONTINUE_RESUME_PROMPT
                 if resume_reason == "continue"
                 else PAUSE_RESUME_PROMPT

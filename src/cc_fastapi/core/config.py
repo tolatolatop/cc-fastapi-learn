@@ -72,6 +72,10 @@ class Settings(BaseSettings):
     )
     github_webhook_queue_name: str = Field(default="", alias="GITHUB_WEBHOOK_QUEUE_NAME")
     github_webhook_model: str = Field(default="", alias="GITHUB_WEBHOOK_MODEL")
+    gitlab_api_token: str = Field(default="", alias="GITLAB_API_TOKEN")
+    gitlab_api_url: str = Field(default="", alias="GITLAB_API_URL")
+    github_api_token: str = Field(default="", alias="GITHUB_API_TOKEN")
+    github_api_url: str = Field(default="", alias="GITHUB_API_URL")
     max_attempts: int = Field(default=3, alias="MAX_ATTEMPTS")
 
     @property

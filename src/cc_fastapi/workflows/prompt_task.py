@@ -65,13 +65,35 @@ class WebhookPromptTaskWorkflow(Workflow):
             "webhook_uuid": event.webhook_uuid,
             "instance_url": event.instance_url,
         }
+        parsed_payload = event.webhook_payload
+        if parsed_payload is not None:
+            if parsed_payload.repository is not None:
+                provider_metadata["project_path"] = parsed_payload.repository.project_path
+            change_request = parsed_payload.change_request
+            if change_request is not None:
+                provider_metadata["change_request_number"] = change_request.number
+                provider_metadata["change_request_url"] = change_request.url
+                provider_metadata["head_sha"] = change_request.head_sha
         configured_metadata = event.config.get("provider_metadata")
         if isinstance(configured_metadata, dict):
             provider_metadata.update(configured_metadata)
-        return {
-            "trigger": f"{self.provider}_webhook",
-            self.provider: provider_metadata,
-        }
+
+        configured_task_metadata = event.config.get("task_metadata")
+        metadata = (
+            dict(configured_task_metadata)
+            if isinstance(configured_task_metadata, dict)
+            else {}
+        )
+        existing_provider_metadata = metadata.get(self.provider)
+        if isinstance(existing_provider_metadata, dict):
+            provider_metadata = {**existing_provider_metadata, **provider_metadata}
+        metadata.update(
+            {
+                "trigger": f"{self.provider}_webhook",
+                self.provider: provider_metadata,
+            }
+        )
+        return metadata
 
     def _build_plan(
         self,

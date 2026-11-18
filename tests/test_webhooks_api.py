@@ -261,6 +261,7 @@ def test_gitlab_webhook_renders_prompt_creates_task_and_records_metadata():
                 "event_uuid": "event-uuid-1",
                 "webhook_uuid": "webhook-uuid-1",
                 "instance_url": "https://gitlab.example.com",
+                "project_path": "group/project",
             },
         }
         assert trigger.task_id == task.id
@@ -345,6 +346,7 @@ def test_github_webhook_verifies_signature_creates_task_and_records_metadata():
                 "instance_url": "https://github.com",
                 "delivery_id": "github-delivery-1",
                 "hook_id": "321",
+                "project_path": "octo-org/octo-repo",
             },
         }
         assert trigger.provider == "github"
