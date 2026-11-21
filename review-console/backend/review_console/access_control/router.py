@@ -236,11 +236,17 @@ def create_user(
     _: Annotated[ConsoleUser, Depends(admin_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> dict:
+    settings = get_settings()
     user = ConsoleUser(
         username=payload.username.strip().lower(),
         display_name=payload.display_name.strip(),
         password_hash=hash_password(payload.password),
         is_admin=payload.is_admin,
+        all_repositories_read=(
+            settings.default_all_repositories_read
+            if payload.all_repositories_read is None
+            else payload.all_repositories_read
+        ),
     )
     db.add(user)
     try:
@@ -288,6 +294,8 @@ def update_user(
         user.is_admin = payload.is_admin
     if payload.is_active is not None:
         user.is_active = payload.is_active
+    if payload.all_repositories_read is not None:
+        user.all_repositories_read = payload.all_repositories_read
     user.updated_at = utc_now()
     db.commit()
     return user_json(user)

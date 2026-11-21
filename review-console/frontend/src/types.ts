@@ -11,6 +11,7 @@ export interface User {
   display_name: string
   is_admin: boolean
   is_active: boolean
+  all_repositories_read: boolean
   auth_source: 'local' | 'sso'
   created_at: string
   grants: Grant[]

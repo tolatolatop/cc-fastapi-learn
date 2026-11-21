@@ -14,6 +14,8 @@ def permission_for(
     for grant in user.grants:
         if (grant.provider, grant.project_path) == normalized:
             return grant.permission
+    if user.all_repositories_read:
+        return RepositoryPermission.READ
     return None
 
 
@@ -28,7 +30,7 @@ def require_scope(
 
 
 def statistics_repository_params(user: ConsoleUser) -> list[tuple[str, str]]:
-    if user.is_admin:
+    if user.is_admin or user.all_repositories_read:
         return []
     scopes = [
         ("repository", f"{grant.provider}/{grant.project_path}")

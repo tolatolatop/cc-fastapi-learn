@@ -17,6 +17,7 @@ def user_json(user: ConsoleUser) -> dict:
         "display_name": user.display_name,
         "is_admin": user.is_admin,
         "is_active": user.is_active,
+        "all_repositories_read": user.all_repositories_read,
         "auth_source": "sso" if user.sso_identities else "local",
         "created_at": user.created_at,
         "grants": [grant_json(grant) for grant in user.grants],

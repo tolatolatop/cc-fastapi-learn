@@ -20,16 +20,25 @@
 - `admin`：管理用户及仓库授权，默认拥有所有仓库的修改权限。
 - `read`：只允许查看指定 `provider + project_path` 下的意见与历史。
 - `write`：包含只读能力，并可修改指定仓库下意见的状态及说明。
-- 非管理员没有隐式权限。停用用户后，已有会话也会在下一次请求时失效。
+- `all_repositories_read`（全仓库只读）：账号级开关，一键覆盖当前及后续新增的全部仓库只读访问，
+  不需要逐仓库维护授权。判定顺序为 `admin` → 命中的单仓库授权 → 全仓库只读，因此对某个仓库单独
+  授予 `write` 仍然有效，而 `write` 之外的其他仓库回落到只读。
+- 非管理员没有隐式写入权限。停用用户后，已有会话也会在下一次请求时失效。
+
+全仓库只读在“角色管理”页以单个开关切换，通过 `PATCH /v1/admin/users/{user_id}` 的
+`all_repositories_read` 字段提交；统计与评审记录导出对这类账号也使用全局范围，无需逐仓库列举。
+新注册账号（管理员创建的本地账号和 SSO/OAuth 首次登录建档的账号）默认开启该权限，由
+`REVIEW_CONSOLE_DEFAULT_ALL_REPOSITORIES_READ` 控制，默认值为 `true`；管理员创建账号时也可以显式
+传入 `all_repositories_read=false`。已有账号不会被启动迁移改动，仍需管理员按需一键开启或关闭。
 
 仓库是权限的最小边界。访问控制代码独立位于 `review_console.access_control`，其中会话依赖、OIDC
 协议、身份建档、角色与仓库策略、管理接口彼此分层；意见裁定业务只依赖 `current_user` 和仓库策略，
 不处理登录协议或用户管理。授权存放在操作台数据库，不耦合代码托管平台的成员模型。
 
 OIDC SSO 使用 Authorization Code + PKCE。回调校验签名、issuer、audience、state 和 nonce；首次登录
-按 issuer + subject 创建独立身份映射及本地用户，默认没有任何仓库权限。系统不会因用户名或邮箱相同
-而自动绑定已有本地账号。可配置一个 IdP 组映射为管理员；未配置管理员组时，SSO 用户的管理员角色
-仍由操作台维护。本地账号登录可在 SSO 验证完成后关闭。
+按 issuer + subject 创建独立身份映射及本地用户，并按部署配置初始化全仓库只读开关。系统不会因用户名
+或邮箱相同而自动绑定已有本地账号。可配置一个 IdP 组映射为管理员；未配置管理员组时，SSO 用户的管理员
+角色仍由操作台维护。本地账号登录可在 SSO 验证完成后关闭。
 
 ## 状态与审计
 
@@ -75,8 +84,8 @@ PR/MR 完成状态由主应用聚合其全部检视批次和意见后返回：`p
 写入接口另外要求 `X-Review-Actor-Id` 和 `X-Review-Actor-Name`。操作台对浏览器提供 `/v1/auth/*`、
 `/v1/repositories`、`/v1/issues/*`、`/v1/statistics`、`/v1/review-records` 与 `/v1/admin/users/*`，
 并在转发前校验仓库权限。
-非管理员统计请求会显式携带全部授权仓库范围；管理员可读取全局统计。时间过滤以当前最终裁定时间
-为准，贡献按意见的当前最终裁定人计数，因此反复修改不会放大贡献。
+非管理员统计请求会显式携带全部授权仓库范围；管理员和开启全仓库只读的账号可读取全局统计。时间过滤
+以当前最终裁定时间为准，贡献按意见的当前最终裁定人计数，因此反复修改不会放大贡献。
 
 认证接口额外包含公开的 `GET /v1/auth/config`、发起登录的 `GET /v1/auth/sso/login` 和 OIDC 回调
 `GET /v1/auth/sso/callback`。前端只根据公开配置决定显示 SSO 或本地登录，不会读取客户端密钥。
@@ -107,6 +116,17 @@ docker compose --profile review-console up --build
 `client_secret_post` 和配合 PKCE 的 `none`。声明名称、scope、签名算法、按钮文案和超时均可通过
 `.env.example` 中列出的环境变量调整。确认 SSO 和至少一个管理员账号可用后，可设置
 `REVIEW_CONSOLE_LOCAL_LOGIN_ENABLED=false` 关闭密码登录。
+
+新注册账号的默认仓库读权限由 `REVIEW_CONSOLE_DEFAULT_ALL_REPOSITORIES_READ` 控制（默认 `true`），
+即本地新建账号与 SSO/OAuth 首次建档账号都默认拥有全仓库只读权限：
+
+```dotenv
+REVIEW_CONSOLE_DEFAULT_ALL_REPOSITORIES_READ="true"
+```
+
+需要收紧默认值时设为 `false`，之后在“角色管理”页按账号一键开启。旧版本创建的数据库在启动时由
+`review_console.schema.apply_schema_migrations` 补上 `all_repositories_read` 列，已有账号保持原有
+授权不变。
 
 主控制台仍在 `18080`，独立操作台默认在 `18090`。首次启动且数据库中没有管理员时，环境变量中的
 初始账号会创建管理员；已有管理员时不会覆盖密码。生产环境应在首次登录后轮换初始密码变量，使用

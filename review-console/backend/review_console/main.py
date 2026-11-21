@@ -17,6 +17,7 @@ from review_console.access_control.service import bootstrap_admin
 from review_console.config import get_settings
 from review_console.db import engine
 from review_console.models import Base, ConsoleUser
+from review_console.schema import apply_schema_migrations
 from review_console.upstream import ReviewApiClient, UpstreamError
 
 __all__ = ["admin_user", "app", "current_user"]
@@ -57,6 +58,7 @@ async def lifespan(_: FastAPI):
     settings = get_settings()
     settings.validate_runtime()
     Base.metadata.create_all(engine)
+    apply_schema_migrations(engine)
     bootstrap_admin()
     yield
 

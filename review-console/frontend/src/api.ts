@@ -77,8 +77,8 @@ export const api = {
     return request<{ items: ReviewRecord[]; total: number }>(`/v1/review-records${params.size ? `?${params}` : ''}`)
   },
   users: () => request<{ items: User[] }>('/v1/admin/users'),
-  createUser: (payload: { username: string; display_name: string; password: string; is_admin: boolean }) => request<User>('/v1/admin/users', { method: 'POST', body: JSON.stringify(payload) }),
-  updateUser: (id: string, payload: Partial<Pick<User, 'display_name' | 'is_admin' | 'is_active'>> & { password?: string }) => request<User>(`/v1/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  createUser: (payload: { username: string; display_name: string; password: string; is_admin: boolean; all_repositories_read?: boolean }) => request<User>('/v1/admin/users', { method: 'POST', body: JSON.stringify(payload) }),
+  updateUser: (id: string, payload: Partial<Pick<User, 'display_name' | 'is_admin' | 'is_active' | 'all_repositories_read'>> & { password?: string }) => request<User>(`/v1/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   putGrant: (userId: string, payload: Omit<Grant, 'id'>) => request<Grant>(`/v1/admin/users/${userId}/grants`, { method: 'PUT', body: JSON.stringify(payload) }),
   deleteGrant: (userId: string, grantId: string) => request<void>(`/v1/admin/users/${userId}/grants/${grantId}`, { method: 'DELETE' }),
 }

@@ -13,6 +13,7 @@ class UserCreateRequest(BaseModel):
     display_name: str = Field(min_length=1, max_length=128)
     password: str = Field(min_length=10, max_length=256)
     is_admin: bool = False
+    all_repositories_read: bool | None = None
 
 
 class UserUpdateRequest(BaseModel):
@@ -20,6 +21,7 @@ class UserUpdateRequest(BaseModel):
     password: str | None = Field(default=None, min_length=10, max_length=256)
     is_admin: bool | None = None
     is_active: bool | None = None
+    all_repositories_read: bool | None = None
 
     @model_validator(mode="after")
     def require_value(self) -> "UserUpdateRequest":

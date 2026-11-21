@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     local_login_enabled: bool = Field(
         default=True, alias="REVIEW_CONSOLE_LOCAL_LOGIN_ENABLED"
     )
+    default_all_repositories_read: bool = Field(
+        default=True, alias="REVIEW_CONSOLE_DEFAULT_ALL_REPOSITORIES_READ"
+    )
     sso_enabled: bool = Field(default=False, alias="REVIEW_CONSOLE_SSO_ENABLED")
     oauth_bearer_enabled: bool = Field(
         default=False, alias="REVIEW_CONSOLE_OAUTH_BEARER_ENABLED"

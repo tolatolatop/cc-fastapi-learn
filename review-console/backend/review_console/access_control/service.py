@@ -138,6 +138,7 @@ def find_or_create_sso_user(
         display_name=_display_name(claims, settings, username),
         password_hash="!sso",
         is_admin=_is_admin(claims, settings) if synchronize_profile else False,
+        all_repositories_read=settings.default_all_repositories_read,
     )
     user.sso_identities.append(SsoIdentity(issuer=issuer, subject=subject))
     db.add(user)
