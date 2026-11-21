@@ -66,6 +66,7 @@ class FakeOidcClient:
 def sso_environment(monkeypatch):
     values = {
         "REVIEW_CONSOLE_SESSION_SECRET": "s" * 32,
+        "REVIEW_CONSOLE_API_TOKEN": "integration-secret",
         "REVIEW_CONSOLE_LOCAL_LOGIN_ENABLED": "false",
         "REVIEW_CONSOLE_SSO_ENABLED": "true",
         "REVIEW_CONSOLE_SSO_ISSUER_URL": "https://identity.example",
