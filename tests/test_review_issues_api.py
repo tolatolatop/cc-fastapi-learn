@@ -587,3 +587,57 @@ def test_pull_request_issue_records_report_empty_and_missing_pull_requests():
         },
     )
     assert invalid.status_code == 422
+
+
+def test_pull_request_issue_entry_validates_version_identity():
+    client = build_client()
+    issues = [
+        {
+            "severity": "medium",
+            "title": "Retry drift",
+            "description": "retry policy differs between callers",
+        }
+    ]
+
+    invalid_sha = client.post(
+        "/v1/review-issues/pull-request",
+        json={
+            "provider": "github",
+            "project_path": "team/service",
+            "pr_number": "17",
+            "head_sha": "not-a-sha",
+            "issues": issues,
+        },
+    )
+    assert invalid_sha.status_code == 422
+
+    future = "2999-01-01T00:00:00Z"
+    invalid_moment = client.post(
+        "/v1/review-issues/pull-request",
+        json={
+            "provider": "github",
+            "project_path": "team/service",
+            "pr_number": "17",
+            "head_sha": "abcdef1",
+            "head_committed_at": future,
+            "issues": issues,
+        },
+    )
+    assert invalid_moment.status_code == 422
+
+    recorded = client.post(
+        "/v1/review-issues/pull-request",
+        json={
+            "provider": "github",
+            "project_path": "team/service",
+            "pr_number": "17",
+            "head_sha": "ABCDEF1234567",
+            "head_committed_at": "2026-05-01T12:30:00Z",
+            "issues": issues,
+        },
+    )
+    assert recorded.status_code == 201
+    batch_id = recorded.json()["items"][0]["batch_id"]
+    batch = client.get(f"/v1/review-issue-batches/{batch_id}").json()
+    assert batch["review_head_sha"] == "abcdef1234567"
+    assert batch["head_committed_at"].startswith("2026-05-01")

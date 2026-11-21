@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -33,6 +34,27 @@ class AdminConflictError(AdminClientError):
 
 class AdminAuthError(AdminClientError):
     exit_code = 5
+
+
+def _moment(value: Any) -> datetime:
+    if not isinstance(value, str) or not value.strip():
+        return datetime.min.replace(tzinfo=timezone.utc)
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def batch_version_key(batch: dict[str, Any]) -> tuple[datetime, datetime, str]:
+    """Order batches by reviewed code version, then collection time and id."""
+    return (
+        _moment(batch.get("head_committed_at") or batch.get("created_at")),
+        _moment(batch.get("created_at")),
+        str(batch.get("id") or ""),
+    )
 
 
 class VerifyResult(BaseModel):
@@ -304,7 +326,9 @@ class AdminApiClient:
         category: str | None,
         commit_sha: str | None,
     ) -> dict[str, Any]:
-        batches = self.list_batches(identity)
+        batches = sorted(
+            self.list_batches(identity), key=batch_version_key, reverse=True
+        )
         try:
             detail = self.detail(
                 identity,
@@ -401,6 +425,8 @@ class AdminApiClient:
         *,
         task_id: str | None,
         issues: list[dict[str, Any]],
+        head_sha: str,
+        head_committed_at: datetime,
     ) -> dict[str, Any]:
         detail = self.detail(identity, task_id=task_id)
         tasks = detail.get("tasks", [])
@@ -444,7 +470,8 @@ class AdminApiClient:
                 "pr_url": change_request.get("url"),
                 "review_workflow_run_id": task.get("workflow_run_id"),
                 "review_task_id": task["id"],
-                "review_head_sha": change_request.get("head_sha"),
+                "review_head_sha": head_sha,
+                "head_committed_at": head_committed_at.isoformat(),
             }
             try:
                 batch = self.request("POST", "/v1/review-issue-batches", json=payload)
@@ -508,13 +535,20 @@ class AdminApiClient:
         identity: PullRequestIdentity,
         *,
         issues: list[dict[str, Any]],
+        head_sha: str,
+        head_committed_at: datetime,
     ) -> dict[str, Any]:
         if not issues:
             raise AdminInputError("at least one issue is required")
         response = self.request(
             "POST",
             "/v1/review-issues/pull-request",
-            json={**identity.params(), "issues": issues},
+            json={
+                **identity.params(),
+                "issues": issues,
+                "head_sha": head_sha,
+                "head_committed_at": head_committed_at.isoformat(),
+            },
         )
         return {
             "ok": True,

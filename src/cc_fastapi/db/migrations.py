@@ -5,6 +5,7 @@ from cc_fastapi.db.models import (
     AgentTask,
     Repository,
     ReviewIssue,
+    ReviewIssueBatch,
     ReviewIssueStatusChange,
     TaskQueueControl,
 )
@@ -148,6 +149,13 @@ def apply_schema_migrations(engine: Engine) -> None:
             if index.name == "ix_review_issues_decision_statistics"
         )
         decision_index.create(bind=engine, checkfirst=True)
+
+    if "review_issue_batches" in table_names:
+        _add_column(
+            engine,
+            table_name="review_issue_batches",
+            model_column=ReviewIssueBatch.__table__.c.head_committed_at,
+        )
 
     if "review_issue_status_changes" in table_names:
         change_columns = ReviewIssueStatusChange.__table__.c

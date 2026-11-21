@@ -77,6 +77,8 @@ def record_pull_request_review_issues(
             project_path=payload.project_path,
             pr_number=payload.pr_number,
             items=[item.model_dump(mode="json") for item in payload.issues],
+            head_sha=payload.head_sha,
+            head_committed_at=payload.head_committed_at,
         )
     except (
         ReviewIssueNotFoundError,

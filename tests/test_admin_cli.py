@@ -1,4 +1,5 @@
-from datetime import timedelta
+import json
+from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -11,6 +12,7 @@ from sqlalchemy.pool import StaticPool
 from cc_fastapi.admin_client import (
     AdminApiClient,
     AdminConflictError,
+    batch_version_key,
     AdminInputError,
     AdminNotFoundError,
     PullRequestIdentity,
@@ -62,6 +64,10 @@ def github_pr_payload(number: int, *, merged: bool = False) -> dict:
             "base": {"ref": "main"},
         },
     }
+
+
+HEAD_SHA = "a" * 40
+HEAD_COMMITTED_AT = datetime(2026, 5, 1, 12, 30, tzinfo=timezone.utc)
 
 
 def build_client() -> tuple[TestClient, sessionmaker]:
@@ -245,6 +251,72 @@ def test_change_request_api_groups_filters_and_returns_successful_task_results()
     assert body["tasks"][0]["output_text"] == "review completed"
 
 
+def test_batch_version_key_orders_by_code_version_over_collection_time():
+    backfilled_old_version = {
+        "id": "batch-old",
+        "head_committed_at": "2025-03-01T00:00:00Z",
+        "created_at": "2031-01-01T00:00:00+00:00",
+    }
+    current_version = {
+        "id": "batch-current",
+        "head_committed_at": "2026-11-10T00:00:00Z",
+        "created_at": "2026-11-10T00:00:00Z",
+    }
+    legacy_without_version_time = {
+        "id": "batch-legacy",
+        "created_at": "2026-12-01T00:00:00Z",
+    }
+
+    ordered = sorted(
+        [
+            backfilled_old_version,
+            current_version,
+            legacy_without_version_time,
+        ],
+        key=batch_version_key,
+        reverse=True,
+    )
+    assert [item["id"] for item in ordered] == [
+        "batch-legacy",
+        "batch-current",
+        "batch-old",
+    ]
+
+
+def test_collect_records_explicit_head_commit_time():
+    test_client, session_factory = build_client()
+    seed_change_requests(session_factory)
+    identity = PullRequestIdentity("github", "org/project", "42")
+    issues = parse_collect_input(
+        {
+            "issues": [
+                {
+                    "severity": "medium",
+                    "title": "Config drift",
+                    "description": "the timeout differs between deployments",
+                }
+            ]
+        }
+    )
+    committed = datetime(2026, 5, 1, 12, 30, tzinfo=timezone.utc)
+    with AdminApiClient(
+        "http://testserver", transport=bridge_transport(test_client)
+    ) as client:
+        collected = client.collect(
+            identity,
+            task_id=None,
+            issues=issues,
+            head_sha="b" * 40,
+            head_committed_at=committed,
+        )
+    recorded = collected["batch"]["head_committed_at"]
+    assert recorded is not None
+    parsed = datetime.fromisoformat(recorded.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    assert parsed == committed
+
+
 def test_admin_client_collects_idempotently_and_verifies_by_issue_number():
     test_client, session_factory = build_client()
     seed_change_requests(session_factory)
@@ -264,11 +336,25 @@ def test_admin_client_collects_idempotently_and_verifies_by_issue_number():
     with AdminApiClient(
         "http://testserver", transport=bridge_transport(test_client)
     ) as client:
-        collected = client.collect(identity, task_id=None, issues=issues)
+        collected = client.collect(
+            identity,
+            task_id=None,
+            issues=issues,
+            head_sha=HEAD_SHA,
+            head_committed_at=HEAD_COMMITTED_AT,
+        )
         assert collected["batch"]["status"] == "waiting_merge"
+        assert collected["batch"]["review_head_sha"] == HEAD_SHA
+        assert collected["batch"]["head_committed_at"] is not None
         assert collected["issues"][0]["issue_no"] == 1
 
-        repeated = client.collect(identity, task_id=None, issues=issues)
+        repeated = client.collect(
+            identity,
+            task_id=None,
+            issues=issues,
+            head_sha=HEAD_SHA,
+            head_committed_at=HEAD_COMMITTED_AT,
+        )
         assert repeated["idempotent"] is True
 
         verified = client.verify(
@@ -325,13 +411,23 @@ def test_admin_client_adds_pr_issues_without_a_review_task_or_verification():
     with AdminApiClient(
         "http://testserver", transport=bridge_transport(test_client)
     ) as client:
-        recorded = client.add_issues(identity, issues=issues)
+        recorded = client.add_issues(
+            identity,
+            issues=issues,
+            head_sha=HEAD_SHA,
+            head_committed_at=HEAD_COMMITTED_AT,
+        )
         assert recorded["operation"] == "add_issues"
         assert recorded["idempotent"] is False
         assert recorded["pull_request"]["project_path"] == "group/other"
         assert recorded["items"][0]["verification_status"] == "unverified"
 
-        repeated = client.add_issues(identity, issues=issues)
+        repeated = client.add_issues(
+            identity,
+            issues=issues,
+            head_sha=HEAD_SHA,
+            head_committed_at=HEAD_COMMITTED_AT,
+        )
         assert repeated["idempotent"] is True
         assert repeated["items"][0]["id"] == recorded["items"][0]["id"]
 
@@ -354,7 +450,12 @@ def test_admin_client_adds_pr_issues_without_a_review_task_or_verification():
         assert detail["issues"][0]["review_task"] is None
 
         standalone_identity = PullRequestIdentity("gitea", "Org/Legacy", "404")
-        standalone = client.add_issues(standalone_identity, issues=issues)
+        standalone = client.add_issues(
+            standalone_identity,
+            issues=issues,
+            head_sha="c" * 40,
+            head_committed_at=HEAD_COMMITTED_AT,
+        )
         assert standalone["pull_request"] == {
             "provider": "gitea",
             "project_path": "org/legacy",
@@ -571,3 +672,78 @@ def test_cli_reports_missing_connection_configuration_as_json(monkeypatch, capsy
         '{"ok": false, "error": "API base URL is required; use --base-url or '
         'CC_FASTAPI_BASE_URL", "exit_code": 2}\n'
     )
+
+
+def _write_collect_input(tmp_path) -> str:
+    path = tmp_path / "issues.json"
+    path.write_text(
+        json.dumps(
+            {
+                "issues": [
+                    {
+                        "severity": "low",
+                        "title": "Style drift",
+                        "description": "naming differs from the module convention",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    return str(path)
+
+
+def test_collect_and_add_issues_require_version_arguments(capsys):
+    for command in ("collect", "add-issues"):
+        with pytest.raises(SystemExit, match="2"):
+            build_parser().parse_args(
+                ["pr", command, "github", "org/project", "42", "--input", "-"]
+            )
+        error = capsys.readouterr().err
+        assert "--head-sha" in error
+        assert "--head-committed-at" in error
+
+
+def test_collect_rejects_invalid_head_sha(monkeypatch, capsys, tmp_path):
+    monkeypatch.setenv("CC_FASTAPI_BASE_URL", "http://api.example.test")
+    input_path = _write_collect_input(tmp_path)
+    exit_code = main(
+        [
+            "pr",
+            "collect",
+            "github",
+            "org/project",
+            "42",
+            "--head-sha",
+            "not-a-sha",
+            "--head-committed-at",
+            "2026-05-01T12:30:00Z",
+            "--input",
+            input_path,
+        ]
+    )
+    assert exit_code == 2
+    assert "7 to 64 hexadecimal" in capsys.readouterr().err
+
+
+def test_collect_rejects_future_head_committed_at(monkeypatch, capsys, tmp_path):
+    monkeypatch.setenv("CC_FASTAPI_BASE_URL", "http://api.example.test")
+    input_path = _write_collect_input(tmp_path)
+    future = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    exit_code = main(
+        [
+            "pr",
+            "collect",
+            "github",
+            "org/project",
+            "42",
+            "--head-sha",
+            "abcdef1",
+            "--head-committed-at",
+            future,
+            "--input",
+            input_path,
+        ]
+    )
+    assert exit_code == 2
+    assert "must not be in the future" in capsys.readouterr().err

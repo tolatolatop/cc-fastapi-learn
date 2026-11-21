@@ -109,9 +109,17 @@ GitHub 使用对应的 `GITHUB_WEBHOOK_SECRET`、`GITHUB_WEBHOOK_PROMPT_TEMPLATE
 `X-GitHub-Enterprise-Host` 记录，普通 GitHub 记录为 `https://github.com`。默认 Prompt 模板位于
 `config/templates/github_webhook_prompt.j2`。
 
-用于把后续检视报告与 PR 看板进行语义去重和状态对账的固定提示词位于
-`config/templates/review_report_incremental_reconciliation_prompt.j2`。模板参数化了报告任务、
-PR 标识、合并 SHA 回退值和预期问题数量，可用于验证仅录入新增问题并将已消失问题标记为已接受。
+用于把一份检视报告全量录入 PR 看板的固定提示词位于
+`config/templates/review_report_submission_prompt.j2`。模板参数化了报告任务、PR 标识和预期问题
+数量：每份报告都作为新的检视批次完整录入，不再要求增量提交，也不与历史批次做语义去重，或把
+“已消失”问题标记为已接受。检视操作台默认只展示 PR/MR 最新一次提交的意见，因此全量提交即可得到
+完整的当轮结论。
+
+“最新一次”按代码版本先后判定，而不是按批次入库时间：每条写命令都必须给出被检视版本，
+即 `--head-sha`（7–64 位十六进制 commit SHA）与 `--head-committed-at`（该 commit 的 ISO-8601
+提交时间），批次据此排序。这样补录、重放或先收后录的旧报告不会把旧版本冒认为最新版本。
+未来时间戳会被拒绝；服务端对历史调用方仍保留“平台事件时间 → 批次创建时间”的回退顺序，但 CLI
+不会替你猜版本。
 
 平台 Jinja 模板都可直接读取 Payload 顶层字段，并额外提供 `payload`、`event_type` 和
 `webhook`。控制台支持按平台、事件类型、项目、分支、投递 UUID 或关联任务 ID 检索归档。
@@ -305,8 +313,10 @@ docker exec cc-fastapi-app cc-fastapi-admin pr collect --help
 写命令使用 stdin 把宿主机文件传给容器，文件推荐使用绝对路径：
 
 ```bash
-docker exec -i cc-fastapi-app cc-fastapi-admin pr add-issues github org/project 42 --input - < /absolute/path/issues.json
-docker exec -i cc-fastapi-app cc-fastapi-admin pr collect github org/project 42 --input - < /absolute/path/issues.json
+docker exec -i cc-fastapi-app cc-fastapi-admin pr add-issues github org/project 42 \
+  --head-sha <commit-sha> --head-committed-at 2026-11-10T03:00:00Z --input - < /absolute/path/issues.json
+docker exec -i cc-fastapi-app cc-fastapi-admin pr collect github org/project 42 \
+  --head-sha <commit-sha> --head-committed-at 2026-11-10T03:00:00Z --input - < /absolute/path/issues.json
 docker exec -i cc-fastapi-app cc-fastapi-admin pr verify github org/project 42 --input - < /absolute/path/results.json
 ```
 
@@ -323,11 +333,12 @@ cc-fastapi-admin status
 本项目 `pyproject.toml` 的目录执行。`docker compose exec` 同样默认依赖当前目录中的 Compose
 文件，因此 agent 自动化应优先使用上面的 `docker exec` 形式。
 
-`add-issues` 输入为 `{"issues": [...]}`，要求至少一个、最多 500 个问题；它只要求 provider、
-仓库路径和 PR/MR 编号，不依赖 Webhook 或 Agent Task，也不进入合入后核验流程。若存在 Webhook
+`add-issues` 输入为 `{"issues": [...]}`，要求至少一个、最多 500 个问题；它要求 provider、
+仓库路径、PR/MR 编号，以及版本定位参数 `--head-sha` 与 `--head-committed-at`；不依赖 Webhook 或
+Agent Task，也不进入合入后核验流程。若存在 Webhook
 历史，服务会用它补充 PR 链接与 SHA；不存在也能独立录入和查询。相同 PR 与问题内容重复提交会
-返回同一批记录。`collect` 使用相同输入结构，允许空问题列表；未指定 `--task-id` 时
-只使用该 PR 最新的 active+succeeded Task。`verify` 输入为
+返回同一批记录。`collect` 使用相同输入结构，同样要求 `--head-sha` 与 `--head-committed-at`，
+允许空问题列表；未指定 `--task-id` 时只使用该 PR 最新的 active+succeeded Task。`verify` 输入为
 `{"results": [{"issue_no": 1, "status": "accepted", "note": "..."}]}`，在批次内把
 `issue_no` 映射为内部 UUID，单次最多处理 500 条。三条写命令都支持 `--input -` 从 stdin
 读取；三条写命令均支持安全重试。

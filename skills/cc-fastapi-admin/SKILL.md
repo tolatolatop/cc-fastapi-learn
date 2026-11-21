@@ -43,6 +43,9 @@ shapes and selection rules.
 
 - Use `pr collect` for findings extracted from a successful Agent Task. Pass
   `--task-id` when it is known; do not silently attach findings to another task.
+- Always pass `--head-sha` and `--head-committed-at`: they identify the reviewed
+  code version and order review batches by version instead of collection time.
+  Use the real commit time (`git show -s --format=%cI SHA`); never invent it.
 - Use `pr add-issues` only for standalone findings that intentionally have no
   Agent Task or tracked post-merge verification lifecycle.
 - Use `pr verify` only for tracked findings. Supply `--batch-id` when more than

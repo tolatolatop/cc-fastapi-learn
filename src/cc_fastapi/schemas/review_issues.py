@@ -1,4 +1,5 @@
-from datetime import datetime
+import re
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from pydantic import (
@@ -36,6 +37,28 @@ def _strip_optional(value: str | None) -> str | None:
     return normalized or None
 
 
+_HEAD_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{7,64}$")
+_FUTURE_TOLERANCE = timedelta(minutes=5)
+
+
+def _normalize_head_sha(value: str | None) -> str | None:
+    normalized = _strip_optional(value)
+    if normalized is None:
+        return None
+    if not _HEAD_SHA_PATTERN.match(normalized):
+        raise ValueError("head sha must be 7 to 64 hexadecimal characters")
+    return normalized.lower()
+
+
+def _reject_future_moment(value: datetime | None) -> datetime | None:
+    if value is None:
+        return value
+    moment = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    if moment > datetime.now(timezone.utc) + _FUTURE_TOLERANCE:
+        raise ValueError("head_committed_at must not be in the future")
+    return value
+
+
 class ReviewIssueBatchCreateRequest(BaseModel):
     provider: str = Field(max_length=32)
     instance_url: str | None = None
@@ -47,6 +70,11 @@ class ReviewIssueBatchCreateRequest(BaseModel):
     extract_task_id: str | None = Field(default=None, max_length=36)
     verify_task_id: str | None = Field(default=None, max_length=36)
     review_head_sha: str | None = Field(default=None, max_length=128)
+    head_committed_at: datetime | None = None
+
+    _reject_future_head_committed_at = field_validator("head_committed_at")(
+        _reject_future_moment
+    )
 
     _normalize_required = field_validator("pr_number", "review_task_id")(
         _strip_required
@@ -105,6 +133,7 @@ class ReviewIssueBatchResponse(BaseModel):
     extract_task_id: str | None
     verify_task_id: str | None
     review_head_sha: str | None
+    head_committed_at: datetime | None
     merged_sha: str | None
     status: ReviewBatchStatus
     issue_count: int
@@ -151,7 +180,14 @@ class ReviewPullRequestIssueCreateRequest(BaseModel):
     provider: str = Field(max_length=32)
     project_path: str = Field(max_length=255)
     pr_number: str = Field(max_length=128)
+    head_sha: str | None = Field(default=None, max_length=128)
+    head_committed_at: datetime | None = None
     issues: list[ReviewIssueCreateRequest] = Field(min_length=1, max_length=500)
+
+    _normalize_head_sha = field_validator("head_sha")(_normalize_head_sha)
+    _reject_future_head_committed_at = field_validator("head_committed_at")(
+        _reject_future_moment
+    )
 
     _normalize_pr_number = field_validator("pr_number")(_strip_required)
 

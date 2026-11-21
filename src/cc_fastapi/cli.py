@@ -3,18 +3,25 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
+from datetime import datetime, timedelta, timezone
 from typing import Any, Sequence
 
 from cc_fastapi.admin_client import (
     AdminApiClient,
     AdminClientError,
+    AdminInputError,
     PullRequestIdentity,
     parse_add_issues_input,
     parse_collect_input,
     parse_verify_input,
     read_json_input,
 )
+
+
+_HEAD_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{7,64}$")
+_FUTURE_TOLERANCE = timedelta(minutes=5)
 
 
 class AdminArgumentParser(argparse.ArgumentParser):
@@ -185,13 +192,15 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Input: {\"issues\": [...]}\n"
             "Example:\n"
-            "  cc-fastapi-admin pr collect github org/project 42 --input -"
+            "  cc-fastapi-admin pr collect github org/project 42 \\\n"
+            "      --head-sha SHA --head-committed-at 2026-11-10T03:00:00Z --input -"
         ),
     )
     _add_identity_arguments(collect)
     collect.add_argument(
         "--task-id", help="use this successful historical Task instead of auto-selection"
     )
+    _add_version_arguments(collect)
     _add_input_argument(collect)
 
     add_issues = pr_commands.add_parser(
@@ -209,6 +218,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_identity_arguments(add_issues)
+    _add_version_arguments(add_issues)
     _add_input_argument(add_issues)
 
     verify = pr_commands.add_parser(
@@ -251,6 +261,27 @@ def _add_identity_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_version_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--head-sha",
+        required=True,
+        metavar="SHA",
+        help=(
+            "commit SHA of the reviewed code version; recorded on the batch and "
+            "reported by pr show"
+        ),
+    )
+    parser.add_argument(
+        "--head-committed-at",
+        required=True,
+        metavar="ISO8601",
+        help=(
+            "commit time of --head-sha; review batches are ordered by code version "
+            "instead of collection time, so this value is required"
+        ),
+    )
+
+
 def _add_input_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--input",
@@ -258,6 +289,24 @@ def _add_input_argument(parser: argparse.ArgumentParser) -> None:
         metavar="PATH|-",
         help="JSON input file, or - to read JSON from stdin",
     )
+
+
+def _parse_head_sha(value: str) -> str:
+    normalized = value.strip()
+    if not _HEAD_SHA_PATTERN.match(normalized):
+        raise AdminInputError("--head-sha must be 7 to 64 hexadecimal characters")
+    return normalized.lower()
+
+
+def _parse_head_committed_at(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise AdminInputError(f"invalid ISO-8601 datetime: {value}") from exc
+    moment = parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+    if moment > datetime.now(timezone.utc) + _FUTURE_TOLERANCE:
+        raise AdminInputError("--head-committed-at must not be in the future")
+    return parsed
 
 
 def _run(client: AdminApiClient, args: argparse.Namespace) -> dict[str, Any]:
@@ -293,11 +342,15 @@ def _run(client: AdminApiClient, args: argparse.Namespace) -> dict[str, Any]:
             _identity(args),
             task_id=args.task_id,
             issues=parse_collect_input(payload),
+            head_sha=_parse_head_sha(args.head_sha),
+            head_committed_at=_parse_head_committed_at(args.head_committed_at),
         )
     if args.pr_command == "add-issues":
         return client.add_issues(
             _identity(args),
             issues=parse_add_issues_input(payload),
+            head_sha=_parse_head_sha(args.head_sha),
+            head_committed_at=_parse_head_committed_at(args.head_committed_at),
         )
     if args.pr_command == "verify":
         return client.verify(

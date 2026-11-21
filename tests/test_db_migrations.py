@@ -127,3 +127,37 @@ def test_pause_schema_migration_preserves_legacy_tasks_and_is_repeatable():
             "FROM agent_tasks WHERE id = 'legacy'"
         ).one()
     assert row == ('QUEUED', 0, None, None, None, None, 0)
+
+
+def test_apply_schema_migrations_adds_head_committed_at_to_legacy_review_batches():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "CREATE TABLE review_issue_batches ("
+            "id VARCHAR(36) PRIMARY KEY, provider VARCHAR(32) NOT NULL, "
+            "project_path VARCHAR(255) NOT NULL, pr_number VARCHAR(128) NOT NULL, "
+            "review_task_id VARCHAR(36) NOT NULL, review_head_sha VARCHAR(128), "
+            "status VARCHAR(32) NOT NULL, issue_count INTEGER NOT NULL, "
+            "created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)"
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO review_issue_batches "
+            "(id, provider, project_path, pr_number, review_task_id, review_head_sha, "
+            "status, issue_count, created_at, updated_at) "
+            "VALUES ('batch-1', 'github', 'team/service', '17', 'task-1', 'abc', "
+            "'COMPLETED', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        )
+
+    apply_schema_migrations(engine)
+    apply_schema_migrations(engine)
+
+    columns = {
+        column["name"]
+        for column in inspect(engine).get_columns("review_issue_batches")
+    }
+    assert "head_committed_at" in columns
+    with engine.connect() as connection:
+        row = connection.exec_driver_sql(
+            "SELECT id, head_committed_at FROM review_issue_batches WHERE id = 'batch-1'"
+        ).one()
+    assert row == ("batch-1", None)

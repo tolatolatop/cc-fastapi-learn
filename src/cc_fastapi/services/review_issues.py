@@ -25,6 +25,7 @@ from cc_fastapi.db.models import (
     ReviewIssueStatusChange,
     ReviewIssueVerificationStatus,
     TaskStatus,
+    WebhookTrigger,
     WorkflowCorrelation,
     WorkflowRun,
     WorkflowTaskLink,
@@ -81,6 +82,37 @@ class ReviewIssueService:
         if task_id is not None and db.get(AgentTask, task_id) is None:
             raise ReviewIssueReferenceError(f"{label} not found")
 
+    @staticmethod
+    def _resolve_head_committed_at(
+        db: Session, values: dict[str, Any]
+    ) -> datetime | None:
+        """Resolve when the reviewed code version reached the platform.
+
+        An explicit value (for example the commit time of ``head_sha`` reported
+        by the collector) wins. Otherwise the platform event that started the
+        review workflow supplies the timestamp, so replaying an older report
+        does not make it look newer.
+        """
+        if values.get("head_committed_at") is not None:
+            return values["head_committed_at"]
+        workflow_run_id = values.get("review_workflow_run_id")
+        if workflow_run_id is None:
+            return None
+        return ReviewIssueService._version_event_moment(
+            db, db.get(WorkflowRun, workflow_run_id)
+        )
+
+    @staticmethod
+    def _version_event_moment(db: Session, run: WorkflowRun | None) -> datetime | None:
+        """Best-effort moment the reviewed version reached the platform."""
+        if run is None:
+            return None
+        if run.webhook_trigger_id is not None:
+            trigger = db.get(WebhookTrigger, run.webhook_trigger_id)
+            if trigger is not None:
+                return trigger.created_at
+        return run.created_at
+
     def create_batch(self, db: Session, values: dict[str, Any]) -> ReviewIssueBatch:
         self._validate_task_reference(db, values["review_task_id"], "review task")
         self._validate_task_reference(db, values.get("extract_task_id"), "extract task")
@@ -120,6 +152,7 @@ class ReviewIssueService:
                     "review workflow run does not belong to the pull request"
                 )
 
+        values["head_committed_at"] = self._resolve_head_committed_at(db, values)
         batch = ReviewIssueBatch(**values)
         db.add(batch)
         try:
@@ -196,6 +229,8 @@ class ReviewIssueService:
         project_path: str,
         pr_number: str,
         items: list[dict[str, Any]],
+        head_sha: str | None = None,
+        head_committed_at: datetime | None = None,
     ) -> RecordedPullRequestIssues:
         provider = normalize_repository_provider(provider)
         project_path = normalize_repository_project_path(project_path)
@@ -287,7 +322,12 @@ class ReviewIssueService:
             review_workflow_run_id=None,
             review_task_id=task.id,
             review_head_sha=(
-                change_request.head_sha if change_request is not None else None
+                head_sha
+                or (change_request.head_sha if change_request is not None else None)
+            ),
+            head_committed_at=(
+                head_committed_at
+                or ReviewIssueService._version_event_moment(db, latest)
             ),
             merged_sha=(
                 change_request.merged_sha if change_request is not None else None

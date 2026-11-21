@@ -387,6 +387,9 @@ class ReviewIssueBatch(Base):
         String(36), ForeignKey("agent_tasks.id"), nullable=True, unique=True, index=True
     )
     review_head_sha: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    head_committed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     merged_sha: Mapped[str | None] = mapped_column(String(128), nullable=True)
     status: Mapped[ReviewBatchStatus] = mapped_column(
         Enum(ReviewBatchStatus, native_enum=False, length=32),

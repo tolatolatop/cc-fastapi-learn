@@ -2,11 +2,23 @@
 
 Read this reference only when recording or verifying findings.
 
+## Required version identity
+
+`collect` and `add-issues` both require the reviewed code version:
+
+- `--head-sha SHA` — commit SHA of the reviewed version (7-64 hex characters).
+- `--head-committed-at ISO8601` — commit time of that SHA. Batches are ordered by
+  code version, not collection time, so a missing or guessed value would make an
+  older report look newer. Future timestamps are rejected.
+
+Prefer the real commit time, for example `git show -s --format=%cI HEAD_SHA`.
+Do not substitute the current time.
+
 ## Task-backed collection
 
 ```bash
 cc-fastapi-admin pr collect PROVIDER PROJECT_PATH PR_NUMBER \
-  --task-id TASK_ID --input -
+  --task-id TASK_ID --head-sha SHA --head-committed-at ISO8601 --input -
 ```
 
 Input:
@@ -36,7 +48,8 @@ Avoid implicit selection when a task ID is available.
 ## Standalone findings
 
 ```bash
-cc-fastapi-admin pr add-issues PROVIDER PROJECT_PATH PR_NUMBER --input -
+cc-fastapi-admin pr add-issues PROVIDER PROJECT_PATH PR_NUMBER \
+  --head-sha SHA --head-committed-at ISO8601 --input -
 ```
 
 The input has the same `{"issues": [...]}` shape and requires between 1 and 500

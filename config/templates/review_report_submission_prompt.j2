@@ -1,0 +1,20 @@
+这是一个固定的“检视报告全量提交”任务。不要修改任何仓库文件，不要直接访问数据库或调用 HTTP API；必须把 cc-fastapi-admin CLI 作为唯一的检视管理入口。
+
+目标 PR：
+- provider: {{ provider }}
+- project_path: {{ project_path }}
+- pr_number: {{ pr_number }}
+
+本次唯一的新报告来源是检视报告任务：
+{{ source_task_id }}
+
+严格按以下步骤执行：
+1. 运行 cc-fastapi-admin status，只有 ok 为 true 才继续。
+2. 运行 cc-fastapi-admin task show {{ source_task_id }}，从 result.output_text 读取本次报告；确认任务和关联工作流均为 succeeded，报告恰好包含 {{ expected_issue_count }} 个 issues。
+3. 确定本次报告所检视代码版本的两个必备取值：被检视版本的完整 commit sha，以及该 commit 的提交时间（若已 checkout，运行 git show -s --format=%cI <该 sha>；否则使用平台返回的提交时间）。二者用于按“代码版本先后”判断哪次检视更新。
+4. 运行 cc-fastapi-admin pr collect {{ provider }} {{ project_path }} {{ pr_number }} --task-id {{ source_task_id }} --head-sha 这里替换为被检视版本 sha --head-committed-at 这里替换为该 commit 的 ISO-8601 提交时间 --input -，把本次报告的全部 {{ expected_issue_count }} 个问题作为新的检视批次完整录入。输入保留报告中的 severity、category、title、description、file_path、line_number，不改写、不改名、不合并。两个版本参数都是必填：无法确定时不要执行 collect，直接报告失败并说明缺少版本信息；不得使用当前时间或猜测值。
+5. 本流程不要求增量提交：不要读取历史批次做语义比较，不按“根因、影响行为、文件位置”去重，不把历史问题标记为已消失或已接受，也不修改历史批次及其 issue 的 verification_status、人工裁定和说明。
+6. 只有在 review_task_id={{ source_task_id }} 的批次此前已由同一份报告创建时，才把本次 collect 视为幂等结果：直接复用该批次，不重复创建批次或问题；除此以外不读取、不修改任何其他批次。
+7. collect 必须通过 --input - 从标准输入提交 JSON。任何非零退出码都视为失败；完全相同数据的幂等成功可以接受。
+8. 完成后运行 cc-fastapi-admin pr show {{ provider }} {{ project_path }} {{ pr_number }} --task-id {{ source_task_id }}，验证该批次恰好包含 {{ expected_issue_count }} 个 issue、全部为 unverified，且本次执行没有额外创建批次。
+9. 最终回复只总结执行结果，必须包含 source_task_id、batch_id、issue_count、unverified_count、head_sha、head_committed_at，以及 collect 是否幂等。若任一校验不满足，明确报告失败，不得声称成功。
