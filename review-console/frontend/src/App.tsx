@@ -171,7 +171,7 @@ function RejectModal({ issue, onClose, onSaved }: { issue: Issue | null; onClose
     try { onSaved(await api.updateStatus(issue, 'not_accepted', reasonCode, note.trim())); onClose() }
     catch (reason) { setError((reason as Error).message) } finally { setBusy(false) }
   }
-  return <Modal show={Boolean(issue)} onHide={onClose} centered>
+  return <Modal dialogClassName="console-wide-modal" show={Boolean(issue)} onHide={onClose} centered>
     <form onSubmit={submit}><Modal.Header closeButton><Modal.Title>拒绝检视意见</Modal.Title></Modal.Header><Modal.Body>
       <p className="decision-title">{issue?.title}</p>
       <Form.Group className="mb-3"><Form.Label>拒绝原因分类（必填）</Form.Label><Form.Select autoFocus value={reasonCode} onChange={(event) => setReasonCode(event.target.value as DecisionReason | '')} required><option value="">选择原因</option>{Object.entries(reasonMeta).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Form.Select></Form.Group>
@@ -196,10 +196,10 @@ function IssueDetail({ issue, permission, onClose, onOpenHistory, onSaved }: { i
     catch (reason) { setError((reason as Error).message) } finally { setBusy(false) }
   }
   const noteLabel = issue?.status === 'not_accepted' ? '拒绝理由' : issue?.status === 'needs_info' ? '待补充内容' : '裁定说明'
-  return <Modal dialogClassName="issue-detail-modal" show={Boolean(issue)} onHide={onClose} centered scrollable size="lg">
+  return <Modal dialogClassName="console-wide-modal issue-detail-modal" show={Boolean(issue)} onHide={onClose} centered scrollable>
     {issue && <form className="issue-detail-form" onSubmit={submit}><Modal.Header closeButton><Modal.Title>意见详情</Modal.Title></Modal.Header><Modal.Body>
       <div className="detail-heading"><span className={`severity ${issue.severity}`}>{issue.severity}</span><span className={`status ${statusMeta[issue.status].className}`}>{statusMeta[issue.status].label}</span><h2>{issue.title}</h2><IssueMarkdown>{issue.description}</IssueMarkdown></div>
-      <dl className="detail-facts"><div><dt>位置</dt><dd>{issueLocation(issue)}</dd></div><div><dt>分类</dt><dd>{issue.category || '未分类'}</dd></div><div><dt>意见编号</dt><dd>#{issue.issue_no}</dd></div><div><dt>自动修复验证</dt><dd>{issue.verification_status === 'accepted' ? '通过' : issue.verification_status === 'not_accepted' ? '未通过' : '未验证'}</dd></div><div><dt>检视版本</dt><dd>{issue.review_head_sha?.slice(0, 12) || '未知'}</dd></div><div><dt>合并版本</dt><dd>{issue.merged_sha?.slice(0, 12) || '未合并'}</dd></div><div><dt>检视批次</dt><dd>{issue.batch_status} · {formatTime(issue.batch_created_at)}</dd></div><div><dt>裁定人</dt><dd>{issue.decided_by_name ? `${issue.decided_by_name} · ${issue.decided_at ? formatTime(issue.decided_at) : ''}` : '尚未裁定'}</dd></div></dl>
+      <dl className="detail-facts"><div><dt>位置</dt><dd>{issueLocation(issue)}</dd></div><div><dt>分类</dt><dd>{issue.category || '未分类'}</dd></div><div><dt>意见编号</dt><dd>#{issue.issue_no}</dd></div><div><dt>自动修复验证</dt><dd>{issue.verification_status === 'accepted' ? '通过' : issue.verification_status === 'not_accepted' ? '未通过' : '未验证'}</dd></div><div><dt>检视版本</dt><dd>{issue.review_head_sha?.slice(0, 12) || '未知'}</dd></div><div><dt>版本提交时间</dt><dd>{issue.head_committed_at ? formatTime(issue.head_committed_at) : '未记录'}</dd></div><div><dt>合并版本</dt><dd>{issue.merged_sha?.slice(0, 12) || '未合并'}</dd></div><div><dt>检视批次</dt><dd>{issue.batch_status} · {formatTime(issue.batch_created_at)}</dd></div><div><dt>裁定人</dt><dd>{issue.decided_by_name ? `${issue.decided_by_name} · ${issue.decided_at ? formatTime(issue.decided_at) : ''}` : '尚未裁定'}</dd></div></dl>
       {issue.status === 'not_accepted' && <Form.Group className="mb-3"><Form.Label>拒绝原因分类</Form.Label><Form.Select value={reasonCode} disabled={permission !== 'write'} onChange={(event) => setReasonCode(event.target.value as DecisionReason | '')} required><option value="">选择原因</option>{Object.entries(reasonMeta).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Form.Select></Form.Group>}
       <Form.Group><Form.Label>{noteLabel}</Form.Label><Form.Control as="textarea" rows={5} value={note} disabled={permission !== 'write'} onChange={(event) => setNote(event.target.value)} placeholder={issue.status === 'needs_info' ? '写明需要补充的事实或上下文…' : '补充判断依据…'} /></Form.Group>
       {error && <div className="form-error">{error}</div>}
@@ -222,7 +222,7 @@ function IssueHistoryModal({ issue, onClose }: { issue: Issue | null; onClose: (
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [issue])
-  return <Modal dialogClassName="issue-history-modal" show={Boolean(issue)} onHide={onClose} centered size="lg">
+  return <Modal dialogClassName="console-wide-modal issue-history-modal" show={Boolean(issue)} onHide={onClose} centered>
     <Modal.Header closeButton><div><p className="eyebrow">NEWEST TO OLDEST</p><Modal.Title>变更历史</Modal.Title>{issue && <p className="history-issue-title">#{issue.issue_no} · {issue.title}</p>}</div></Modal.Header>
     <Modal.Body><div className="history-modal-scroll">{error ? <div className="form-error">{error}</div> : loading ? <div className="history-modal-empty">正在读取变更记录…</div> : !history.length ? <div className="history-modal-empty">这条意见还没有状态变更记录</div> : <div className="timeline">{history.map((item) => <article key={item.id}><span className="timeline-dot" /><div className="timeline-meta"><strong>{item.actor_name}<small>{item.dimension === 'decision' ? '人工裁定' : '自动验证'}</small></strong><time>{formatTime(item.created_at)}</time></div><div className="status-transition"><span className={`status ${statusMeta[item.previous_status].className}`}>{statusMeta[item.previous_status].label}</span><ArrowRight size={14} /><span className={`status ${statusMeta[item.new_status].className}`}>{statusMeta[item.new_status].label}</span>{item.new_reason_code && <span className="reason-chip">{reasonMeta[item.new_reason_code]}</span>}</div>{item.new_note && <p>{item.new_note}</p>}</article>)}</div>}</div></Modal.Body>
     <Modal.Footer><Button variant="outline-secondary" onClick={onClose}>关闭</Button></Modal.Footer>
@@ -238,6 +238,8 @@ function IssueWorkspace({ repositories, routeVersion }: { repositories: Reposito
   const [queueQuery, setQueueQuery] = useState('')
   const [pendingFirst, setPendingFirst] = useState(false)
   const [hideLow, setHideLow] = useState(true)
+  const [showHistory, setShowHistory] = useState(false)
+  const [prStats, setPrStats] = useState<PullRequest | null>(null)
   const [pullRequestsLoading, setPullRequestsLoading] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -270,18 +272,37 @@ function IssueWorkspace({ repositories, routeVersion }: { repositories: Reposito
     return () => { cancelled = true }
   }, [repositories, routeVersion])
   const selectedRepository = repositoryFor(selectedPr, repositories)
+  const selectedPrNumber = selectedPr?.pr_number
   const load = useCallback(async () => {
-    if (!selectedRepository || !selectedPr) { setIssues([]); return }
+    if (!selectedRepository || !selectedPrNumber) { setIssues([]); return }
     setLoading(true); setError('')
-    try { setIssues((await api.issues(selectedRepository, selectedPr.pr_number, status, query)).items) } catch (reason) { setError((reason as Error).message) } finally { setLoading(false) }
-  }, [selectedRepository, selectedPr, status, query])
+    try { setIssues((await api.issues(selectedRepository, selectedPrNumber, status, query, !showHistory)).items) } catch (reason) { setError((reason as Error).message) } finally { setLoading(false) }
+  }, [selectedRepository, selectedPrNumber, status, query, showHistory])
   useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    let cancelled = false
+    setPrStats(null)
+    if (!selectedRepository || !selectedPrNumber) return
+    api.pullRequest(selectedRepository, selectedPrNumber, !showHistory)
+      .then((value) => { if (!cancelled) setPrStats(value) })
+      .catch(() => undefined)
+    return () => { cancelled = true }
+  }, [selectedRepository, selectedPrNumber, showHistory])
   async function refreshPullRequest(updated: Issue) {
     const repository = repositories.find((item) => item.provider === updated.provider && item.project_path === updated.project_path)
     if (!repository) return
-    const pullRequest = await api.pullRequest(repository, updated.pr_number)
-    setPullRequests((items) => items.map((item) => pullRequestKey(item) === pullRequestKey(pullRequest) ? pullRequest : item))
-    setSelectedPr((current) => current && pullRequestKey(current) === pullRequestKey(pullRequest) ? pullRequest : current)
+    const scoped = api.pullRequest(repository, updated.pr_number, !showHistory)
+    if (!showHistory) {
+      const pullRequest = await scoped
+      setPrStats(pullRequest)
+      setPullRequests((items) => items.map((item) => pullRequestKey(item) === pullRequestKey(pullRequest) ? pullRequest : item))
+      setSelectedPr((current) => current && pullRequestKey(current) === pullRequestKey(pullRequest) ? pullRequest : current)
+      return
+    }
+    const [pullRequest, latestRound] = await Promise.all([scoped, api.pullRequest(repository, updated.pr_number, true)])
+    setPrStats(pullRequest)
+    setPullRequests((items) => items.map((item) => pullRequestKey(item) === pullRequestKey(latestRound) ? latestRound : item))
+    setSelectedPr((current) => current && pullRequestKey(current) === pullRequestKey(latestRound) ? latestRound : current)
   }
   async function handleSaved(updated: Issue) {
     setIssues((items) => status && updated.status !== status ? items.filter((item) => item.id !== updated.id) : items.map((item) => item.id === updated.id ? updated : item))
@@ -325,6 +346,8 @@ function IssueWorkspace({ repositories, routeVersion }: { repositories: Reposito
       }
       return new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime()
     })
+  const activePr = prStats || selectedPr
+  const historyIssueTotal = activePr && !showHistory ? activePr.history_issue_total : 0
   const hiddenLowCount = hideLow ? issues.filter((issue) => issue.severity === 'low').length : 0
   const visibleIssues = issues
     .filter((issue) => !hideLow || issue.severity !== 'low')
@@ -335,16 +358,26 @@ function IssueWorkspace({ repositories, routeVersion }: { repositories: Reposito
       }
       return compareIssueLocation(left, right)
     })
-  const emptyMessage = selectedPr?.completion_status === 'no_issues'
-    ? '该 PR/MR 已检视完毕，没有发现问题'
-    : hiddenLowCount > 0
-      ? `当前筛选下的 ${hiddenLowCount} 条意见均为 LOW 等级，已按默认设置隐藏；关闭「隐藏 LOW」即可查看`
-      : '当前筛选下没有检视意见'
+  const emptyMessage = !showHistory && historyIssueTotal > 0
+    ? `最新一次提交没有检视意见；已隐藏 ${historyIssueTotal} 条历史意见，打开「历史意见」即可查看`
+    : selectedPr?.completion_status === 'no_issues'
+      ? '该 PR/MR 已检视完毕，没有发现问题'
+      : hiddenLowCount > 0
+        ? `当前筛选下的 ${hiddenLowCount} 条意见均为 LOW 等级，已按默认设置隐藏；关闭「隐藏 LOW」即可查看`
+        : '当前筛选下没有检视意见'
+  const scopeHint = !selectedPr
+    ? ''
+    : selectedPr.batch_total <= 1
+      ? '该 PR/MR 目前只有一次检视提交'
+      : showHistory
+        ? `正在显示全部 ${selectedPr.batch_total} 次提交的检视意见`
+        : `仅显示最新一次提交（第 ${selectedPr.batch_total} 次）的检视意见${selectedPr.latest_review_head_sha ? `，版本 ${selectedPr.latest_review_head_sha.slice(0, 12)}${selectedPr.latest_head_committed_at ? ` 提交于 ${formatTime(selectedPr.latest_head_committed_at)}` : ''}` : ''}${historyIssueTotal > 0 ? `，已隐藏 ${historyIssueTotal} 条历史意见` : ''}`
   return <div className="workspace-grid review-pr-workspace">
     <aside className="pr-rail"><div className="pr-rail-head"><p className="rail-label">PR / MR 审核队列</p><strong>{visiblePullRequests.length}/{pullRequests.length}</strong></div><label className="pr-rail-search"><Search size={15} /><Form.Control value={queueQuery} onChange={(event) => setQueueQuery(event.target.value)} placeholder="仓库、PR ID 或 PR 地址" aria-label="搜索审核队列" /><small>多个关键字用空格分隔</small></label><div className="pr-rail-list">{pullRequestsLoading ? <div className="rail-empty">正在汇总…</div> : visiblePullRequests.map((pullRequest) => <button key={pullRequestKey(pullRequest)} className={selectedPr && pullRequestKey(selectedPr) === pullRequestKey(pullRequest) ? 'active' : ''} onClick={() => selectPullRequest(pullRequest)}><span className="pr-rail-number">#{pullRequest.pr_number}<small>{pullRequest.provider}</small></span><strong>{pullRequest.project_path}</strong><span className="pr-rail-progress"><i style={{ width: `${pullRequest.issue_total ? pullRequest.reviewed_total / pullRequest.issue_total * 100 : 100}%` }} /><small>{pullRequest.pending_total} 条待分析</small></span><span className={`completion ${pullRequest.completion_status}`}>{completionMeta[pullRequest.completion_status]}</span></button>)}{!pullRequestsLoading && !visiblePullRequests.length && <div className="rail-empty">没有匹配的 PR/MR；请调整关键字</div>}</div></aside>
     <section className="review-content">
-      {selectedPr && selectedRepository ? <><header className="content-header pr-content-header"><div><p className="eyebrow">{selectedPr.provider} / {selectedPr.project_path}</p><h1>PR / MR #{selectedPr.pr_number}</h1><span className={`permission ${selectedRepository.permission}`}>{selectedRepository.permission === 'write' ? '可修改' : '只读'}</span><div className="pr-header-links"><Button variant="link" size="sm" onClick={() => void copyDirectLink()}><Link2 size={15} />{copied ? '已复制链接' : '复制直达链接'}</Button>{selectedPr.pr_url && <Button as="a" variant="link" size="sm" href={selectedPr.pr_url} target="_blank" rel="noreferrer"><ExternalLink size={15} />打开代码平台</Button>}</div></div><div className="status-tally"><span><b>{selectedPr.issue_total}</b>全部意见</span><span><b>{selectedPr.reviewed_total}</b>已裁定</span><span><b>{selectedPr.pending_total}</b>待分析</span><strong className={`completion ${selectedPr.completion_status}`}>{completionMeta[selectedPr.completion_status]}</strong></div></header>
-      <div className="filters"><label><Search size={17} /><Form.Control value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索标题、说明或文件" /></label><Form.Select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="unverified">待分析</option><option value="accepted">接受</option><option value="not_accepted">拒绝</option><option value="needs_info">待补充</option></Form.Select><Button className={`pending-first-sort ${pendingFirst ? 'active' : ''}`} variant="outline-secondary" aria-pressed={pendingFirst} onClick={() => setPendingFirst((active) => !active)}><ArrowUpDown size={15} />待分析优先</Button><Button className={`low-visibility-toggle ${hideLow ? 'active' : ''}`} variant="outline-secondary" aria-pressed={hideLow} title={hideLow ? '已隐藏 LOW 等级意见，点击显示' : '当前显示全部等级，点击隐藏 LOW 等级意见'} onClick={() => setHideLow((active) => !active)}>{hideLow ? <EyeOff size={15} /> : <Eye size={15} />}隐藏 LOW{hiddenLowCount > 0 && <span className="low-visibility-count">{hiddenLowCount}</span>}</Button></div>
+      {selectedPr && selectedRepository ? <><header className="content-header pr-content-header"><div><p className="eyebrow">{selectedPr.provider} / {selectedPr.project_path}</p><h1>PR / MR #{selectedPr.pr_number}</h1><span className={`permission ${selectedRepository.permission}`}>{selectedRepository.permission === 'write' ? '可修改' : '只读'}</span><div className="pr-header-links"><Button variant="link" size="sm" onClick={() => void copyDirectLink()}><Link2 size={15} />{copied ? '已复制链接' : '复制直达链接'}</Button>{selectedPr.pr_url && <Button as="a" variant="link" size="sm" href={selectedPr.pr_url} target="_blank" rel="noreferrer"><ExternalLink size={15} />打开代码平台</Button>}</div></div><div className="status-tally"><span><b>{activePr?.issue_total ?? 0}</b>{showHistory ? '全部意见' : '本轮意见'}</span><span><b>{activePr?.reviewed_total ?? 0}</b>已裁定</span><span><b>{activePr?.pending_total ?? 0}</b>待分析</span><strong className={`completion ${activePr?.completion_status ?? selectedPr.completion_status}`}>{completionMeta[activePr?.completion_status ?? selectedPr.completion_status]}</strong></div></header>
+      <div className="filters"><label><Search size={17} /><Form.Control value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索标题、说明或文件" /></label><Form.Select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="unverified">待分析</option><option value="accepted">接受</option><option value="not_accepted">拒绝</option><option value="needs_info">待补充</option></Form.Select><Button className={`pending-first-sort ${pendingFirst ? 'active' : ''}`} variant="outline-secondary" aria-pressed={pendingFirst} onClick={() => setPendingFirst((active) => !active)}><ArrowUpDown size={15} />待分析优先</Button><Button className={`low-visibility-toggle ${hideLow ? 'active' : ''}`} variant="outline-secondary" aria-pressed={hideLow} title={hideLow ? '已隐藏 LOW 等级意见，点击显示' : '当前显示全部等级，点击隐藏 LOW 等级意见'} onClick={() => setHideLow((active) => !active)}>{hideLow ? <EyeOff size={15} /> : <Eye size={15} />}隐藏 LOW{hiddenLowCount > 0 && <span className="low-visibility-count">{hiddenLowCount}</span>}</Button><Button className={`history-visibility-toggle ${showHistory ? 'active' : ''}`} variant="outline-secondary" aria-pressed={showHistory} title={showHistory ? '当前显示全部提交的检视意见，点击仅看最新一次提交' : '默认仅显示最新一次提交的检视意见，点击显示历史意见'} onClick={() => setShowHistory((active) => !active)}><History size={15} />{showHistory ? '显示全部历史' : '历史意见'}{!showHistory && historyIssueTotal > 0 && <span className="low-visibility-count">{historyIssueTotal}</span>}</Button></div>
+      {scopeHint && <p className="scope-hint">{scopeHint}</p>}
       {error && <div className="form-error">{error}</div>}{loading ? <div className="empty-state">正在读取检视意见…</div> : !visibleIssues.length ? <div className="empty-state">{emptyMessage}</div> : <div className="compact-issue-list">{visibleIssues.map((issue) => <article className="compact-issue-card" key={issue.id}>
         <div className={`severity-cell ${issue.severity}`}><span>问题等级</span><strong>{issue.severity}</strong></div>
         <div className="issue-location"><span>文件 / 行号</span><Button variant="link" className="copy-location" disabled={!issue.file_path || issue.line_number === null} title={issue.file_path && issue.line_number !== null ? `复制 ${issue.file_path}:${issue.line_number}` : '缺少路径或行号，无法复制'} onClick={() => void copyIssueLocation(issue)}><strong>{issueLocation(issue)}</strong><small>{copiedLocationId === issue.id ? '已复制' : <Copy size={13} />}</small></Button></div>

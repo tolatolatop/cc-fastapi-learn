@@ -37,6 +37,11 @@ export interface PullRequest {
   pr_url: string | null
   completion_status: PullRequestCompletionStatus
   batch_total: number
+  latest_batch_id: string
+  latest_batch_created_at: string
+  latest_review_head_sha: string | null
+  latest_head_committed_at: string | null
+  history_issue_total: number
   issue_total: number
   reviewed_total: number
   pending_total: number
@@ -64,6 +69,7 @@ export interface Issue {
   decided_at: string | null
   verification_status: VerificationStatus
   review_head_sha: string | null
+  head_committed_at: string | null
   merged_sha: string | null
   batch_status: 'collecting' | 'waiting_merge' | 'verifying' | 'completed' | 'failed' | 'cancelled'
   batch_created_at: string

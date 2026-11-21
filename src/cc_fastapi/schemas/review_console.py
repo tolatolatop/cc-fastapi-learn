@@ -32,6 +32,11 @@ class ReviewConsolePullRequestResponse(BaseModel):
         "processing", "pending", "completed", "no_issues", "failed"
     ]
     batch_total: int
+    latest_batch_id: str
+    latest_batch_created_at: datetime
+    latest_review_head_sha: str | None
+    latest_head_committed_at: datetime | None
+    history_issue_total: int
     issue_total: int
     reviewed_total: int
     pending_total: int
@@ -65,6 +70,7 @@ class ReviewConsoleIssueResponse(BaseModel):
     decided_at: datetime | None
     verification_status: ReviewIssueVerificationStatus
     review_head_sha: str | None
+    head_committed_at: datetime | None
     merged_sha: str | None
     batch_status: ReviewBatchStatus
     batch_created_at: datetime

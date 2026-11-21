@@ -67,6 +67,10 @@ app = FastAPI(title="CC Review Console API", lifespan=lifespan)
 app.include_router(access_control_router)
 
 
+def _bool_param(value: bool) -> str:
+    return "true" if value else "false"
+
+
 def upstream_call(call):
     try:
         return call()
@@ -85,8 +89,12 @@ def healthz() -> dict[str, str]:
 
 
 @app.get("/v1/repositories")
-def repositories(user: ConsoleUser = Depends(current_user)) -> dict:
-    payload = upstream_call(ReviewApiClient().repositories)
+def repositories(
+    latest_only: bool = Query(default=True),
+    user: ConsoleUser = Depends(current_user),
+) -> dict:
+    params = [("latest_only", _bool_param(latest_only))]
+    payload = upstream_call(lambda: ReviewApiClient().repositories(params))
     items = []
     for item in payload["items"]:
         permission = permission_for(user, item["provider"], item["project_path"])
@@ -103,6 +111,7 @@ def issues(
     statuses: list[str] | None = Query(default=None, alias="status"),
     severities: list[str] | None = Query(default=None, alias="severity"),
     query: str | None = Query(default=None, alias="q"),
+    latest_only: bool = Query(default=True),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
     user: ConsoleUser = Depends(current_user),
@@ -111,6 +120,7 @@ def issues(
     params: list[tuple[str, str | int]] = [
         ("provider", provider),
         ("project_path", project_path),
+        ("latest_only", _bool_param(latest_only)),
         ("offset", offset),
         ("limit", limit),
     ]
@@ -128,6 +138,7 @@ def pull_requests(
     provider: str,
     project_path: str,
     statuses: list[str] | None = Query(default=None, alias="status"),
+    latest_only: bool = Query(default=True),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
     user: ConsoleUser = Depends(current_user),
@@ -136,6 +147,7 @@ def pull_requests(
     params: list[tuple[str, str | int]] = [
         ("provider", provider),
         ("project_path", project_path),
+        ("latest_only", _bool_param(latest_only)),
         ("offset", offset),
         ("limit", limit),
     ]
@@ -148,6 +160,7 @@ def pull_request(
     provider: str,
     project_path: str,
     pr_number: str,
+    latest_only: bool = Query(default=True),
     user: ConsoleUser = Depends(current_user),
 ) -> dict:
     require_scope(user, provider, project_path)
@@ -155,6 +168,7 @@ def pull_request(
         ("provider", provider),
         ("project_path", project_path),
         ("pr_number", pr_number),
+        ("latest_only", _bool_param(latest_only)),
     ]
     return upstream_call(lambda: ReviewApiClient().pull_request(params))
 

@@ -272,3 +272,66 @@ def test_admin_can_create_user_and_assign_repository_grant():
     assert grant.json()["provider"] == "github"
     assert grant.json()["project_path"] == "team/service"
     app.dependency_overrides.clear()
+
+
+def test_issue_and_pull_request_requests_forward_latest_only_scope(monkeypatch):
+    app.dependency_overrides[current_user] = lambda: scoped_user(
+        RepositoryPermission.READ
+    )
+    captured: dict[str, dict[str, str]] = {}
+
+    def fake_issues(self, params):
+        captured["issues"] = dict(params)
+        return {"items": [], "total": 0}
+
+    def fake_pull_request(self, params):
+        captured["pull_request"] = dict(params)
+        return {
+            "provider": "github",
+            "project_path": "team/service",
+            "pr_number": "17",
+            "latest_batch_id": "batch-2",
+            "latest_only": True,
+        }
+
+    monkeypatch.setattr(ReviewApiClient, "issues", fake_issues)
+    monkeypatch.setattr(ReviewApiClient, "pull_request", fake_pull_request)
+    try:
+        client = TestClient(app)
+        assert (
+            client.get(
+                "/v1/issues",
+                params={"provider": "github", "project_path": "team/service"},
+            ).status_code
+            == 200
+        )
+        assert captured["issues"]["latest_only"] == "true"
+
+        assert (
+            client.get(
+                "/v1/issues",
+                params={
+                    "provider": "github",
+                    "project_path": "team/service",
+                    "latest_only": "false",
+                },
+            ).status_code
+            == 200
+        )
+        assert captured["issues"]["latest_only"] == "false"
+
+        assert (
+            client.get(
+                "/v1/pull-request",
+                params={
+                    "provider": "github",
+                    "project_path": "team/service",
+                    "pr_number": "17",
+                    "latest_only": "false",
+                },
+            ).status_code
+            == 200
+        )
+        assert captured["pull_request"]["latest_only"] == "false"
+    finally:
+        app.dependency_overrides.pop(current_user, None)

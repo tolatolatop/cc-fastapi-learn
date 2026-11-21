@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import and_, case, false, func, or_, select
 from sqlalchemy.orm import Session
@@ -24,33 +24,123 @@ class ReviewConsoleConflictError(Exception):
     pass
 
 
+PENDING_DECISION_STATUSES = (
+    ReviewIssueDecisionStatus.UNVERIFIED,
+    ReviewIssueDecisionStatus.NEEDS_INFO,
+)
+
+
+def _normalized_moment(value: datetime) -> datetime:
+    """Normalize timestamps so mixed naive/aware values stay comparable."""
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _batch_order_key(
+    batch: ReviewIssueBatch,
+) -> tuple[datetime, datetime, str]:
+    """Order batches by reviewed code version, then by collection time and id.
+
+    ``head_committed_at`` is the commit time of the reviewed code version, so a
+    replayed or backfilled older report cannot outrank a newer version. Batches
+    without that value fall back to their collection time.
+    """
+    version_moment = _normalized_moment(batch.head_committed_at or batch.created_at)
+    return (version_moment, _normalized_moment(batch.created_at), batch.id)
+
+
+def _pending_total_expression():
+    return func.sum(
+        case(
+            (ReviewIssue.decision_status.in_(PENDING_DECISION_STATUSES), 1),
+            else_=0,
+        )
+    )
+
+
 class ReviewConsoleService:
     @staticmethod
-    def list_repositories(db: Session) -> list[dict]:
-        rows = db.execute(
+    def _latest_batch_ids(
+        db: Session,
+        *,
+        provider: str | None = None,
+        project_path: str | None = None,
+    ) -> list[str]:
+        """Return the newest batch id of every PR/MR in scope."""
+        statement = select(
+            ReviewIssueBatch.id,
+            ReviewIssueBatch.provider,
+            ReviewIssueBatch.project_path,
+            ReviewIssueBatch.pr_number,
+            ReviewIssueBatch.created_at,
+            ReviewIssueBatch.head_committed_at,
+        )
+        if provider is not None:
+            statement = statement.where(ReviewIssueBatch.provider == provider)
+        if project_path is not None:
+            statement = statement.where(ReviewIssueBatch.project_path == project_path)
+        latest: dict[tuple[str, str, str], tuple[tuple[datetime, datetime, str], str]] = {}
+        for (
+            batch_id,
+            row_provider,
+            row_path,
+            pr_number,
+            created_at,
+            head_committed_at,
+        ) in db.execute(statement):
+            key = (row_provider, row_path, pr_number)
+            order_key = (
+                _normalized_moment(head_committed_at or created_at),
+                _normalized_moment(created_at),
+                batch_id,
+            )
+            current = latest.get(key)
+            if current is None or order_key > current[0]:
+                latest[key] = (order_key, batch_id)
+        return [batch_id for _, batch_id in latest.values()]
+
+    @staticmethod
+    def _latest_batch(
+        db: Session, *, provider: str, project_path: str, pr_number: str
+    ) -> ReviewIssueBatch | None:
+        return db.scalars(
+            select(ReviewIssueBatch)
+            .where(
+                ReviewIssueBatch.provider == provider,
+                ReviewIssueBatch.project_path == project_path,
+                ReviewIssueBatch.pr_number == pr_number,
+            )
+            .order_by(
+                func.coalesce(
+                    ReviewIssueBatch.head_committed_at, ReviewIssueBatch.created_at
+                ).desc(),
+                ReviewIssueBatch.created_at.desc(),
+                ReviewIssueBatch.id.desc(),
+            )
+            .limit(1)
+        ).one_or_none()
+
+    @staticmethod
+    def list_repositories(
+        db: Session, *, latest_only: bool = True
+    ) -> list[dict]:
+        statement = (
             select(
                 ReviewIssueBatch.provider,
                 ReviewIssueBatch.project_path,
                 func.count(ReviewIssue.id),
-                func.sum(
-                    case(
-                        (
-                            ReviewIssue.decision_status.in_(
-                                (
-                                    ReviewIssueDecisionStatus.UNVERIFIED,
-                                    ReviewIssueDecisionStatus.NEEDS_INFO,
-                                )
-                            ),
-                            1,
-                        ),
-                        else_=0,
-                    )
-                ),
+                _pending_total_expression(),
             )
             .join(ReviewIssue, ReviewIssue.batch_id == ReviewIssueBatch.id)
             .group_by(ReviewIssueBatch.provider, ReviewIssueBatch.project_path)
             .order_by(ReviewIssueBatch.provider, ReviewIssueBatch.project_path)
-        ).all()
+        )
+        if latest_only:
+            statement = statement.where(
+                ReviewIssueBatch.id.in_(ReviewConsoleService._latest_batch_ids(db))
+            )
+        rows = db.execute(statement).all()
         totals = {
             (provider, project_path): (issue_total, int(pending_total or 0))
             for provider, project_path, issue_total, pending_total in rows
@@ -79,6 +169,7 @@ class ReviewConsoleService:
         statuses: list[ReviewIssueDecisionStatus] | None,
         severities: list[ReviewIssueSeverity] | None,
         query: str | None,
+        latest_only: bool = True,
         offset: int,
         limit: int,
     ) -> tuple[list[tuple[ReviewIssue, ReviewIssueBatch]], int]:
@@ -88,6 +179,25 @@ class ReviewConsoleService:
         ]
         if pr_number:
             filters.append(ReviewIssueBatch.pr_number == pr_number)
+        if latest_only:
+            if pr_number:
+                latest_batch = ReviewConsoleService._latest_batch(
+                    db,
+                    provider=provider,
+                    project_path=project_path,
+                    pr_number=pr_number,
+                )
+                if latest_batch is None:
+                    return [], 0
+                filters.append(ReviewIssue.batch_id == latest_batch.id)
+            else:
+                filters.append(
+                    ReviewIssue.batch_id.in_(
+                        ReviewConsoleService._latest_batch_ids(
+                            db, provider=provider, project_path=project_path
+                        )
+                    )
+                )
         if statuses:
             filters.append(ReviewIssue.decision_status.in_(statuses))
         if severities:
@@ -127,6 +237,7 @@ class ReviewConsoleService:
         provider: str,
         project_path: str,
         completion_statuses: list[str] | None,
+        latest_only: bool = True,
         offset: int,
         limit: int,
     ) -> tuple[list[dict], int]:
@@ -145,24 +256,15 @@ class ReviewConsoleService:
         grouped: dict[str, list[ReviewIssueBatch]] = {}
         for batch in batches:
             grouped.setdefault(batch.pr_number, []).append(batch)
-        count_rows = db.execute(
+        latest_ids = [
+            max(pr_batches, key=_batch_order_key).id
+            for pr_batches in grouped.values()
+        ]
+        count_statement = (
             select(
                 ReviewIssueBatch.pr_number,
                 func.count(ReviewIssue.id),
-                func.sum(
-                    case(
-                        (
-                            ReviewIssue.decision_status.in_(
-                                (
-                                    ReviewIssueDecisionStatus.UNVERIFIED,
-                                    ReviewIssueDecisionStatus.NEEDS_INFO,
-                                )
-                            ),
-                            1,
-                        ),
-                        else_=0,
-                    )
-                ),
+                _pending_total_expression(),
             )
             .outerjoin(ReviewIssue, ReviewIssue.batch_id == ReviewIssueBatch.id)
             .where(
@@ -170,7 +272,16 @@ class ReviewConsoleService:
                 ReviewIssueBatch.project_path == project_path,
             )
             .group_by(ReviewIssueBatch.pr_number)
-        ).all()
+        )
+        history_counts: dict[str, int] = {}
+        if latest_only:
+            count_statement = count_statement.where(
+                ReviewIssueBatch.id.in_(latest_ids)
+            )
+            history_counts = ReviewConsoleService._history_issue_counts(
+                db, provider=provider, project_path=project_path, latest_ids=latest_ids
+            )
+        count_rows = db.execute(count_statement).all()
         counts = {
             pr_number: (int(issue_total), int(pending_total or 0))
             for pr_number, issue_total, pending_total in count_rows
@@ -179,8 +290,10 @@ class ReviewConsoleService:
             ReviewConsoleService._pull_request_record(
                 db,
                 pr_batches,
-                issue_total=counts[pr_number][0],
-                pending_total=counts[pr_number][1],
+                latest_only=latest_only,
+                issue_total=counts.get(pr_number, (0, 0))[0],
+                pending_total=counts.get(pr_number, (0, 0))[1],
+                history_issue_total=history_counts.get(pr_number, 0),
             )
             for pr_number, pr_batches in grouped.items()
         ]
@@ -193,8 +306,37 @@ class ReviewConsoleService:
         return records[offset : offset + limit], len(records)
 
     @staticmethod
+    def _history_issue_counts(
+        db: Session,
+        *,
+        provider: str,
+        project_path: str,
+        latest_ids: list[str],
+    ) -> dict[str, int]:
+        statement = (
+            select(ReviewIssueBatch.pr_number, func.count(ReviewIssue.id))
+            .join(ReviewIssue, ReviewIssue.batch_id == ReviewIssueBatch.id)
+            .where(
+                ReviewIssueBatch.provider == provider,
+                ReviewIssueBatch.project_path == project_path,
+            )
+            .group_by(ReviewIssueBatch.pr_number)
+        )
+        if latest_ids:
+            statement = statement.where(ReviewIssueBatch.id.not_in(latest_ids))
+        return {
+            pr_number: int(issue_total)
+            for pr_number, issue_total in db.execute(statement).all()
+        }
+
+    @staticmethod
     def get_pull_request(
-        db: Session, *, provider: str, project_path: str, pr_number: str
+        db: Session,
+        *,
+        provider: str,
+        project_path: str,
+        pr_number: str,
+        latest_only: bool = True,
     ) -> dict:
         batches = list(
             db.scalars(
@@ -211,23 +353,30 @@ class ReviewConsoleService:
         )
         if not batches:
             raise ReviewConsoleNotFoundError("review pull request not found")
-        return ReviewConsoleService._pull_request_record(db, batches)
+        return ReviewConsoleService._pull_request_record(
+            db, batches, latest_only=latest_only
+        )
 
     @staticmethod
     def _pull_request_record(
         db: Session,
         batches: list[ReviewIssueBatch],
         *,
+        latest_only: bool = True,
         issue_total: int | None = None,
         pending_total: int | None = None,
+        history_issue_total: int | None = None,
     ) -> dict:
+        ordered = sorted(batches, key=_batch_order_key, reverse=True)
+        latest = ordered[0]
+        scope = [latest] if latest_only else ordered
+        scope_ids = [batch.id for batch in scope]
         if issue_total is None or pending_total is None:
-            batch_ids = [batch.id for batch in batches]
             issue_total = (
                 db.scalar(
                     select(func.count())
                     .select_from(ReviewIssue)
-                    .where(ReviewIssue.batch_id.in_(batch_ids))
+                    .where(ReviewIssue.batch_id.in_(scope_ids))
                 )
                 or 0
             )
@@ -236,18 +385,25 @@ class ReviewConsoleService:
                     select(func.count())
                     .select_from(ReviewIssue)
                     .where(
-                        ReviewIssue.batch_id.in_(batch_ids),
-                        ReviewIssue.decision_status.in_(
-                            (
-                                ReviewIssueDecisionStatus.UNVERIFIED,
-                                ReviewIssueDecisionStatus.NEEDS_INFO,
-                            )
-                        ),
+                        ReviewIssue.batch_id.in_(scope_ids),
+                        ReviewIssue.decision_status.in_(PENDING_DECISION_STATUSES),
                     )
                 )
                 or 0
             )
-        latest = batches[0]
+        if history_issue_total is None:
+            if latest_only:
+                history_ids = [batch.id for batch in ordered if batch.id != latest.id]
+                history_issue_total = (
+                    db.scalar(
+                        select(func.count())
+                        .select_from(ReviewIssue)
+                        .where(ReviewIssue.batch_id.in_(history_ids))
+                    )
+                    or 0
+                )
+            else:
+                history_issue_total = 0
         if latest.status == ReviewBatchStatus.COLLECTING:
             completion_status = "processing"
         elif pending_total:
@@ -259,7 +415,7 @@ class ReviewConsoleService:
             ReviewBatchStatus.VERIFYING,
         }:
             completion_status = "processing"
-        elif all(batch.status == ReviewBatchStatus.FAILED for batch in batches):
+        elif all(batch.status == ReviewBatchStatus.FAILED for batch in scope):
             completion_status = "failed"
         else:
             completion_status = "no_issues"
@@ -267,13 +423,18 @@ class ReviewConsoleService:
             "provider": latest.provider,
             "project_path": latest.project_path,
             "pr_number": latest.pr_number,
-            "pr_url": next((batch.pr_url for batch in batches if batch.pr_url), None),
+            "pr_url": next((batch.pr_url for batch in ordered if batch.pr_url), None),
             "completion_status": completion_status,
-            "batch_total": len(batches),
+            "batch_total": len(ordered),
+            "latest_batch_id": latest.id,
+            "latest_batch_created_at": latest.created_at,
+            "latest_review_head_sha": latest.review_head_sha,
+            "latest_head_committed_at": latest.head_committed_at,
+            "history_issue_total": history_issue_total,
             "issue_total": issue_total,
             "reviewed_total": issue_total - pending_total,
             "pending_total": pending_total,
-            "updated_at": max(batch.updated_at for batch in batches),
+            "updated_at": max(batch.updated_at for batch in ordered),
         }
 
     @staticmethod

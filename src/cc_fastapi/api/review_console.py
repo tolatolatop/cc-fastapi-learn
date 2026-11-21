@@ -57,6 +57,7 @@ def _issue_response(issue, batch) -> ReviewConsoleIssueResponse:
         decided_at=issue.decided_at,
         verification_status=issue.verification_status,
         review_head_sha=batch.review_head_sha,
+        head_committed_at=batch.head_committed_at,
         merged_sha=batch.merged_sha,
         batch_status=batch.status,
         batch_created_at=batch.created_at,
@@ -69,9 +70,12 @@ def _issue_response(issue, batch) -> ReviewConsoleIssueResponse:
 
 @router.get("/repositories", response_model=ReviewConsoleRepositoryListResponse)
 def list_repositories(
+    latest_only: bool = Query(default=True),
     db: Session = Depends(get_db),
 ) -> ReviewConsoleRepositoryListResponse:
-    return ReviewConsoleRepositoryListResponse(items=service.list_repositories(db))
+    return ReviewConsoleRepositoryListResponse(
+        items=service.list_repositories(db, latest_only=latest_only)
+    )
 
 
 @router.get("/issues", response_model=ReviewConsoleIssueListResponse)
@@ -86,6 +90,7 @@ def list_issues(
         default=None, alias="severity"
     ),
     query: str | None = Query(default=None, alias="q", max_length=200),
+    latest_only: bool = Query(default=True),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -98,6 +103,7 @@ def list_issues(
         statuses=statuses,
         severities=severities,
         query=query,
+        latest_only=latest_only,
         offset=offset,
         limit=limit,
     )
@@ -111,6 +117,7 @@ def list_pull_requests(
     provider: str = Query(max_length=32),
     project_path: str = Query(max_length=255),
     completion_statuses: list[str] | None = Query(default=None, alias="status"),
+    latest_only: bool = Query(default=True),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -126,6 +133,7 @@ def list_pull_requests(
         provider=provider,
         project_path=project_path,
         completion_statuses=completion_statuses,
+        latest_only=latest_only,
         offset=offset,
         limit=limit,
     )
@@ -137,6 +145,7 @@ def get_pull_request(
     provider: str = Query(max_length=32),
     project_path: str = Query(max_length=255),
     pr_number: str = Query(max_length=128),
+    latest_only: bool = Query(default=True),
     db: Session = Depends(get_db),
 ) -> ReviewConsolePullRequestResponse:
     try:
@@ -146,6 +155,7 @@ def get_pull_request(
                 provider=provider,
                 project_path=project_path,
                 pr_number=pr_number,
+                latest_only=latest_only,
             )
         )
     except ReviewConsoleNotFoundError as exc:

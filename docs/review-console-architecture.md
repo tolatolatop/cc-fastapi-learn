@@ -53,6 +53,19 @@ UTC 时间；历史 API 只读，不提供更新或删除入口。
 `?view=issues&provider=<provider>&project_path=<project_path>&pr=<number>`；登录后刷新或打开该地址会恢复到对应
 PR/MR 的检视意见列表，无权限或目标不存在时明确提示，不回退到其他 PR/MR。
 
+意见列表默认只展示该 PR/MR 最新一次检视提交（最新批次）的意见。历史批次的意见默认隐藏，
+“历史意见”开关可展开全部批次；顶部统计、完成状态和仓库待分析数默认按最新批次聚合，
+`history_issue_total` 给出被隐藏的历史意见数量，`batch_total` 给出该 PR/MR 的提交次数。由于每份
+检视报告都全量录入为独立批次，最新批次即当轮完整结论，无需增量提交或与历史结果去重。
+
+“最新一次”按代码版本先后判定，而不是按批次入库时间。批次上的 `head_committed_at` 记录被检视
+head 提交的提交时间，排序键为 `head_committed_at → 批次 created_at → 批次 id`。写命令把版本
+定位参数作为必填项：`pr collect` 与 `pr add-issues` 都要求 `--head-sha`（7–64 位十六进制）与
+`--head-committed-at`（ISO-8601，未来时间被拒绝），采集方据此显式声明被检视版本。主应用接口对
+旧调用方保持可选字段，缺失时回落到该次检视工作流关联平台事件的时间，再回落到批次创建时间；
+历史批次没有该值时行为与按入库时间排序一致。因此补录、重放或先收后录的旧报告不会冒充最新版本，
+接口同时回传 `latest_head_committed_at` 以便核对。
+
 审核队列在前端支持按仓库路径、PR/MR 编号和代码平台地址搜索；以空格分隔的关键字采用全部匹配，
 搜索结果将仍有待分析意见的 PR/MR 排在前面。意见列表默认按文件路径、行号排序；审核者可切换
 “待分析优先”，同组内仍按文件位置排序。文件位置完整显示，并以 `PATH:LINENO` 形式复制；详细信息
@@ -62,10 +75,10 @@ PR/MR 的检视意见列表，无权限或目标不存在时明确提示，不�
 状态更新携带 `expected_updated_at`。若另一名审核者已修改同一意见，主应用返回 `409`，客户端必须
 刷新后再裁定，防止后写覆盖先写。重复提交完全相同的状态、原因和说明是幂等操作，不产生虚假历史。
 
-PR/MR 完成状态由主应用聚合其全部检视批次和意见后返回：`processing` 表示仍在生成或等待零问题
-流程结束，`pending` 表示仍有待分析意见，`completed` 表示全部意见已裁定，`no_issues` 表示流程
-完成且没有意见，`failed` 表示所有相关流程均失败。`needs_info` 与 `unverified` 都计入待分析；前端
-不通过当前分页结果猜测完成状态。
+PR/MR 完成状态由主应用聚合检视批次和意见后返回，默认只聚合最新批次（`latest_only=false` 时聚合
+全部批次）：`processing` 表示仍在生成或等待零问题流程结束，`pending` 表示仍有待分析意见，
+`completed` 表示全部意见已裁定，`no_issues` 表示流程完成且没有意见，`failed` 表示最新批次相关
+流程均失败。`needs_info` 与 `unverified` 都计入待分析；前端不通过当前分页结果猜测完成状态。
 
 ## 接口契约
 
@@ -80,6 +93,13 @@ PR/MR 完成状态由主应用聚合其全部检视批次和意见后返回：`p
 - `GET /v1/review-console/issues/{id}/history`
 - `GET /v1/review-console/statistics`
 - `GET /v1/review-console/review-records`
+
+批次响应带 `head_committed_at`，`pull-request` 响应带 `latest_head_committed_at`，可用于确认“最新”
+对应的代码版本时间。
+
+`repositories`、`pull-requests`、`pull-request` 和 `issues` 都接受 `latest_only` 查询参数，默认
+`true`：只统计最新批次的意见与状态；传 `false` 时回到跨全部批次的历史视图。`issues/{id}` 不受该
+参数影响，历史批次中的意见仍可直接读取和裁定。
 
 写入接口另外要求 `X-Review-Actor-Id` 和 `X-Review-Actor-Name`。操作台对浏览器提供 `/v1/auth/*`、
 `/v1/repositories`、`/v1/issues/*`、`/v1/statistics`、`/v1/review-records` 与 `/v1/admin/users/*`，

@@ -458,3 +458,321 @@ def test_review_records_export_current_decisions_with_scope_and_time_filter():
         params={"repository": "github"},
     )
     assert invalid_scope.status_code == 422
+
+
+def add_review_batch(
+    sessions: sessionmaker,
+    *,
+    batch_id: str,
+    task_id: str,
+    created_at: datetime,
+    issue_ids: list[str],
+    pr_number: str = "17",
+    head_committed_at: datetime | None = None,
+) -> None:
+    with sessions() as db:
+        task = AgentTask(
+            id=task_id,
+            status=TaskStatus.SUCCEEDED,
+            queue_name="default",
+            payload={},
+            queue_expire_at=datetime.now(timezone.utc),
+        )
+        batch = ReviewIssueBatch(
+            id=batch_id,
+            provider="github",
+            project_path="team/service",
+            pr_number=pr_number,
+            review_task_id=task.id,
+            status=ReviewBatchStatus.COMPLETED,
+            issue_count=len(issue_ids),
+            head_committed_at=head_committed_at,
+            created_at=created_at,
+            updated_at=created_at,
+        )
+        issues = [
+            ReviewIssue(
+                id=issue_id,
+                batch_id=batch.id,
+                issue_no=index,
+                severity=ReviewIssueSeverity.MEDIUM,
+                title=f"Finding {issue_id}",
+                description="Recorded from an earlier review submission.",
+            )
+            for index, issue_id in enumerate(issue_ids, start=1)
+        ]
+        db.add_all([task, batch, *issues])
+        db.commit()
+
+
+def test_issue_listing_defaults_to_latest_submission_and_hides_history():
+    client, sessions = build_client()
+    add_review_batch(
+        sessions,
+        batch_id="batch-old-17",
+        task_id="task-old-17",
+        created_at=datetime(2025, 3, 1, tzinfo=timezone.utc),
+        issue_ids=["issue-old-1", "issue-old-2"],
+    )
+    add_review_batch(
+        sessions,
+        batch_id="batch-new-17",
+        task_id="task-new-17",
+        created_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        issue_ids=["issue-new-1"],
+    )
+
+    default_listing = client.get(
+        "/v1/review-console/issues",
+        headers=headers(),
+        params={
+            "provider": "github",
+            "project_path": "team/service",
+            "pr_number": "17",
+        },
+    )
+    assert default_listing.status_code == 200
+    assert [item["id"] for item in default_listing.json()["items"]] == ["issue-new-1"]
+    assert default_listing.json()["total"] == 1
+
+    full_history = client.get(
+        "/v1/review-console/issues",
+        headers=headers(),
+        params={
+            "provider": "github",
+            "project_path": "team/service",
+            "pr_number": "17",
+            "latest_only": "false",
+        },
+    )
+    assert full_history.status_code == 200
+    assert full_history.json()["total"] == 4
+    assert {item["id"] for item in full_history.json()["items"]} == {
+        "issue-1",
+        "issue-old-1",
+        "issue-old-2",
+        "issue-new-1",
+    }
+
+    repository_defaults = client.get(
+        "/v1/review-console/issues",
+        headers=headers(),
+        params={"provider": "github", "project_path": "team/service"},
+    ).json()
+    assert [item["id"] for item in repository_defaults["items"]] == ["issue-new-1"]
+
+
+def test_pull_request_aggregates_follow_latest_submission_scope():
+    client, sessions = build_client()
+    add_review_batch(
+        sessions,
+        batch_id="batch-old-17",
+        task_id="task-old-17",
+        created_at=datetime(2025, 3, 1, tzinfo=timezone.utc),
+        issue_ids=["issue-old-1", "issue-old-2"],
+    )
+    add_review_batch(
+        sessions,
+        batch_id="batch-new-17",
+        task_id="task-new-17",
+        created_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        issue_ids=["issue-new-1"],
+    )
+
+    detail = client.get(
+        "/v1/review-console/pull-request",
+        headers=headers(),
+        params={
+            "provider": "github",
+            "project_path": "team/service",
+            "pr_number": "17",
+        },
+    ).json()
+    assert detail["latest_batch_id"] == "batch-new-17"
+    assert detail["batch_total"] == 3
+    assert detail["issue_total"] == 1
+    assert detail["pending_total"] == 1
+    assert detail["history_issue_total"] == 3
+    assert detail["completion_status"] == "pending"
+
+    with_history = client.get(
+        "/v1/review-console/pull-request",
+        headers=headers(),
+        params={
+            "provider": "github",
+            "project_path": "team/service",
+            "pr_number": "17",
+            "latest_only": "false",
+        },
+    ).json()
+    assert with_history["issue_total"] == 4
+    assert with_history["history_issue_total"] == 0
+
+    listing = client.get(
+        "/v1/review-console/pull-requests",
+        headers=headers(),
+        params={"provider": "github", "project_path": "team/service"},
+    ).json()
+    by_number = {item["pr_number"]: item for item in listing["items"]}
+    assert by_number["17"]["issue_total"] == 1
+    assert by_number["17"]["history_issue_total"] == 3
+
+    repositories = client.get(
+        "/v1/review-console/repositories", headers=headers()
+    ).json()
+    totals = {
+        item["project_path"]: (item["issue_total"], item["pending_total"])
+        for item in repositories["items"]
+    }
+    assert totals["team/service"] == (1, 1)
+
+    all_repositories = client.get(
+        "/v1/review-console/repositories",
+        headers=headers(),
+        params={"latest_only": "false"},
+    ).json()
+    all_totals = {
+        item["project_path"]: (item["issue_total"], item["pending_total"])
+        for item in all_repositories["items"]
+    }
+    assert all_totals["team/service"] == (4, 4)
+
+
+def test_issue_detail_and_status_updates_still_work_for_hidden_history():
+    client, sessions = build_client()
+    add_review_batch(
+        sessions,
+        batch_id="batch-old-17",
+        task_id="task-old-17",
+        created_at=datetime(2025, 3, 1, tzinfo=timezone.utc),
+        issue_ids=["issue-old-1"],
+    )
+    add_review_batch(
+        sessions,
+        batch_id="batch-new-17",
+        task_id="task-new-17",
+        created_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        issue_ids=["issue-new-1"],
+    )
+
+    hidden = client.get(
+        "/v1/review-console/issues/issue-old-1", headers=headers()
+    )
+    assert hidden.status_code == 200
+    updated = client.put(
+        "/v1/review-console/issues/issue-old-1/status",
+        headers=headers(),
+        json={
+            "status": "accepted",
+            "note": "Historical finding confirmed",
+            "expected_updated_at": hidden.json()["updated_at"],
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()["status"] == "accepted"
+
+    detail = client.get(
+        "/v1/review-console/pull-request",
+        headers=headers(),
+        params={
+            "provider": "github",
+            "project_path": "team/service",
+            "pr_number": "17",
+        },
+    ).json()
+    assert detail["issue_total"] == 1
+    assert detail["history_issue_total"] == 2
+
+
+def test_latest_submission_follows_code_version_order_not_collection_order():
+    client, sessions = build_client()
+    add_review_batch(
+        sessions,
+        batch_id="batch-old-version",
+        task_id="task-old-version",
+        created_at=datetime(2031, 1, 1, tzinfo=timezone.utc),
+        head_committed_at=datetime(2025, 2, 1, tzinfo=timezone.utc),
+        issue_ids=["issue-old-version"],
+        pr_number="99",
+    )
+    add_review_batch(
+        sessions,
+        batch_id="batch-current-version",
+        task_id="task-current-version",
+        created_at=datetime(2026, 11, 1, tzinfo=timezone.utc),
+        head_committed_at=datetime(2026, 10, 30, tzinfo=timezone.utc),
+        issue_ids=["issue-current-version"],
+        pr_number="99",
+    )
+
+    default_listing = client.get(
+        "/v1/review-console/issues",
+        headers=headers(),
+        params={
+            "provider": "github",
+            "project_path": "team/service",
+            "pr_number": "99",
+        },
+    ).json()
+    assert [item["id"] for item in default_listing["items"]] == [
+        "issue-current-version"
+    ]
+    assert default_listing["items"][0]["head_committed_at"].startswith("2026-10-30")
+
+    detail = client.get(
+        "/v1/review-console/pull-request",
+        headers=headers(),
+        params={
+            "provider": "github",
+            "project_path": "team/service",
+            "pr_number": "99",
+        },
+    ).json()
+    assert detail["latest_batch_id"] == "batch-current-version"
+    assert detail["latest_head_committed_at"].startswith("2026-10-30")
+    assert detail["history_issue_total"] == 1
+    assert detail["batch_total"] == 2
+
+    full_history = client.get(
+        "/v1/review-console/issues",
+        headers=headers(),
+        params={
+            "provider": "github",
+            "project_path": "team/service",
+            "pr_number": "99",
+            "latest_only": "false",
+        },
+    ).json()
+    assert full_history["total"] == 2
+
+
+def test_repository_scope_latest_batch_also_uses_version_order():
+    client, sessions = build_client()
+    add_review_batch(
+        sessions,
+        batch_id="batch-old-version",
+        task_id="task-old-version",
+        created_at=datetime(2031, 1, 1, tzinfo=timezone.utc),
+        head_committed_at=datetime(2025, 2, 1, tzinfo=timezone.utc),
+        issue_ids=["issue-old-version"],
+        pr_number="99",
+    )
+    add_review_batch(
+        sessions,
+        batch_id="batch-current-version",
+        task_id="task-current-version",
+        created_at=datetime(2026, 11, 1, tzinfo=timezone.utc),
+        head_committed_at=datetime(2026, 10, 30, tzinfo=timezone.utc),
+        issue_ids=["issue-current-version"],
+        pr_number="99",
+    )
+
+    repository_listing = client.get(
+        "/v1/review-console/issues",
+        headers=headers(),
+        params={"provider": "github", "project_path": "team/service"},
+    ).json()
+    assert {item["id"] for item in repository_listing["items"]} == {
+        "issue-1",
+        "issue-current-version",
+    }

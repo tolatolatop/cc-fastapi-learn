@@ -27,8 +27,8 @@ export const api = {
   logout: () => request<void>('/v1/auth/logout', { method: 'POST' }),
   me: () => request<User>('/v1/auth/me'),
   repositories: () => request<{ items: Repository[] }>('/v1/repositories'),
-  pullRequests: async (repo: Repository) => {
-    const params = new URLSearchParams({ provider: repo.provider, project_path: repo.project_path, limit: '200' })
+  pullRequests: async (repo: Repository, latestOnly = true) => {
+    const params = new URLSearchParams({ provider: repo.provider, project_path: repo.project_path, limit: '200', latest_only: String(latestOnly) })
     const first = await request<{ items: PullRequest[]; total: number }>(`/v1/pull-requests?${params}`)
     if (first.items.length >= first.total) return first
     const pages: Array<Promise<{ items: PullRequest[]; total: number }>> = []
@@ -40,12 +40,12 @@ export const api = {
     const remaining = await Promise.all(pages)
     return { items: [...first.items, ...remaining.flatMap((page) => page.items)], total: first.total }
   },
-  pullRequest: (repo: Repository, prNumber: string) => {
-    const params = new URLSearchParams({ provider: repo.provider, project_path: repo.project_path, pr_number: prNumber })
+  pullRequest: (repo: Repository, prNumber: string, latestOnly = true) => {
+    const params = new URLSearchParams({ provider: repo.provider, project_path: repo.project_path, pr_number: prNumber, latest_only: String(latestOnly) })
     return request<PullRequest>(`/v1/pull-request?${params}`)
   },
-  issues: async (repo: Repository, prNumber: string, status: string, query: string) => {
-    const params = new URLSearchParams({ provider: repo.provider, project_path: repo.project_path, limit: '200' })
+  issues: async (repo: Repository, prNumber: string, status: string, query: string, latestOnly = true) => {
+    const params = new URLSearchParams({ provider: repo.provider, project_path: repo.project_path, limit: '200', latest_only: String(latestOnly) })
     if (prNumber) params.append('pr_number', prNumber)
     if (status) params.append('status', status)
     if (query) params.append('q', query)

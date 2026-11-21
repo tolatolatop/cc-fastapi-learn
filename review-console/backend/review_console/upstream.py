@@ -52,8 +52,10 @@ class ReviewApiClient:
             raise UpstreamError(response.status_code, detail)
         return response.json()
 
-    def repositories(self) -> dict[str, Any]:
-        return self._request("GET", "/v1/review-console/repositories")
+    def repositories(self, params: list[tuple[str, str | int]]) -> dict[str, Any]:
+        return self._request(
+            "GET", "/v1/review-console/repositories", params=params
+        )
 
     def issues(self, params: list[tuple[str, str | int]]) -> dict[str, Any]:
         return self._request("GET", "/v1/review-console/issues", params=params)
